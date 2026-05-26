@@ -1,0 +1,2521 @@
+import React, { useState, useEffect } from 'react';
+import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, Calendar, ShoppingCart } from 'lucide-react';
+
+const initialState = {
+  rawMaterials: {
+    emptyBottles: {
+      '0.5L': 5000,
+      '1.5L': 3000,
+      '5L': 800,
+      '18.9L_disposable': 400,
+      '18.9L_refill': 300
+    },
+    overwraps: {
+      '0.5L': 3000,
+      '1.5L': 3000,
+      '5L': 2000
+    },
+    seals: {
+      'short_neck': 20000,  // For both 0.5L and 1.5L bottles
+      '5L': 4000,
+      '18.9L': 2000
+    },
+    labels: {
+      '0.5L': 15000,
+      '1.5L': 10000,
+      '5L': 3000,
+      '18.9L': 1500
+    },
+    kraStamps: 50000,
+    roChemical: 1000
+  },
+
+  finishedGoods: {
+    '0.5L': { quantity: 200, bottlesPerCarton: 24 },
+    '1.5L': { quantity: 150, bottlesPerCarton: 12 },
+    '5L': { quantity: 80, bottlesPerCarton: 4 },
+    '18.9L_disposable': { quantity: 100, bottlesPerCarton: 1 },
+    '18.9L_refill': { quantity: 60, bottlesPerCarton: 1 }
+  },
+
+  customers: [
+    { id: 1, name: 'Loglogo Store', location: 'Loglogo', phone: '0712345678', balance: 5000, isActive: true },
+    { id: 2, name: 'Marsabit Market', location: 'Marsabit', phone: '0723456789', balance: -2000, isActive: true },
+    { id: 3, name: 'Laisamis Mini Shop', location: 'Laisamis', phone: '0734567890', balance: 0, isActive: true },
+  ],
+
+  sales: [
+    { id: 1, customerId: 1, date: '2025-04-15', items: [{ size: '0.5L', quantity: 24, price: 100, subtotal: 2400 }], total: 2400, paid: 2400, status: 'paid', invoiceNumber: 'INV-001' },
+    { id: 2, customerId: 2, date: '2025-05-01', items: [{ size: '5L', quantity: 4, price: 350, subtotal: 1400 }], total: 1400, paid: 0, status: 'pending', invoiceNumber: 'INV-002' },
+    { id: 3, customerId: 1, date: '2025-05-05', items: [{ size: '1.5L', quantity: 12, price: 150, subtotal: 1800 }], total: 1800, paid: 1800, status: 'paid', invoiceNumber: 'INV-003' },
+    { id: 4, customerId: 3, date: '2025-05-08', items: [{ size: '0.5L', quantity: 24, price: 100, subtotal: 2400 }], total: 2400, paid: 1200, status: 'partial', invoiceNumber: 'INV-004' },
+  ],
+
+  payments: [
+    { id: 1, saleId: 1, customerId: 1, date: '2025-04-15', amount: 2400, method: 'cash', reference: 'CASH-001' },
+    { id: 2, saleId: 3, customerId: 1, date: '2025-05-05', amount: 1800, method: 'bank_transfer', reference: 'TRF-12345' },
+    { id: 3, saleId: 4, customerId: 3, date: '2025-05-08', amount: 1200, method: 'cash', reference: 'CASH-002' },
+  ],
+
+  productionLogs: [
+    { id: 1, date: '2025-04-25', items: { '0.5L': 576, '1.5L': 360, '5L': 40 }, unit: 'bottles', notes: 'Morning shift' },
+    { id: 2, date: '2025-04-27', items: { '0.5L': 480, '1.5L': 240, '18.9L_disposable': 5 }, unit: 'bottles', notes: 'Afternoon shift' },
+  ],
+
+  purchases: [
+    { id: 1, date: '2025-04-25', supplier: 'Kenya Bottle Co', items: [{ material: 'emptyBottles_0.5L', description: 'Empty Bottles 0.5L', quantity: 2000, unitPrice: 4, total: 8000 }], totalAmount: 8000, status: 'received' },
+    { id: 2, date: '2025-04-28', supplier: 'Packaging Ltd', items: [{ material: 'overwraps', description: 'Overwraps', quantity: 5000, unitPrice: 1, total: 5000 }], totalAmount: 5000, status: 'received' },
+  ],
+
+  expenses: [
+    { id: 1, date: '2025-04-20', category: 'Raw Materials', subcategory: 'Empty Bottles', description: 'Bulk order 0.5L bottles', amount: 5000 },
+    { id: 2, date: '2025-04-22', category: 'Labour', subcategory: 'Salaries', description: 'Monthly salaries - April', amount: 25000 },
+    { id: 3, date: '2025-04-25', category: 'Operations', subcategory: 'Electricity', description: 'Electricity bill', amount: 3500 },
+  ],
+
+  locations: ['Loglogo', 'Marsabit', 'Laisamis', 'Korr', 'Merille'],
+
+  // Pricing is now entered manually per sale - no auto-pricing from location
+
+  expenseCategories: {
+    'Raw Materials': ['Empty Bottles', 'Overwraps', 'Seals', 'Labels', 'KRA Stamps', 'RO Machine Chemicals'],
+    'Labour': ['Salaries', 'Casual Pay', 'Overtime'],
+    'Operations': ['Rent', 'Electricity', 'Water', 'Transport', 'Maintenance', 'Other']
+  },
+
+  rawMaterialOptions: {
+    'Empty Bottles - 0.5L': { material: 'emptyBottles_0.5L', category: 'Empty Bottles' },
+    'Empty Bottles - 1.5L': { material: 'emptyBottles_1.5L', category: 'Empty Bottles' },
+    'Empty Bottles - 5L': { material: 'emptyBottles_5L', category: 'Empty Bottles' },
+    'Empty Bottles - 18.9L Disposable': { material: 'emptyBottles_18.9L_disposable', category: 'Empty Bottles' },
+    'Empty Bottles - 18.9L Refill': { material: 'emptyBottles_18.9L_refill', category: 'Empty Bottles' },
+    'Overwraps': { material: 'overwraps', category: 'Overwraps' },
+    'Seals - Short Neck 0.5L': { material: 'seals_short_neck_05', category: 'Seals' },
+    'Seals - Short Neck 1.5L': { material: 'seals_short_neck_15', category: 'Seals' },
+    'Seals - 5L': { material: 'seals_5L', category: 'Seals' },
+    'Seals - 18.9L': { material: 'seals_18.9L', category: 'Seals' },
+    'Labels - 0.5L': { material: 'labels_0.5L', category: 'Labels' },
+    'Labels - 1.5L': { material: 'labels_1.5L', category: 'Labels' },
+    'Labels - 5L': { material: 'labels_5L', category: 'Labels' },
+    'Labels - 18.9L': { material: 'labels_18.9L', category: 'Labels' },
+    'KRA Stamps': { material: 'kraStamps', category: 'KRA Stamps' },
+    'RO Machine Chemicals': { material: 'roChemical', category: 'RO Machine Chemicals' }
+  }
+};
+
+const BOTTLE_PRICES = {
+  '0.5L': 100,
+  '1.5L': 150,
+  '5L': 350,
+  '18.9L_disposable': 650,
+  '18.9L_refill': 600
+};
+
+const BOTTLES_PER_CARTON = {
+  '0.5L': 24,
+  '1.5L': 12,
+  '5L': 4,
+  '18.9L_disposable': 1,
+  '18.9L_refill': 1
+};
+
+export default function NorthernWaterSystemApp() {
+  const [state, setState] = useState(initialState);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [paymentsTab, setPaymentsTab] = useState('history');
+  const [editingCustomer, setEditingCustomer] = useState(null);
+  const [editingExpense, setEditingExpense] = useState(null);
+  const [editingPurchase, setEditingPurchase] = useState(null);
+  const [showModal, setShowModal] = useState(false);
+  const [modalType, setModalType] = useState('');
+  const [formData, setFormData] = useState({});
+  const [reportType, setReportType] = useState('aging');
+  const [reportData, setReportData] = useState(null);
+  const [dateRange, setDateRange] = useState({ start: '', end: '' });
+  const [customerSearch, setCustomerSearch] = useState('');
+
+  const calculateInventoryValue = () => {
+    let total = 0;
+    Object.keys(state.rawMaterials).forEach(category => {
+      if (typeof state.rawMaterials[category] === 'object') {
+        Object.values(state.rawMaterials[category]).forEach(val => {
+          if (typeof val === 'number') total += val * 5;
+        });
+      } else {
+        total += state.rawMaterials[category] * 2;
+      }
+    });
+    return total;
+  };
+
+  const calculateFinishedGoodsValue = () => {
+    let total = 0;
+    Object.entries(state.finishedGoods).forEach(([size, data]) => {
+      total += data.quantity * BOTTLE_PRICES[size];
+    });
+    return total;
+  };
+
+  const getTotalExpensesByCategory = () => {
+    const totals = {};
+    state.expenses.forEach(exp => {
+      totals[exp.category] = (totals[exp.category] || 0) + exp.amount;
+    });
+    return totals;
+  };
+
+  const getTotalExpenses = () => {
+    return state.expenses.reduce((sum, exp) => sum + exp.amount, 0);
+  };
+
+  const getTotalPurchases = () => {
+    return state.purchases.reduce((sum, p) => sum + p.totalAmount, 0);
+  };
+
+  // Purchase Management
+  const handleAddPurchase = () => {
+    setEditingPurchase(null);
+    setModalType('purchase');
+    setFormData({
+      date: new Date().toISOString().split('T')[0],
+      supplier: '',
+      items: [{ material: '', description: '', quantity: 0, unitPrice: 0, total: 0 }]
+    });
+    setShowModal(true);
+  };
+
+  const handleSavePurchase = () => {
+    if (!formData.supplier || !formData.date || formData.items.filter(i => i.material && i.quantity > 0).length === 0) {
+      alert('Please fill supplier, date, and add items');
+      return;
+    }
+
+    const validItems = formData.items.filter(i => i.material && i.quantity > 0);
+    const totalAmount = validItems.reduce((sum, i) => sum + i.total, 0);
+
+    if (editingPurchase) {
+      const updatedPurchases = state.purchases.map(p =>
+        p.id === editingPurchase.id ? { ...editingPurchase, ...formData, items: validItems, totalAmount } : p
+      );
+      setState({ ...state, purchases: updatedPurchases });
+    } else {
+      const newPurchase = {
+        id: Math.max(...state.purchases.map(p => p.id), 0) + 1,
+        date: formData.date,
+        supplier: formData.supplier,
+        items: validItems,
+        totalAmount,
+        status: 'received'
+      };
+
+      // Update raw materials
+      const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
+      validItems.forEach(item => {
+        const [category, subcategory] = item.material.split('_');
+        
+        if (category === 'emptyBottles') {
+          const size = item.material.replace('emptyBottles_', '');
+          if (updatedRawMaterials.emptyBottles[size]) {
+            updatedRawMaterials.emptyBottles[size] += item.quantity;
+          }
+        } else if (category === 'seals') {
+          const type = item.material.replace('seals_', '');
+          if (updatedRawMaterials.seals[type]) {
+            updatedRawMaterials.seals[type] += item.quantity;
+          }
+        } else if (category === 'labels') {
+          const size = item.material.replace('labels_', '');
+          if (updatedRawMaterials.labels[size]) {
+            updatedRawMaterials.labels[size] += item.quantity;
+          }
+        } else if (updatedRawMaterials[category]) {
+          updatedRawMaterials[category] += item.quantity;
+        }
+      });
+
+      setState({
+        ...state,
+        purchases: [...state.purchases, newPurchase],
+        rawMaterials: updatedRawMaterials
+      });
+    }
+
+    setShowModal(false);
+  };
+
+  const handleDeletePurchase = (id) => {
+    if (confirm('Delete this purchase?')) {
+      setState({
+        ...state,
+        purchases: state.purchases.filter(p => p.id !== id)
+      });
+    }
+  };
+
+  // Report Generators
+  const generateAgingDebtorsReport = () => {
+    const debtors = state.customers.filter(c => c.balance < 0).map(c => ({
+      ...c,
+      debt: Math.abs(c.balance),
+      daysOverdue: Math.floor(Math.random() * 90) + 1
+    })).sort((a, b) => b.debt - a.debt);
+
+    return {
+      title: 'Aging Debtors Report',
+      date: new Date().toLocaleDateString(),
+      data: debtors,
+      total: debtors.reduce((sum, d) => sum + d.debt, 0)
+    };
+  };
+
+  const generateSalesReport = () => {
+    let filteredSales = state.sales;
+    if (dateRange.start && dateRange.end) {
+      filteredSales = state.sales.filter(s => s.date >= dateRange.start && s.date <= dateRange.end);
+    }
+
+    const salesByLocation = {};
+    const salesBySize = {};
+    const bottlesByLocationAndSize = {};
+    
+    filteredSales.forEach(sale => {
+      const customer = state.customers.find(c => c.id === sale.customerId);
+      const location = customer?.location || 'Unknown';
+      
+      salesByLocation[location] = (salesByLocation[location] || 0) + sale.total;
+      
+      if (!bottlesByLocationAndSize[location]) {
+        bottlesByLocationAndSize[location] = {};
+      }
+      
+      sale.items.forEach(item => {
+        salesBySize[item.size] = (salesBySize[item.size] || 0) + item.quantity;
+        bottlesByLocationAndSize[location][item.size] = (bottlesByLocationAndSize[location][item.size] || 0) + item.quantity;
+      });
+    });
+
+    return {
+      title: 'Sales Report',
+      date: new Date().toLocaleDateString(),
+      period: dateRange.start ? `${dateRange.start} to ${dateRange.end}` : 'All Time',
+      totalSales: filteredSales.reduce((sum, s) => sum + s.total, 0),
+      totalTransactions: filteredSales.length,
+      salesByLocation,
+      salesBySize,
+      bottlesByLocationAndSize,
+      data: filteredSales
+    };
+  };
+
+  const generateExpenseReport = () => {
+    const totalExpenses = getTotalExpenses();
+    const byCategory = getTotalExpensesByCategory();
+
+    return {
+      title: 'Expense Report',
+      date: new Date().toLocaleDateString(),
+      totalExpenses,
+      byCategory,
+      expenses: state.expenses.sort((a, b) => new Date(b.date) - new Date(a.date))
+    };
+  };
+
+  const generateProfitLossReport = () => {
+    const totalRevenue = state.sales.reduce((sum, s) => sum + s.total, 0);
+    const totalExpenses = getTotalExpenses() + getTotalPurchases() + calculateInventoryValue();
+    const profit = totalRevenue - totalExpenses;
+
+    return {
+      title: 'Profit & Loss Statement',
+      date: new Date().toLocaleDateString(),
+      revenue: {
+        sales: totalRevenue,
+        label: 'Total Sales Revenue'
+      },
+      expenses: {
+        recorded: getTotalExpenses(),
+        purchases: getTotalPurchases(),
+        inventory: calculateInventoryValue(),
+        total: totalExpenses
+      },
+      profit,
+      profitMargin: totalRevenue > 0 ? ((profit / totalRevenue) * 100).toFixed(2) : 0
+    };
+  };
+
+  const handleGenerateReport = (type) => {
+    let data;
+    if (type === 'aging') {
+      data = generateAgingDebtorsReport();
+    } else if (type === 'sales') {
+      data = generateSalesReport();
+    } else if (type === 'expense') {
+      data = generateExpenseReport();
+    } else if (type === 'profitloss') {
+      data = generateProfitLossReport();
+    }
+    setReportData(data);
+    setReportType(type);
+  };
+
+  const downloadReportAsPDF = () => {
+    if (!reportData) return;
+    
+    // Create HTML content for the report
+    let htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>${reportData.title}</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            color: #333;
+            background: white;
+          }
+          h1 {
+            color: #0369a1;
+            border-bottom: 3px solid #0369a1;
+            padding-bottom: 10px;
+          }
+          h2 {
+            color: #0284c7;
+            margin-top: 20px;
+            margin-bottom: 10px;
+          }
+          .header {
+            background: #f0f9ff;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+          }
+          .section {
+            margin-bottom: 25px;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+          }
+          th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+          }
+          th {
+            background: #0369a1;
+            color: white;
+          }
+          tr:nth-child(even) {
+            background: #f9fafb;
+          }
+          .summary {
+            background: #ecfdf5;
+            padding: 15px;
+            border-left: 4px solid #10b981;
+            margin: 15px 0;
+            font-weight: bold;
+          }
+          .generated {
+            color: #666;
+            font-size: 12px;
+            margin-top: 30px;
+            padding-top: 10px;
+            border-top: 1px solid #ddd;
+          }
+        </style>
+      </head>
+      <body>
+        <h1>${reportData.title}</h1>
+        <div class="header">
+          <p><strong>Generated:</strong> ${reportData.date}</p>
+          <p><strong>Report Type:</strong> ${reportType.toUpperCase()}</p>
+        </div>
+    `;
+
+    // Add report-specific content
+    if (reportType === 'aging') {
+      htmlContent += `
+        <div class="section">
+          <div class="summary">
+            Total Outstanding Debt: KES ${reportData.total.toLocaleString()}
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Customer Name</th>
+                <th>Location</th>
+                <th>Outstanding</th>
+                <th>Days Overdue</th>
+                <th>Phone</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+      reportData.data.forEach(d => {
+        htmlContent += `
+              <tr>
+                <td>${d.name}</td>
+                <td>${d.location}</td>
+                <td>KES ${d.debt.toLocaleString()}</td>
+                <td>${d.daysOverdue}</td>
+                <td>${d.phone}</td>
+              </tr>
+        `;
+      });
+      htmlContent += `
+            </tbody>
+          </table>
+        </div>
+      `;
+    } else if (reportType === 'sales') {
+      htmlContent += `
+        <div class="section">
+          <h2>Sales Summary</h2>
+          <div class="summary">
+            Period: ${reportData.period} | Total Sales: KES ${reportData.totalSales.toLocaleString()} | Transactions: ${reportData.totalTransactions}
+          </div>
+          <h2>Sales by Location</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Location</th>
+                <th>Sales Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+      Object.entries(reportData.salesByLocation).forEach(([location, amount]) => {
+        htmlContent += `
+              <tr>
+                <td>${location}</td>
+                <td>KES ${amount.toLocaleString()}</td>
+              </tr>
+        `;
+      });
+      htmlContent += `
+            </tbody>
+          </table>
+          
+          <h2>Cartons Sold by Size</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Bottle Size</th>
+                <th>Cartons</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+      Object.entries(reportData.salesBySize).forEach(([size, qty]) => {
+        htmlContent += `
+              <tr>
+                <td>${size}</td>
+                <td>${qty} cartons</td>
+              </tr>
+        `;
+      });
+      htmlContent += `
+            </tbody>
+          </table>
+        </div>
+      `;
+    } else if (reportType === 'expense') {
+      htmlContent += `
+        <div class="section">
+          <div class="summary">
+            Total Expenses: KES ${reportData.totalExpenses.toLocaleString()}
+          </div>
+          <h2>Expenses by Category</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Category</th>
+                <th>Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+      Object.entries(reportData.byCategory).forEach(([category, amount]) => {
+        htmlContent += `
+              <tr>
+                <td>${category}</td>
+                <td>KES ${amount.toLocaleString()}</td>
+              </tr>
+        `;
+      });
+      htmlContent += `
+            </tbody>
+          </table>
+        </div>
+      `;
+    } else if (reportType === 'profitloss') {
+      htmlContent += `
+        <div class="section">
+          <table>
+            <tr>
+              <td><strong>Revenue from Sales</strong></td>
+              <td><strong>KES ${reportData.revenue.sales.toLocaleString()}</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Total Expenses</strong></td>
+              <td><strong>KES ${reportData.expenses.total.toLocaleString()}</strong></td>
+            </tr>
+            <tr style="background: #10b981; color: white;">
+              <td><strong>Net Profit/Loss</strong></td>
+              <td><strong>KES ${reportData.profit.toLocaleString()}</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Profit Margin</strong></td>
+              <td><strong>${reportData.profitMargin}%</strong></td>
+            </tr>
+          </table>
+        </div>
+      `;
+    }
+
+    htmlContent += `
+        <div class="generated">
+          <p>Generated by OASIS Springs Management System</p>
+          <p>Northern Water Company Limited</p>
+        </div>
+      </body>
+      </html>
+    `;
+
+    // Create blob and download
+    const blob = new Blob([htmlContent], { type: 'application/pdf' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${reportType}_report_${new Date().toISOString().split('T')[0]}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+  };
+
+  // Expense Management
+  const handleAddExpense = () => {
+    setEditingExpense(null);
+    setModalType('expense');
+    setFormData({ 
+      date: new Date().toISOString().split('T')[0],
+      category: 'Raw Materials',
+      subcategory: '',
+      description: '',
+      amount: 0
+    });
+    setShowModal(true);
+  };
+
+  const handleSaveExpense = () => {
+    if (!formData.category || !formData.subcategory || formData.amount <= 0) {
+      alert('Please fill all fields');
+      return;
+    }
+
+    if (editingExpense) {
+      const updatedExpenses = state.expenses.map(e =>
+        e.id === editingExpense.id ? { ...e, ...formData, amount: parseInt(formData.amount) } : e
+      );
+      setState({ ...state, expenses: updatedExpenses });
+    } else {
+      const newExpense = {
+        id: Math.max(...state.expenses.map(e => e.id), 0) + 1,
+        ...formData,
+        amount: parseInt(formData.amount)
+      };
+      setState({ ...state, expenses: [...state.expenses, newExpense] });
+    }
+    setShowModal(false);
+  };
+
+  const handleDeleteExpense = (id) => {
+    if (confirm('Delete this expense?')) {
+      setState({
+        ...state,
+        expenses: state.expenses.filter(e => e.id !== id)
+      });
+    }
+  };
+
+  // Add Sale
+  const handleAddSale = () => {
+    setModalType('sale');
+    setFormData({ 
+      customerId: '', 
+      items: [{ size: '0.5L', quantity: 0, price: 100 }], 
+      date: new Date().toISOString().split('T')[0],
+      paymentStatus: 'unpaid'
+    });
+    setShowModal(true);
+  };
+
+  const handleSaveSale = () => {
+    if (!formData.customerId || formData.items.filter(i => i.quantity > 0).length === 0) {
+      alert('Please select customer and add items');
+      return;
+    }
+
+    const customer = state.customers.find(c => c.id === parseInt(formData.customerId));
+
+    // Use prices as entered manually - NO auto-pricing
+    const validItems = formData.items.filter(i => i.quantity > 0).map(item => ({
+      ...item
+      // Price stays as entered by user - no auto-lookup
+    }));
+
+    const total = validItems.reduce((sum, i) => sum + (i.quantity * i.price), 0);
+    const isPaid = formData.paymentStatus === 'paid';
+    
+    const newSale = {
+      id: Math.max(...state.sales.map(s => s.id), 0) + 1,
+      customerId: parseInt(formData.customerId),
+      date: formData.date,
+      items: validItems,
+      total,
+      paid: isPaid ? total : 0,
+      status: isPaid ? 'paid' : 'pending',
+      invoiceNumber: `INV-${String(Math.max(...state.sales.map(s => parseInt(s.invoiceNumber?.split('-')[1] || 0)), 0) + 1).padStart(3, '0')}`
+    };
+
+    const updatedFinishedGoods = { ...state.finishedGoods };
+    validItems.forEach(item => {
+      // Items already come in CARTONS from sales input
+      // No conversion needed - just deduct directly
+      if (updatedFinishedGoods[item.size]) {
+        updatedFinishedGoods[item.size].quantity -= item.quantity;
+      }
+    });
+
+    const debtAmount = isPaid ? 0 : total;
+    const updatedCustomers = state.customers.map(c => 
+      c.id === parseInt(formData.customerId) 
+        ? { ...c, balance: c.balance - debtAmount }
+        : c
+    );
+
+    setState({
+      ...state,
+      sales: [...state.sales, newSale],
+      finishedGoods: updatedFinishedGoods,
+      customers: updatedCustomers
+    });
+
+    setShowModal(false);
+  };
+
+  // Add Payment
+  const handleAddPayment = () => {
+    const pendingSales = state.sales.filter(s => s.paid < s.total);
+    if (pendingSales.length === 0) {
+      alert('No pending sales');
+      return;
+    }
+    setModalType('payment');
+    setFormData({ saleId: '', amount: 0, method: 'cash', reference: '', date: new Date().toISOString().split('T')[0] });
+    setShowModal(true);
+  };
+
+  const handleSavePayment = () => {
+    if (!formData.saleId || formData.amount <= 0) {
+      alert('Please select sale and enter amount');
+      return;
+    }
+
+    const sale = state.sales.find(s => s.id === parseInt(formData.saleId));
+    const remainingBalance = sale.total - sale.paid;
+
+    if (formData.amount > remainingBalance) {
+      alert(`Amount exceeds remaining balance of KES ${remainingBalance}`);
+      return;
+    }
+
+    const newPayment = {
+      id: Math.max(...state.payments.map(p => p.id), 0) + 1,
+      saleId: parseInt(formData.saleId),
+      customerId: sale.customerId,
+      date: formData.date,
+      amount: formData.amount,
+      method: formData.method,
+      reference: formData.reference
+    };
+
+    const newSalesState = state.sales.map(s => {
+      if (s.id === parseInt(formData.saleId)) {
+        const newPaid = s.paid + formData.amount;
+        return {
+          ...s,
+          paid: newPaid,
+          status: newPaid >= s.total ? 'paid' : 'partial'
+        };
+      }
+      return s;
+    });
+
+    const updatedCustomers = state.customers.map(c => {
+      if (c.id === sale.customerId) {
+        return { ...c, balance: c.balance + formData.amount };
+      }
+      return c;
+    });
+
+    setState({
+      ...state,
+      payments: [...state.payments, newPayment],
+      sales: newSalesState,
+      customers: updatedCustomers
+    });
+
+    setShowModal(false);
+  };
+
+  // Production
+  const handleAddProduction = () => {
+    setModalType('production');
+    setFormData({ items: {}, date: new Date().toISOString().split('T')[0], notes: '', unit: 'cartons' });
+    setShowModal(true);
+  };
+
+  const handleSaveProduction = () => {
+    if (Object.keys(formData.items).length === 0) {
+      alert('Please add items');
+      return;
+    }
+
+    // Input is in CARTONS for all sizes
+    const newProduction = {
+      id: Math.max(...state.productionLogs.map(p => p.id), 0) + 1,
+      date: formData.date,
+      items: formData.items, // Cartons produced
+      unit: 'cartons', // Always cartons
+      notes: formData.notes
+    };
+
+    const updatedRawMaterials = { ...state.rawMaterials };
+    const updatedFinishedGoods = { ...state.finishedGoods };
+
+    Object.entries(formData.items).forEach(([size, cartonsProduced]) => {
+      if (cartonsProduced === 0) return;
+      
+      // cartonsProduced is in CARTONS
+      const bottlesPerCarton = BOTTLES_PER_CARTON[size];
+      
+      // Calculate bottles needed from raw materials
+      const bottlesNeeded = cartonsProduced * bottlesPerCarton;
+
+      // ===== DEDUCT EMPTY BOTTLES (based on size) =====
+      if (size === '0.5L') updatedRawMaterials.emptyBottles['0.5L'] -= bottlesNeeded;
+      else if (size === '1.5L') updatedRawMaterials.emptyBottles['1.5L'] -= bottlesNeeded;
+      else if (size === '5L') updatedRawMaterials.emptyBottles['5L'] -= bottlesNeeded;
+      else if (size === '18.9L_disposable') updatedRawMaterials.emptyBottles['18.9L_disposable'] -= cartonsProduced;
+      else if (size === '18.9L_refill') updatedRawMaterials.emptyBottles['18.9L_refill'] -= cartonsProduced;
+
+      // ===== DEDUCT SEALS =====
+      // 0.5L and 1.5L both use SHORT NECK seals - add both and deduct once
+      if (size === '0.5L') {
+        // Will be handled below when we sum both 0.5L and 1.5L
+      } else if (size === '1.5L') {
+        // Will be handled below when we sum both 0.5L and 1.5L
+      } else if (size === '5L') {
+        updatedRawMaterials.seals['5L'] -= bottlesNeeded;
+      } else if (size === '18.9L_disposable' || size === '18.9L_refill') {
+        updatedRawMaterials.seals['18.9L'] -= cartonsProduced;
+      }
+
+      // ===== DEDUCT LABELS (based on size) =====
+      if (size === '0.5L') updatedRawMaterials.labels['0.5L'] -= bottlesNeeded;
+      else if (size === '1.5L') updatedRawMaterials.labels['1.5L'] -= bottlesNeeded;
+      else if (size === '5L') updatedRawMaterials.labels['5L'] -= bottlesNeeded;
+      else if (size === '18.9L_disposable' || size === '18.9L_refill') updatedRawMaterials.labels['18.9L'] -= cartonsProduced;
+
+      // ===== DEDUCT OVERWRAPS (per carton, BY SIZE) =====
+      if (updatedRawMaterials.overwraps[size]) {
+        updatedRawMaterials.overwraps[size] -= cartonsProduced;
+      }
+
+      // ===== DEDUCT KRA STAMPS (per carton) =====
+      updatedRawMaterials.kraStamps -= cartonsProduced;
+
+      // ===== DEDUCT RO CHEMICAL (based on bottles) =====
+      updatedRawMaterials.roChemical -= (bottlesNeeded / 1000);
+
+      // ===== INCREASE FINISHED GOODS (in CARTONS) =====
+      if (updatedFinishedGoods[size]) {
+        updatedFinishedGoods[size].quantity += cartonsProduced;
+      }
+    });
+
+    // ===== DEDUCT COMBINED SHORT NECK SEALS (for both 0.5L and 1.5L) =====
+    const totalShortNeckBottles = 
+      ((formData.items['0.5L'] || 0) * BOTTLES_PER_CARTON['0.5L']) +
+      ((formData.items['1.5L'] || 0) * BOTTLES_PER_CARTON['1.5L']);
+    
+    if (totalShortNeckBottles > 0) {
+      updatedRawMaterials.seals['short_neck'] -= totalShortNeckBottles;
+    }
+
+    setState({
+      ...state,
+      productionLogs: [...state.productionLogs, newProduction],
+      rawMaterials: updatedRawMaterials,
+      finishedGoods: updatedFinishedGoods
+    });
+
+    setShowModal(false);
+  };
+
+  // Customer Management
+  const handleAddCustomer = () => {
+    setEditingCustomer(null);
+    setModalType('customer');
+    setFormData({ name: '', location: '', phone: '' });
+    setShowModal(true);
+  };
+
+  const handleSaveCustomer = () => {
+    if (!formData.name || !formData.location || !formData.phone) {
+      alert('Please fill in all fields');
+      return;
+    }
+
+    if (editingCustomer) {
+      const updatedCustomers = state.customers.map(c =>
+        c.id === editingCustomer.id ? { ...c, ...formData } : c
+      );
+      setState({ ...state, customers: updatedCustomers });
+    } else {
+      const newCustomer = {
+        id: Math.max(...state.customers.map(c => c.id), 0) + 1,
+        ...formData,
+        balance: 0,
+        isActive: true
+      };
+      setState({ ...state, customers: [...state.customers, newCustomer] });
+    }
+    setShowModal(false);
+  };
+
+  const handleDeleteCustomer = (id) => {
+    if (confirm('Delete this customer?')) {
+      setState({
+        ...state,
+        customers: state.customers.filter(c => c.id !== id)
+      });
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900">
+      {/* Header */}
+      <header className="border-b border-blue-400/20 bg-gradient-to-r from-slate-900 via-blue-900 to-slate-900 backdrop-blur sticky top-0 z-40 shadow-lg">
+        <div className="w-full px-4 md:px-6 py-3 md:py-4">
+          <div className="flex items-center justify-between gap-3">
+            {/* Logo and Company Name */}
+            <div className="flex items-center gap-2 md:gap-3 min-w-0">
+              {/* OASIS Springs Logo SVG */}
+              <svg 
+                viewBox="0 0 120 120" 
+                className="w-10 h-10 md:w-12 md:h-12 flex-shrink-0"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                {/* Circle background */}
+                <circle cx="60" cy="60" r="58" fill="#B3E5FC" stroke="#1E40AF" strokeWidth="3"/>
+                
+                {/* Water wave at bottom */}
+                <path d="M 10 75 Q 20 70, 30 75 T 50 75 T 70 75 T 90 75 T 110 75 L 110 110 Q 60 115, 10 110 Z" 
+                      fill="#0EA5E9" opacity="0.6"/>
+                
+                {/* Water drops */}
+                <circle cx="25" cy="40" r="4" fill="#F3F4F6" opacity="0.8"/>
+                <circle cx="95" cy="35" r="3" fill="#F3F4F6" opacity="0.6"/>
+                <circle cx="50" cy="85" r="3" fill="#F3F4F6" opacity="0.7"/>
+                
+                {/* OASIS text (simplified) */}
+                <text x="60" y="55" fontSize="28" fontWeight="bold" fill="#0369A1" 
+                      textAnchor="middle" fontFamily="Arial, sans-serif">OASIS</text>
+                
+                {/* Springs text (simplified) */}
+                <text x="60" y="68" fontSize="12" fontWeight="bold" fill="#1E3A8A" 
+                      textAnchor="middle" fontFamily="Arial, sans-serif" letterSpacing="2">Springs</text>
+              </svg>
+              
+              <div className="min-w-0">
+                <h1 className="text-lg md:text-2xl font-bold text-white truncate">Northern Water Co.</h1>
+                <p className="text-cyan-300 text-xs md:text-sm truncate font-semibold">🌊 OASIS Springs - Purified Water</p>
+              </div>
+            </div>
+            
+            {/* Assets Display */}
+            <div className="text-right">
+              <p className="text-blue-400 text-xs font-semibold">Total Assets</p>
+              <p className="text-lg md:text-2xl font-bold text-cyan-300">KES {(calculateInventoryValue() + calculateFinishedGoodsValue()).toLocaleString()}</p>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Navigation */}
+      <div className="bg-slate-800/50 border-b border-blue-400/10 sticky top-16 z-30 overflow-x-auto">
+        <div className="w-full">
+          <div className="flex gap-2 md:gap-8 px-4 md:px-6 min-w-max md:min-w-0">
+            {[
+              { id: 'dashboard', label: 'Home', icon: BarChart3 },
+              { id: 'reports', label: 'Reports', icon: TrendingUp },
+              { id: 'inventory', label: 'Stock', icon: Package },
+              { id: 'purchases', label: 'Buy', icon: ShoppingCart },
+              { id: 'production', label: 'Prod', icon: ClipboardList },
+              { id: 'sales', label: 'Sales', icon: DollarSign },
+              { id: 'payments', label: 'Pay', icon: Users },
+              { id: 'expenses', label: 'Cost', icon: DollarSign },
+              { id: 'customers', label: 'Clients', icon: Users },
+            ].map(tab => {
+              const Icon = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center gap-1 md:gap-2 px-2 md:px-4 py-3 md:py-4 border-b-2 transition-all whitespace-nowrap text-sm md:text-base ${
+                    activeTab === tab.id
+                      ? 'border-cyan-400 text-cyan-400'
+                      : 'border-transparent text-blue-300 hover:text-white'
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />
+                  <span className="hidden sm:inline">{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <main className="w-full px-4 md:px-6 py-4 md:py-8">
+        
+        {/* Dashboard */}
+        {activeTab === 'dashboard' && (
+          <div className="space-y-4 md:space-y-6">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
+              {[
+                { label: 'Customers', value: state.customers.length, color: 'from-blue-500 to-blue-600' },
+                { label: 'Debt', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0).toLocaleString()}`, color: 'from-red-500 to-red-600' },
+                { label: 'Sales', value: `KES ${state.sales.reduce((sum, s) => sum + s.total, 0).toLocaleString()}`, color: 'from-green-500 to-green-600' },
+                { label: 'Costs', value: `KES ${(getTotalExpenses() + getTotalPurchases()).toLocaleString()}`, color: 'from-purple-500 to-purple-600' },
+              ].map((card, i) => (
+                <div key={i} className={`bg-gradient-to-br ${card.color} rounded-lg md:rounded-xl p-3 md:p-6 text-white shadow-lg`}>
+                  <p className="text-xs md:text-sm opacity-90 mb-1 md:mb-2">{card.label}</p>
+                  <p className="text-sm md:text-3xl font-bold break-words">{card.value}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Quick Actions */}
+            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">Actions</h3>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-4">
+                <button
+                  onClick={handleAddSale}
+                  className="bg-green-500/20 hover:bg-green-500/30 border border-green-500/50 text-green-300 py-2 md:py-3 rounded-lg transition flex items-center justify-center gap-1 text-xs md:text-sm"
+                >
+                  <Plus className="w-4 h-4" /> Sale
+                </button>
+                <button
+                  onClick={handleAddPayment}
+                  className="bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 text-cyan-300 py-2 md:py-3 rounded-lg transition flex items-center justify-center gap-1 text-xs md:text-sm"
+                >
+                  <Plus className="w-4 h-4" /> Pay
+                </button>
+                <button
+                  onClick={handleAddProduction}
+                  className="bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 text-blue-300 py-2 md:py-3 rounded-lg transition flex items-center justify-center gap-1 text-xs md:text-sm"
+                >
+                  <Plus className="w-4 h-4" /> Prod
+                </button>
+                <button
+                  onClick={handleAddPurchase}
+                  className="bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/50 text-indigo-300 py-2 md:py-3 rounded-lg transition flex items-center justify-center gap-1 text-xs md:text-sm"
+                >
+                  <Plus className="w-4 h-4" /> Buy
+                </button>
+                <button
+                  onClick={() => { setActiveTab('reports'); setReportType('aging'); handleGenerateReport('aging'); }}
+                  className="bg-yellow-500/20 hover:bg-yellow-500/30 border border-yellow-500/50 text-yellow-300 py-2 md:py-3 rounded-lg transition flex items-center justify-center gap-1 text-xs md:text-sm"
+                >
+                  <TrendingUp className="w-4 h-4" /> Report
+                </button>
+              </div>
+            </div>
+
+            {/* Recent Activity */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
+              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+                <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">Recent Sales</h3>
+                <div className="space-y-2 md:space-y-3">
+                  {state.sales.slice(-5).reverse().map(sale => {
+                    const customer = state.customers.find(c => c.id === sale.customerId);
+                    return (
+                      <div key={sale.id} className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-base">
+                        <div>
+                          <p className="text-white font-medium truncate">{customer?.name}</p>
+                          <p className="text-blue-300 text-xs">{sale.date}</p>
+                        </div>
+                        <p className="text-green-400 font-semibold">KES {sale.total.toLocaleString()}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+                <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">Recent Purchases</h3>
+                <div className="space-y-2 md:space-y-3">
+                  {state.purchases.slice(-5).reverse().map(purchase => (
+                    <div key={purchase.id} className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-base">
+                      <div>
+                        <p className="text-white font-medium truncate">{purchase.supplier}</p>
+                        <p className="text-blue-300 text-xs">{purchase.date}</p>
+                      </div>
+                      <p className="text-indigo-400 font-semibold">KES {purchase.totalAmount.toLocaleString()}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Purchases Tab */}
+        {activeTab === 'purchases' && (
+          <div className="space-y-4 md:space-y-6">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+              <h2 className="text-xl md:text-2xl font-bold text-white">Raw Materials Purchases</h2>
+              <button
+                onClick={handleAddPurchase}
+                className="w-full md:w-auto bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+              >
+                <Plus className="w-4 h-4" /> New Purchase
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-6">
+              {[
+                { label: 'Total Purchased', value: `KES ${getTotalPurchases().toLocaleString()}`, color: 'from-indigo-500 to-indigo-600' },
+                { label: 'Purchase Count', value: state.purchases.length, color: 'from-blue-500 to-blue-600' },
+                { label: 'Current Stock Value', value: `KES ${calculateInventoryValue().toLocaleString()}`, color: 'from-cyan-500 to-cyan-600' },
+              ].map((card, i) => (
+                <div key={i} className={`bg-gradient-to-br ${card.color} rounded-lg md:rounded-xl p-3 md:p-6 text-white shadow-lg`}>
+                  <p className="text-xs md:text-sm opacity-90 mb-1 md:mb-2">{card.label}</p>
+                  <p className="text-lg md:text-3xl font-bold break-words">{card.value}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">Purchase History</h3>
+              <div className="space-y-3 max-h-96 overflow-y-auto">
+                {state.purchases.length === 0 ? (
+                  <p className="text-blue-300 text-center py-4 md:py-8 text-sm">No purchases recorded</p>
+                ) : (
+                  state.purchases.slice().reverse().map(purchase => (
+                    <div key={purchase.id} className="p-3 md:p-4 bg-slate-700/30 rounded-lg border border-blue-400/10">
+                      <div className="flex justify-between items-start gap-2 mb-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-white font-semibold text-sm truncate">{purchase.supplier}</p>
+                          <p className="text-blue-300 text-xs">{purchase.date}</p>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <p className="text-indigo-400 font-semibold">KES {purchase.totalAmount.toLocaleString()}</p>
+                          <div className="flex gap-1">
+                            <button
+                              onClick={() => {
+                                setEditingPurchase(purchase);
+                                setModalType('purchase');
+                                setFormData(purchase);
+                                setShowModal(true);
+                              }}
+                              className="p-1 hover:bg-blue-500/30 rounded transition"
+                            >
+                              <Edit2 className="w-3 h-3 text-blue-300" />
+                            </button>
+                            <button
+                              onClick={() => handleDeletePurchase(purchase.id)}
+                              className="p-1 hover:bg-red-500/30 rounded transition"
+                            >
+                              <Trash2 className="w-3 h-3 text-red-300" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-1 text-xs">
+                        {purchase.items.map((item, i) => (
+                          <div key={i} className="p-2 bg-slate-600/30 rounded">
+                            <p className="text-slate-400 text-xs">{item.description}</p>
+                            <p className="text-white font-semibold">{item.quantity} units</p>
+                            <p className="text-indigo-300">KES {item.total.toLocaleString()}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Inventory Tab */}
+        {activeTab === 'inventory' && (
+          <div className="space-y-4 md:space-y-6">
+            <h2 className="text-xl md:text-2xl font-bold text-white">Raw Materials Inventory</h2>
+
+            {/* Empty Bottles */}
+            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">Empty Bottles</h3>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-4">
+                {Object.entries(state.rawMaterials.emptyBottles).map(([size, quantity]) => (
+                  <div key={size} className="bg-slate-700/30 rounded-lg p-3 md:p-4 border border-blue-400/10">
+                    <p className="text-blue-300 text-xs md:text-sm mb-2">{size}</p>
+                    <p className="text-white text-lg md:text-2xl font-bold">{quantity}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Other Materials */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 md:gap-6">
+              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+                <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm">Seals</h3>
+                <div className="space-y-2 md:space-y-3">
+                  {Object.entries(state.rawMaterials.seals).map(([type, qty]) => {
+                    let label = type;
+                    if (type === 'short_neck') label = 'Short Neck (0.5L & 1.5L)';
+                    else if (type === '5L') label = '5L';
+                    else if (type === '18.9L') label = '18.9L';
+                    return (
+                      <div key={type} className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
+                        <p className="text-blue-300">{label}</p>
+                        <p className="text-white font-semibold">{qty}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+                <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm">Labels</h3>
+                <div className="space-y-2 md:space-y-3">
+                  {Object.entries(state.rawMaterials.labels).map(([size, qty]) => (
+                    <div key={size} className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
+                      <p className="text-blue-300">{size}</p>
+                      <p className="text-white font-semibold">{qty}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+                <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm">Overwraps by Size</h3>
+                <div className="space-y-2 md:space-y-3">
+                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
+                    <p className="text-blue-300">0.5L Cartons</p>
+                    <p className="text-white font-semibold">{state.rawMaterials.overwraps['0.5L']}</p>
+                  </div>
+                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
+                    <p className="text-blue-300">1.5L Cartons</p>
+                    <p className="text-white font-semibold">{state.rawMaterials.overwraps['1.5L']}</p>
+                  </div>
+                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
+                    <p className="text-blue-300">5L Cartons</p>
+                    <p className="text-white font-semibold">{state.rawMaterials.overwraps['5L']}</p>
+                  </div>
+                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-700/50 rounded-lg text-xs md:text-sm border border-green-400/30 mt-2">
+                    <p className="text-green-300 font-semibold">Total Overwraps</p>
+                    <p className="text-green-400 font-bold">{Object.values(state.rawMaterials.overwraps).reduce((a, b) => a + b, 0)}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+                <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm">Other Materials</h3>
+                <div className="space-y-2 md:space-y-3">
+                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
+                    <p className="text-blue-300">KRA Stamps</p>
+                    <p className="text-white font-semibold">{state.rawMaterials.kraStamps}</p>
+                  </div>
+                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
+                    <p className="text-blue-300">RO Chemical</p>
+                    <p className="text-white font-semibold">{state.rawMaterials.roChemical.toFixed(1)}L</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Reports Tab */}
+        {activeTab === 'reports' && (
+          <div className="space-y-4 md:space-y-6">
+            <h2 className="text-xl md:text-2xl font-bold text-white">Reports</h2>
+
+            {/* Report Selection */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
+              {[
+                { id: 'aging', label: 'Debtors', icon: '📊' },
+                { id: 'sales', label: 'Sales', icon: '📈' },
+                { id: 'expense', label: 'Expenses', icon: '💰' },
+                { id: 'profitloss', label: 'P&L', icon: '📉' },
+              ].map(report => (
+                <button
+                  key={report.id}
+                  onClick={() => handleGenerateReport(report.id)}
+                  className={`p-3 md:p-4 rounded-lg md:rounded-xl border-2 transition text-sm md:text-base ${
+                    reportType === report.id
+                      ? 'border-cyan-400 bg-cyan-500/20'
+                      : 'border-blue-400/30 bg-slate-800/30 hover:border-cyan-400'
+                  }`}
+                >
+                  <p className="text-xl md:text-2xl mb-1 md:mb-2">{report.icon}</p>
+                  <p className={`font-semibold ${reportType === report.id ? 'text-cyan-300' : 'text-blue-300'}`}>{report.label}</p>
+                </button>
+              ))}
+            </div>
+
+            {/* Date Range for Sales Report */}
+            {reportType === 'sales' && (
+              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-3 md:p-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
+                  <div>
+                    <label className="text-blue-300 text-xs md:text-sm block mb-1 md:mb-2">Start Date</label>
+                    <input
+                      type="date"
+                      value={dateRange.start}
+                      onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-2 md:px-4 py-1 md:py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-blue-300 text-xs md:text-sm block mb-1 md:mb-2">End Date</label>
+                    <input
+                      type="date"
+                      value={dateRange.end}
+                      onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-2 md:px-4 py-1 md:py-2 text-sm"
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <button
+                      onClick={() => handleGenerateReport('sales')}
+                      className="w-full bg-cyan-500 hover:bg-cyan-600 text-white px-2 md:px-4 py-1 md:py-2 rounded-lg transition text-sm"
+                    >
+                      Generate
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Report Display */}
+            {reportData && (
+              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 mb-4 md:mb-6">
+                  <div>
+                    <h3 className="text-white font-semibold text-base md:text-xl">{reportData.title}</h3>
+                    <p className="text-blue-300 text-xs md:text-sm">Generated: {reportData.date}</p>
+                  </div>
+                  <button
+                    onClick={downloadReportAsPDF}
+                    className="flex items-center gap-2 bg-cyan-500 hover:bg-cyan-600 text-white px-3 md:px-4 py-2 rounded-lg transition text-sm w-full md:w-auto justify-center"
+                  >
+                    <Download className="w-4 h-4" /> Download
+                  </button>
+                </div>
+
+                {/* Aging Debtors Report */}
+                {reportType === 'aging' && (
+                  <div className="space-y-3">
+                    <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 md:p-4 mb-4">
+                      <p className="text-red-300 text-xs md:text-sm">Total Outstanding Debt</p>
+                      <p className="text-white text-2xl md:text-3xl font-bold">KES {reportData.total.toLocaleString()}</p>
+                    </div>
+                    {reportData.data.length === 0 ? (
+                      <p className="text-blue-300 text-center py-4 md:py-8 text-sm">No debtors</p>
+                    ) : (
+                      <div className="space-y-2 md:space-y-3">
+                        {reportData.data.map((debtor, i) => (
+                          <div key={i} className="p-3 md:p-4 bg-slate-700/30 rounded-lg border-l-4 border-red-500 text-xs md:text-sm">
+                            <div className="flex justify-between items-start gap-2 mb-2">
+                              <div>
+                                <p className="text-white font-semibold">{debtor.name}</p>
+                                <p className="text-blue-300 text-xs">{debtor.location}</p>
+                              </div>
+                              <p className="text-red-400 font-semibold">KES {debtor.debt.toLocaleString()}</p>
+                            </div>
+                            <div className="flex justify-between text-xs text-slate-400">
+                              <span>Ph: {debtor.phone}</span>
+                              <span>{debtor.daysOverdue}d overdue</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Sales Report */}
+                {reportType === 'sales' && (
+                  <div className="space-y-4 md:space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+                      <div className="bg-green-500/20 border border-green-500/50 rounded-lg p-3 md:p-4">
+                        <p className="text-green-300 text-xs md:text-sm">Total Sales</p>
+                        <p className="text-white text-xl md:text-2xl font-bold">KES {reportData.totalSales.toLocaleString()}</p>
+                      </div>
+                      <div className="bg-blue-500/20 border border-blue-500/50 rounded-lg p-3 md:p-4">
+                        <p className="text-blue-300 text-xs md:text-sm">Transactions</p>
+                        <p className="text-white text-xl md:text-2xl font-bold">{reportData.totalTransactions}</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-6">
+                      <div>
+                        <h4 className="text-white font-semibold mb-2 md:mb-3 text-sm">Sales Revenue by Location</h4>
+                        <div className="space-y-1 md:space-y-2">
+                          {Object.entries(reportData.salesByLocation).map(([location, amount]) => (
+                            <div key={location} className="flex justify-between p-2 bg-slate-700/30 rounded text-xs md:text-sm">
+                              <p className="text-blue-300">{location}</p>
+                              <p className="text-white font-semibold">KES {amount.toLocaleString()}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <h4 className="text-white font-semibold mb-2 md:mb-3 text-sm">Total Cartons by Size</h4>
+                        <div className="space-y-1 md:space-y-2">
+                          {Object.entries(reportData.salesBySize).map(([size, qty]) => (
+                            <div key={size} className="flex justify-between p-2 bg-slate-700/30 rounded text-xs md:text-sm">
+                              <p className="text-blue-300">{size}</p>
+                              <p className="text-white font-semibold">{qty} cartons</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Cartons by Location and Size */}
+                    <div className="bg-slate-700/30 rounded-lg p-4 border border-blue-400/20">
+                      <h4 className="text-white font-semibold mb-4 text-base">📊 Carton Sales by Location & Size</h4>
+                      <div className="space-y-4">
+                        {Object.entries(reportData.bottlesByLocationAndSize).map(([location, cartons]) => (
+                          <div key={location} className="bg-slate-800/50 rounded-lg p-3 border border-blue-400/10">
+                            <p className="text-cyan-400 font-bold text-sm mb-2">{location}</p>
+                            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                              {Object.entries(cartons).map(([size, qty]) => (
+                                <div key={`${location}-${size}`} className="bg-slate-700/50 p-2 rounded text-xs text-center">
+                                  <p className="text-blue-300 font-semibold">{size}</p>
+                                  <p className="text-white font-bold">{qty} cartons</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Expense Report */}
+                {reportType === 'expense' && (
+                  <div className="space-y-2 md:space-y-3">
+                    <div className="bg-orange-500/20 border border-orange-500/50 rounded-lg p-3 md:p-4 mb-4">
+                      <p className="text-orange-300 text-xs md:text-sm">Total Expenses</p>
+                      <p className="text-white text-2xl md:text-3xl font-bold">KES {reportData.totalExpenses.toLocaleString()}</p>
+                    </div>
+                    <h4 className="text-white font-semibold text-sm">By Category:</h4>
+                    {Object.entries(reportData.byCategory).map(([category, amount]) => (
+                      <div key={category} className="flex justify-between items-center p-3 md:p-4 bg-slate-700/30 rounded-lg text-xs md:text-sm">
+                        <p className="text-blue-300">{category}</p>
+                        <p className="text-white font-semibold">KES {amount.toLocaleString()}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* P&L Report */}
+                {reportType === 'profitloss' && (
+                  <div className="space-y-3 md:space-y-4">
+                    <div className={`border-2 rounded-lg p-3 md:p-4 ${reportData.profit >= 0 ? 'border-green-500/50 bg-green-500/20' : 'border-red-500/50 bg-red-500/20'}`}>
+                      <p className={reportData.profit >= 0 ? 'text-green-300' : 'text-red-300'}>Net Profit</p>
+                      <p className={`text-2xl md:text-3xl font-bold ${reportData.profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        KES {reportData.profit.toLocaleString()}
+                      </p>
+                      <p className="text-xs mt-2">Margin: {reportData.profitMargin}%</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+                      <div className="bg-green-500/20 border border-green-500/50 rounded-lg p-3 md:p-4">
+                        <p className="text-green-300 text-xs md:text-sm">Revenue</p>
+                        <p className="text-white text-xl md:text-2xl font-bold">KES {reportData.revenue.sales.toLocaleString()}</p>
+                      </div>
+                      <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 md:p-4">
+                        <p className="text-red-300 text-xs md:text-sm">Expenses</p>
+                        <p className="text-white text-xl md:text-2xl font-bold">KES {reportData.expenses.total.toLocaleString()}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Production Tab */}
+        {activeTab === 'production' && (
+          <div className="space-y-4 md:space-y-6">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+              <h2 className="text-xl md:text-2xl font-bold text-white">Production</h2>
+              <button
+                onClick={handleAddProduction}
+                className="w-full md:w-auto bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+              >
+                <Plus className="w-4 h-4" /> New
+              </button>
+            </div>
+
+            {/* Finished Goods */}
+            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">Finished Goods</h3>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-4">
+                {Object.entries(state.finishedGoods).map(([size, data]) => (
+                  <div key={size} className="bg-gradient-to-br from-slate-700 to-slate-800 rounded-lg p-3 md:p-4 border border-green-400/20">
+                    <p className="text-green-300 text-xs md:text-sm mb-2">{size}</p>
+                    <p className="text-white text-lg md:text-2xl font-bold">{data.quantity}</p>
+                    <p className="text-slate-400 text-xs mt-2">{data.quantity * data.bottlesPerCarton} btls</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Production History */}
+            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">History</h3>
+              <div className="space-y-2 md:space-y-3 max-h-96 overflow-y-auto">
+                {state.productionLogs.length === 0 ? (
+                  <p className="text-blue-300 text-center py-4 md:py-8 text-sm">No logs</p>
+                ) : (
+                  state.productionLogs.slice().reverse().map(log => (
+                    <div key={log.id} className="p-3 md:p-4 bg-slate-700/30 rounded-lg border border-blue-400/10">
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <p className="text-white font-semibold text-sm">Prod #{log.id}</p>
+                          <p className="text-blue-300 text-xs">{log.date}</p>
+                        </div>
+                        <span className="bg-purple-500/30 text-purple-300 px-2 py-1 rounded text-xs">
+                          {log.unit}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-1 text-xs mb-2">
+                        {Object.entries(log.items).map(([size, qty]) => (
+                          <div key={size}>
+                            <p className="text-slate-400">{size}</p>
+                            <p className="text-white font-semibold">{qty}</p>
+                          </div>
+                        ))}
+                      </div>
+                      {log.notes && <p className="text-blue-300 text-xs italic">{log.notes}</p>}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Sales Tab */}
+        {activeTab === 'sales' && (
+          <div className="space-y-4 md:space-y-6">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+              <h2 className="text-xl md:text-2xl font-bold text-white">Sales</h2>
+              <button
+                onClick={handleAddSale}
+                className="w-full md:w-auto bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+              >
+                <Plus className="w-4 h-4" /> New Sale
+              </button>
+            </div>
+
+            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">History</h3>
+              <div className="space-y-2 md:space-y-3 max-h-96 overflow-y-auto">
+                {state.sales.length === 0 ? (
+                  <p className="text-blue-300 text-center py-4 md:py-8 text-sm">No sales</p>
+                ) : (
+                  state.sales.slice().reverse().map(sale => {
+                    const customer = state.customers.find(c => c.id === sale.customerId);
+                    return (
+                      <div key={sale.id} className="p-3 md:p-4 bg-slate-700/30 rounded-lg border border-blue-400/10">
+                        <div className="flex justify-between items-start gap-2 mb-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <p className="text-white font-semibold text-sm truncate">{customer?.name}</p>
+                              <p className="text-slate-400 text-xs">{sale.invoiceNumber}</p>
+                            </div>
+                            <p className="text-blue-300 text-xs">{sale.date}</p>
+                          </div>
+                          <div className="text-right flex-shrink-0">
+                            <p className="text-green-400 font-semibold text-sm">KES {sale.total.toLocaleString()}</p>
+                            <span className={`text-xs px-2 py-1 rounded block mt-1 ${sale.status === 'paid' ? 'bg-green-500/30 text-green-300' : sale.status === 'partial' ? 'bg-orange-500/30 text-orange-300' : 'bg-red-500/30 text-red-300'}`}>
+                              {sale.status === 'paid' ? '✓' : sale.status === 'partial' ? '◐' : '○'}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1 text-xs pt-2 border-t border-blue-400/10">
+                          {sale.items.slice(0, 2).map((item, i) => (
+                            <div key={i}>
+                              <p className="text-slate-400">{item.size}</p>
+                              <p className="text-white">{item.quantity}×{item.price}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Payments Tab */}
+        {activeTab === 'payments' && (
+          <div className="space-y-4 md:space-y-6">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+              <h2 className="text-xl md:text-2xl font-bold text-white">Payments & Debts</h2>
+              <button
+                onClick={handleAddPayment}
+                className="w-full md:w-auto bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+              >
+                <Plus className="w-4 h-4" /> Record Payment
+              </button>
+            </div>
+
+            {/* Summary Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-6">
+              {[
+                { label: 'Total Debt', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0).toLocaleString()}`, color: 'from-red-500 to-red-600' },
+                { label: 'Total Credits', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, c.balance), 0).toLocaleString()}`, color: 'from-green-500 to-green-600' },
+                { label: 'Total Received', value: `KES ${state.payments.reduce((sum, p) => sum + p.amount, 0).toLocaleString()}`, color: 'from-blue-500 to-blue-600' },
+              ].map((card, i) => (
+                <div 
+                  key={i} 
+                  className={`bg-gradient-to-br ${card.color} rounded-lg md:rounded-xl p-3 md:p-6 text-white shadow-lg cursor-pointer transition hover:shadow-xl ${
+                    card.label === 'Total Debt' && paymentsTab === 'debts' ? 'ring-2 ring-yellow-300' : ''
+                  }`}
+                  onClick={() => card.label === 'Total Debt' && setPaymentsTab('debts')}
+                >
+                  <p className="text-xs md:text-sm opacity-90 mb-1 md:mb-2">{card.label}</p>
+                  <p className="text-lg md:text-3xl font-bold break-words">{card.value}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Tab Navigation */}
+            <div className="bg-slate-800/30 border-b border-blue-400/20 rounded-t-lg flex gap-2 p-2">
+              <button
+                onClick={() => setPaymentsTab('debts')}
+                className={`flex-1 py-2 px-4 rounded-t-lg transition text-sm font-semibold ${
+                  paymentsTab === 'debts'
+                    ? 'bg-red-500/30 text-red-300 border-b-2 border-red-400'
+                    : 'text-blue-300 hover:text-white'
+                }`}
+              >
+                💰 Outstanding Debts
+              </button>
+              <button
+                onClick={() => setPaymentsTab('history')}
+                className={`flex-1 py-2 px-4 rounded-t-lg transition text-sm font-semibold ${
+                  paymentsTab === 'history'
+                    ? 'bg-cyan-500/30 text-cyan-300 border-b-2 border-cyan-400'
+                    : 'text-blue-300 hover:text-white'
+                }`}
+              >
+                📋 Payment History
+              </button>
+              <button
+                onClick={() => setPaymentsTab('accounts')}
+                className={`flex-1 py-2 px-4 rounded-t-lg transition text-sm font-semibold ${
+                  paymentsTab === 'accounts'
+                    ? 'bg-green-500/30 text-green-300 border-b-2 border-green-400'
+                    : 'text-blue-300 hover:text-white'
+                }`}
+              >
+                👥 All Accounts
+              </button>
+            </div>
+
+            {/* Outstanding Debts Tab */}
+            {paymentsTab === 'debts' && (
+              <div className="bg-slate-800/30 border border-blue-400/20 rounded-b-lg rounded-tr-lg p-4 md:p-6">
+                <h3 className="text-white font-semibold mb-4 text-base">Customers with Outstanding Debts</h3>
+                <div className="space-y-3">
+                  {state.customers.filter(c => c.balance < 0).length === 0 ? (
+                    <div className="text-center py-8">
+                      <p className="text-green-400 text-lg font-semibold">✓ No Outstanding Debts!</p>
+                      <p className="text-blue-300 text-sm mt-2">All customers are up to date</p>
+                    </div>
+                  ) : (
+                    state.customers
+                      .filter(c => c.balance < 0)
+                      .sort((a, b) => a.balance - b.balance)
+                      .map((customer) => {
+                        const debt = Math.abs(customer.balance);
+                        const sales = state.sales.filter(s => s.customerId === customer.id && s.status !== 'paid');
+                        const lastSale = sales.length > 0 ? sales[sales.length - 1] : null;
+                        
+                        return (
+                          <div key={customer.id} className="p-4 bg-red-900/20 border-2 border-red-500/50 rounded-lg">
+                            {/* Customer Header */}
+                            <div className="flex justify-between items-start mb-3">
+                              <div className="flex-1">
+                                <p className="text-white text-lg font-bold">{customer.name}</p>
+                                <p className="text-red-300 text-sm">{customer.location}</p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-red-400 text-2xl font-bold">KES {debt.toLocaleString()}</p>
+                                <p className="text-red-300 text-xs">Outstanding</p>
+                              </div>
+                            </div>
+
+                            {/* Customer Details */}
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 py-3 border-t border-b border-red-500/30">
+                              <div>
+                                <p className="text-slate-400 text-xs">Phone</p>
+                                <p className="text-white font-semibold text-sm">{customer.phone}</p>
+                              </div>
+                              <div>
+                                <p className="text-slate-400 text-xs">Unpaid Invoices</p>
+                                <p className="text-white font-semibold text-sm">{sales.length}</p>
+                              </div>
+                              <div>
+                                <p className="text-slate-400 text-xs">Last Sale Date</p>
+                                <p className="text-white font-semibold text-sm">{lastSale?.date || 'N/A'}</p>
+                              </div>
+                              <div>
+                                <p className="text-slate-400 text-xs">Status</p>
+                                <p className={`font-semibold text-sm ${customer.isActive ? 'text-green-400' : 'text-orange-400'}`}>
+                                  {customer.isActive ? 'Active' : 'Inactive'}
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Unpaid Invoices */}
+                            {sales.length > 0 && (
+                              <div className="mt-3 pt-3 border-t border-red-500/30">
+                                <p className="text-red-300 font-semibold text-sm mb-2">Unpaid Invoices:</p>
+                                <div className="space-y-1">
+                                  {sales.map((sale) => (
+                                    <div key={sale.id} className="flex justify-between text-xs bg-slate-700/50 p-2 rounded">
+                                      <span className="text-white">{sale.invoiceNumber} • {sale.date}</span>
+                                      <span className="text-red-300 font-semibold">KES {(sale.total - sale.paid).toLocaleString()}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Action Button */}
+                            <button
+                              onClick={handleAddPayment}
+                              className="mt-3 w-full bg-green-500/30 hover:bg-green-500/50 border border-green-500/50 text-green-300 py-2 px-3 rounded-lg transition text-sm font-semibold"
+                            >
+                              Record Payment
+                            </button>
+                          </div>
+                        );
+                      })
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Payment History Tab */}
+            {paymentsTab === 'history' && (
+              <div className="bg-slate-800/30 border border-blue-400/20 rounded-b-lg rounded-tr-lg p-4 md:p-6">
+                <h3 className="text-white font-semibold mb-4 text-base">Payment History</h3>
+                <div className="space-y-2 md:space-y-3 max-h-96 overflow-y-auto">
+                  {state.payments.length === 0 ? (
+                    <p className="text-blue-300 text-center py-8 text-sm">No payments recorded</p>
+                  ) : (
+                    state.payments.slice().reverse().map(payment => {
+                      const customer = state.customers.find(c => c.id === payment.customerId);
+                      const sale = state.sales.find(s => s.id === payment.saleId);
+                      return (
+                        <div key={payment.id} className="p-3 md:p-4 bg-slate-700/30 rounded-lg border border-cyan-400/20">
+                          <div className="flex justify-between items-start mb-2">
+                            <div className="min-w-0 flex-1">
+                              <p className="text-white font-semibold truncate">{customer?.name}</p>
+                              <p className="text-blue-300 text-xs">{payment.date}</p>
+                            </div>
+                            <p className="text-green-400 font-bold text-lg ml-2">KES {payment.amount.toLocaleString()}</p>
+                          </div>
+                          <div className="flex gap-2 text-xs text-slate-400">
+                            <span className="bg-slate-600/50 px-2 py-1 rounded">{payment.method}</span>
+                            <span className="bg-slate-600/50 px-2 py-1 rounded">{sale?.invoiceNumber || 'N/A'}</span>
+                            {payment.reference && <span className="bg-slate-600/50 px-2 py-1 rounded">Ref: {payment.reference}</span>}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* All Accounts Tab */}
+            {paymentsTab === 'accounts' && (
+              <div className="bg-slate-800/30 border border-blue-400/20 rounded-b-lg rounded-tr-lg p-4 md:p-6">
+                <h3 className="text-white font-semibold mb-4 text-base">All Customer Accounts</h3>
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {state.customers.length === 0 ? (
+                    <p className="text-blue-300 text-center py-8 text-sm">No customers</p>
+                  ) : (
+                    state.customers.sort((a, b) => a.balance - b.balance).map(customer => {
+                      const isDebtor = customer.balance < 0;
+                      const isCreditor = customer.balance > 0;
+                      
+                      return (
+                        <div 
+                          key={customer.id} 
+                          className={`p-3 md:p-4 rounded-lg flex justify-between items-center border-l-4 transition ${
+                            isDebtor 
+                              ? 'bg-red-900/20 border-red-500 hover:bg-red-900/30' 
+                              : isCreditor 
+                              ? 'bg-green-900/20 border-green-500 hover:bg-green-900/30'
+                              : 'bg-slate-700/30 border-blue-400/30 hover:bg-slate-700/50'
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <p className="text-white font-semibold truncate">{customer.name}</p>
+                            <p className="text-slate-400 text-xs">{customer.location} • {customer.phone}</p>
+                          </div>
+                          <div className="text-right flex-shrink-0 ml-2">
+                            <p className={`font-bold text-base ${
+                              isDebtor ? 'text-red-400' : isCreditor ? 'text-green-400' : 'text-blue-300'
+                            }`}>
+                              {isDebtor ? '- ' : isCreditor ? '+ ' : ''}KES {Math.abs(customer.balance).toLocaleString()}
+                            </p>
+                            <p className={`text-xs ${isDebtor ? 'text-red-300' : isCreditor ? 'text-green-300' : 'text-blue-300'}`}>
+                              {isDebtor ? 'OWES' : isCreditor ? 'CREDIT' : 'BALANCED'}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Expenses Tab */}
+        {activeTab === 'expenses' && (
+          <div className="space-y-4 md:space-y-6">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+              <h2 className="text-xl md:text-2xl font-bold text-white">Expenses</h2>
+              <button
+                onClick={handleAddExpense}
+                className="w-full md:w-auto bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+              >
+                <Plus className="w-4 h-4" /> New Expense
+              </button>
+            </div>
+
+            {/* Summary by Category */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-6">
+              {Object.entries(getTotalExpensesByCategory()).map(([category, amount]) => (
+                <div key={category} className="bg-orange-500/20 border border-orange-500/50 rounded-lg md:rounded-xl p-3 md:p-4">
+                  <p className="text-orange-300 text-xs md:text-sm">{category}</p>
+                  <p className="text-white text-lg md:text-2xl font-bold">KES {amount.toLocaleString()}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Total Expenses */}
+            <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg md:rounded-xl p-4 md:p-6 text-white shadow-lg">
+              <p className="text-sm opacity-90 mb-2">Total Expenses</p>
+              <p className="text-3xl md:text-4xl font-bold">KES {getTotalExpenses().toLocaleString()}</p>
+            </div>
+
+            {/* Expenses List */}
+            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">Expense Records</h3>
+              <div className="space-y-2 md:space-y-3 max-h-96 overflow-y-auto">
+                {state.expenses.length === 0 ? (
+                  <p className="text-blue-300 text-center py-4 md:py-8 text-sm">No expenses recorded</p>
+                ) : (
+                  state.expenses.slice().reverse().map(expense => (
+                    <div key={expense.id} className="p-3 md:p-4 bg-slate-700/30 rounded-lg border border-blue-400/10">
+                      <div className="flex justify-between items-start gap-2 mb-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-white font-semibold text-sm truncate">{expense.description || expense.subcategory}</p>
+                          <p className="text-blue-300 text-xs">{expense.date}</p>
+                          <p className="text-slate-400 text-xs">{expense.category} • {expense.subcategory}</p>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <p className="text-orange-400 font-semibold">KES {expense.amount.toLocaleString()}</p>
+                          <div className="flex gap-1">
+                            <button
+                              onClick={() => {
+                                setEditingExpense(expense);
+                                setModalType('expense');
+                                setFormData(expense);
+                                setShowModal(true);
+                              }}
+                              className="p-1 hover:bg-blue-500/30 rounded transition"
+                            >
+                              <Edit2 className="w-3 h-3 text-blue-300" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteExpense(expense.id)}
+                              className="p-1 hover:bg-red-500/30 rounded transition"
+                            >
+                              <Trash2 className="w-3 h-3 text-red-300" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Pricing Management Tab */}
+        {/* Customers Tab */}
+        {activeTab === 'customers' && (
+          <div className="space-y-4 md:space-y-6">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+              <h2 className="text-xl md:text-2xl font-bold text-white">Customers</h2>
+              <button
+                onClick={handleAddCustomer}
+                className="w-full md:w-auto bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+              >
+                <Plus className="w-4 h-4" /> New
+              </button>
+            </div>
+
+            {/* Customer Search Bar */}
+            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg p-3 md:p-4">
+              <input
+                type="text"
+                placeholder="Search customers by name, location, or phone..."
+                value={customerSearch}
+                onChange={(e) => setCustomerSearch(e.target.value)}
+                className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-4 py-2 text-sm placeholder-slate-400"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 md:gap-4">
+              {state.customers
+                .filter(customer => {
+                  const searchTerm = customerSearch.toLowerCase();
+                  return (
+                    customer.name.toLowerCase().includes(searchTerm) ||
+                    customer.location.toLowerCase().includes(searchTerm) ||
+                    customer.phone.includes(searchTerm)
+                  );
+                })
+                .map(customer => (
+                <div key={customer.id} className="p-4 md:p-6 bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl">
+                  <div className="flex justify-between items-start gap-3 mb-3">
+                    <div className="min-w-0">
+                      <p className="text-white text-base md:text-lg font-semibold">{customer.name}</p>
+                      <p className="text-blue-300 text-xs md:text-sm">{customer.location} • {customer.phone}</p>
+                    </div>
+                    <div className="flex gap-2 flex-shrink-0">
+                      <button
+                        onClick={() => {
+                          setEditingCustomer(customer);
+                          setModalType('customer');
+                          setFormData(customer);
+                          setShowModal(true);
+                        }}
+                        className="p-2 hover:bg-blue-500/30 rounded-lg transition"
+                      >
+                        <Edit2 className="w-4 h-4 text-blue-300" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteCustomer(customer.id)}
+                        className="p-2 hover:bg-red-500/30 rounded-lg transition"
+                      >
+                        <Trash2 className="w-4 h-4 text-red-300" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between pt-3 border-t border-blue-400/10">
+                    <div>
+                      <p className="text-slate-400 text-xs md:text-sm">Balance</p>
+                      <p className={`text-lg md:text-xl font-semibold ${customer.balance >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        KES {customer.balance.toLocaleString()}
+                      </p>
+                    </div>
+                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${customer.isActive ? 'bg-green-500/30 text-green-300' : 'bg-red-500/30 text-red-300'}`}>
+                      {customer.isActive ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* Modals */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-800 border border-blue-400/20 rounded-lg md:rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center p-4 md:p-6 border-b border-blue-400/10 sticky top-0 bg-slate-800">
+              <h3 className="text-white font-semibold text-base md:text-lg">
+                {modalType === 'sale' && 'New Sale'}
+                {modalType === 'payment' && 'Record Payment'}
+                {modalType === 'production' && 'Production Log'}
+                {modalType === 'purchase' && (editingPurchase ? 'Edit Purchase' : 'New Purchase')}
+                {modalType === 'expense' && (editingExpense ? 'Edit Expense' : 'New Expense')}
+                {modalType === 'customer' && (editingCustomer ? 'Edit' : 'New Customer')}
+              </h3>
+              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 md:p-6 space-y-4">
+              {/* Purchase Modal */}
+              {modalType === 'purchase' && (
+                <>
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Supplier Name</label>
+                    <input
+                      type="text"
+                      value={formData.supplier || ''}
+                      onChange={(e) => setFormData({ ...formData, supplier: e.target.value })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      placeholder="e.g., Kenya Bottle Co..."
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Purchase Date</label>
+                    <input
+                      type="date"
+                      value={formData.date || ''}
+                      onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                    />
+                  </div>
+
+                  <div className="bg-slate-700/30 rounded-lg p-3 md:p-4 border border-blue-400/10">
+                    <h4 className="text-white font-semibold mb-3 text-sm">Materials Purchased</h4>
+                    <div className="space-y-3">
+                      {formData.items?.map((item, idx) => (
+                        <div key={idx} className="space-y-2 p-3 bg-slate-600/30 rounded">
+                          <div>
+                            <label className="text-blue-300 text-xs block mb-1">Material</label>
+                            <select
+                              value={item.description || ''}
+                              onChange={(e) => {
+                                const newItems = [...formData.items];
+                                const selected = state.rawMaterialOptions[e.target.value];
+                                newItems[idx].material = selected.material;
+                                newItems[idx].description = e.target.value;
+                                setFormData({ ...formData, items: newItems });
+                              }}
+                              className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded px-2 py-1 text-sm"
+                            >
+                              <option value="">Select material...</option>
+                              {Object.keys(state.rawMaterialOptions).map(opt => (
+                                <option key={opt} value={opt}>{opt}</option>
+                              ))}
+                            </select>
+                            {item.description && (
+                              <p className="text-green-300 text-xs mt-1 font-semibold">✓ {item.description}</p>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-3 gap-2">
+                            <div>
+                              <label className="text-blue-300 text-xs block mb-1">Qty</label>
+                              <input
+                                type="number"
+                                value={item.quantity || 0}
+                                onChange={(e) => {
+                                  const newItems = [...formData.items];
+                                  newItems[idx].quantity = parseInt(e.target.value) || 0;
+                                  newItems[idx].total = newItems[idx].quantity * newItems[idx].unitPrice;
+                                  setFormData({ ...formData, items: newItems });
+                                }}
+                                className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded px-2 py-1 text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-blue-300 text-xs block mb-1">Unit Price</label>
+                              <input
+                                type="number"
+                                value={item.unitPrice || 0}
+                                onChange={(e) => {
+                                  const newItems = [...formData.items];
+                                  newItems[idx].unitPrice = parseInt(e.target.value) || 0;
+                                  newItems[idx].total = newItems[idx].quantity * newItems[idx].unitPrice;
+                                  setFormData({ ...formData, items: newItems });
+                                }}
+                                className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded px-2 py-1 text-sm"
+                              />
+                            </div>
+                            <div>
+                              <p className="text-blue-300 text-xs mb-1">Total</p>
+                              <p className="text-white font-semibold">KES {(item.total || 0).toLocaleString()}</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => setFormData({
+                        ...formData,
+                        items: [...(formData.items || []), { material: '', description: '', quantity: 0, unitPrice: 0, total: 0 }]
+                      })}
+                      className="mt-3 text-cyan-300 text-sm"
+                    >
+                      + Add Item
+                    </button>
+                  </div>
+
+                  <div className="bg-indigo-500/20 border border-indigo-500/50 rounded-lg p-3 md:p-4">
+                    <p className="text-indigo-300 text-xs">Total Purchase Amount</p>
+                    <p className="text-white text-lg md:text-xl font-bold">
+                      KES {(formData.items?.reduce((sum, i) => sum + (i.total || 0), 0) || 0).toLocaleString()}
+                    </p>
+                  </div>
+                </>
+              )}
+
+              {/* Sale Modal */}
+              {modalType === 'sale' && (
+                <>
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Customer</label>
+                    <select
+                      value={formData.customerId || ''}
+                      onChange={(e) => setFormData({ ...formData, customerId: e.target.value })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                    >
+                      <option value="">Select...</option>
+                      {state.customers.map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Date</label>
+                    <input
+                      type="date"
+                      value={formData.date || ''}
+                      onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Payment Status</label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, paymentStatus: 'unpaid' })}
+                        className={`flex-1 py-2 px-3 rounded-lg transition font-semibold text-sm ${
+                          formData.paymentStatus === 'unpaid'
+                            ? 'bg-red-500 text-white'
+                            : 'bg-slate-700/50 text-slate-400 border border-blue-400/30 hover:border-red-400/50'
+                        }`}
+                      >
+                        ✗ UNPAID (Debt)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, paymentStatus: 'paid' })}
+                        className={`flex-1 py-2 px-3 rounded-lg transition font-semibold text-sm ${
+                          formData.paymentStatus === 'paid'
+                            ? 'bg-green-500 text-white'
+                            : 'bg-slate-700/50 text-slate-400 border border-blue-400/30 hover:border-green-400/50'
+                        }`}
+                      >
+                        ✓ PAID
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-700/30 rounded-lg p-3 md:p-4 border border-blue-400/10">
+                    <h4 className="text-white font-semibold mb-3 text-sm">Items</h4>
+                    <div className="space-y-3">
+                      {formData.items?.map((item, idx) => (
+                        <div key={idx} className="grid grid-cols-4 gap-2 items-end text-xs md:text-sm">
+                          <div>
+                            <label className="text-blue-300 text-xs block mb-1">Size</label>
+                            <select
+                              value={item.size || ''}
+                              onChange={(e) => {
+                                const newItems = [...formData.items];
+                                newItems[idx].size = e.target.value;
+                                newItems[idx].price = BOTTLE_PRICES[e.target.value] || 0;
+                                setFormData({ ...formData, items: newItems });
+                              }}
+                              className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded px-2 py-1"
+                            >
+                              {Object.keys(BOTTLE_PRICES).map(s => (
+                                <option key={s} value={s}>{s}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-blue-300 text-xs block mb-1">Qty</label>
+                            <input
+                              type="number"
+                              value={item.quantity || 0}
+                              onChange={(e) => {
+                                const newItems = [...formData.items];
+                                newItems[idx].quantity = parseInt(e.target.value) || 0;
+                                newItems[idx].subtotal = newItems[idx].quantity * newItems[idx].price;
+                                setFormData({ ...formData, items: newItems });
+                              }}
+                              className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded px-2 py-1"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-blue-300 text-xs block mb-1">Price</label>
+                            <input
+                              type="number"
+                              value={item.price || 0}
+                              onChange={(e) => {
+                                const newItems = [...formData.items];
+                                newItems[idx].price = parseInt(e.target.value) || 0;
+                                newItems[idx].subtotal = newItems[idx].quantity * newItems[idx].price;
+                                setFormData({ ...formData, items: newItems });
+                              }}
+                              className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded px-2 py-1"
+                            />
+                          </div>
+                          <div>
+                            <p className="text-blue-300 text-xs mb-1">Sub</p>
+                            <p className="text-white font-semibold">KES {(item.subtotal || 0).toLocaleString()}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => setFormData({
+                        ...formData,
+                        items: [...(formData.items || []), { size: '0.5L', quantity: 0, price: 100, subtotal: 0 }]
+                      })}
+                      className="mt-3 text-cyan-300 text-xs"
+                    >
+                      + Add
+                    </button>
+                  </div>
+
+                  <div className="bg-green-500/20 border border-green-500/50 rounded-lg p-3 md:p-4">
+                    <p className="text-green-300 text-xs">Total</p>
+                    <p className="text-white text-lg md:text-xl font-bold">
+                      KES {(formData.items?.reduce((sum, i) => sum + (i.subtotal || 0), 0) || 0).toLocaleString()}
+                    </p>
+                  </div>
+                </>
+              )}
+
+              {/* Payment Modal */}
+              {modalType === 'payment' && (
+                <>
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Sale</label>
+                    <select
+                      value={formData.saleId || ''}
+                      onChange={(e) => {
+                        const sale = state.sales.find(s => s.id === parseInt(e.target.value));
+                        setFormData({
+                          ...formData,
+                          saleId: e.target.value,
+                          amount: sale ? sale.total - sale.paid : 0
+                        });
+                      }}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                    >
+                      <option value="">Select...</option>
+                      {state.sales.filter(s => s.paid < s.total).map(s => {
+                        const customer = state.customers.find(c => c.id === s.customerId);
+                        const balance = s.total - s.paid;
+                        return (
+                          <option key={s.id} value={s.id}>
+                            {customer?.name} - KES {balance.toLocaleString()}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+
+                  {formData.saleId && (
+                    <>
+                      <div className="bg-slate-700/30 rounded-lg p-3 md:p-4 border border-blue-400/10">
+                        <p className="text-blue-300 text-xs">Balance</p>
+                        <p className="text-white text-lg font-bold">
+                          KES {(state.sales.find(s => s.id === parseInt(formData.saleId))?.total - state.sales.find(s => s.id === parseInt(formData.saleId))?.paid || 0).toLocaleString()}
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Amount</label>
+                        <input
+                          type="number"
+                          value={formData.amount || 0}
+                          onChange={(e) => setFormData({ ...formData, amount: parseInt(e.target.value) || 0 })}
+                          className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Method</label>
+                        <select
+                          value={formData.method || 'cash'}
+                          onChange={(e) => setFormData({ ...formData, method: e.target.value })}
+                          className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                        >
+                          <option value="cash">Cash</option>
+                          <option value="bank_transfer">Bank Transfer</option>
+                          <option value="cheque">Cheque</option>
+                          <option value="mpesa">M-Pesa</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Reference</label>
+                        <input
+                          type="text"
+                          value={formData.reference || ''}
+                          onChange={(e) => setFormData({ ...formData, reference: e.target.value })}
+                          className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                          placeholder="TRF-123"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Date</label>
+                        <input
+                          type="date"
+                          value={formData.date || ''}
+                          onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                          className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                        />
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+
+              {/* Production Modal */}
+              {modalType === 'production' && (
+                <>
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Date</label>
+                    <input
+                      type="date"
+                      value={formData.date || ''}
+                      onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                    />
+                  </div>
+
+                  <div className="bg-green-900/30 border border-green-400/30 rounded-lg p-3 md:p-4">
+                    <p className="text-green-300 text-xs md:text-sm font-semibold">📦 All production measured in CARTONS</p>
+                    <p className="text-green-300 text-xs mt-1">Raw materials automatically deducted in bottles</p>
+                  </div>
+
+                  <div className="bg-slate-700/30 rounded-lg p-3 md:p-4 border border-blue-400/10">
+                    <h4 className="text-white font-semibold mb-3 text-sm">Production Items (in CARTONS)</h4>
+                    <div className="space-y-3">
+                      {['0.5L', '1.5L', '5L', '18.9L_disposable', '18.9L_refill'].map(size => {
+                        const bottlesPerCarton = BOTTLES_PER_CARTON[size];
+                        const unitLabel = (size.includes('18.9L')) ? 'units' : 'cartons';
+                        return (
+                          <div key={size} className="flex items-center gap-2 text-xs md:text-sm bg-slate-700/50 p-2 rounded">
+                            <label className="text-blue-300 w-32">{size}</label>
+                            <input
+                              type="number"
+                              min="0"
+                              value={formData.items?.[size] || 0}
+                              onChange={(e) => setFormData({
+                                ...formData,
+                                items: { ...formData.items, [size]: parseInt(e.target.value) || 0 }
+                              })}
+                              className="flex-1 bg-slate-700 border border-blue-400/30 text-white rounded px-2 py-1"
+                            />
+                            <span className="text-green-400 text-xs font-semibold w-16 text-right">{unitLabel}</span>
+                            <span className="text-slate-400 text-xs w-32">({bottlesPerCarton} bottles/carton)</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Notes</label>
+                    <textarea
+                      value={formData.notes || ''}
+                      onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      rows="2"
+                      placeholder="Notes..."
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* Expense Modal */}
+              {modalType === 'expense' && (
+                <>
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Date</label>
+                    <input
+                      type="date"
+                      value={formData.date || ''}
+                      onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Category</label>
+                    <select
+                      value={formData.category || 'Raw Materials'}
+                      onChange={(e) => {
+                        const category = e.target.value;
+                        setFormData({
+                          ...formData,
+                          category,
+                          subcategory: state.expenseCategories[category]?.[0] || ''
+                        });
+                      }}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                    >
+                      {Object.keys(state.expenseCategories).map(cat => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Sub-Category</label>
+                    <select
+                      value={formData.subcategory || ''}
+                      onChange={(e) => setFormData({ ...formData, subcategory: e.target.value })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                    >
+                      <option value="">Select...</option>
+                      {state.expenseCategories[formData.category]?.map(sub => (
+                        <option key={sub} value={sub}>{sub}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Description</label>
+                    <input
+                      type="text"
+                      value={formData.description || ''}
+                      onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      placeholder="e.g., Salary payment for staff..."
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Amount (KES)</label>
+                    <input
+                      type="number"
+                      value={formData.amount || 0}
+                      onChange={(e) => setFormData({ ...formData, amount: parseInt(e.target.value) || 0 })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      placeholder="0"
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* Customer Modal */}
+              {modalType === 'customer' && (
+                <>
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Name</label>
+                    <input
+                      type="text"
+                      value={formData.name || ''}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      placeholder="Name..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Location</label>
+                    <select
+                      value={formData.location || ''}
+                      onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                    >
+                      <option value="">Select...</option>
+                      {state.locations.map(loc => (
+                        <option key={loc} value={loc}>{loc}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Phone</label>
+                    <input
+                      type="tel"
+                      value={formData.phone || ''}
+                      onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      placeholder="0712345678"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="flex gap-2 md:gap-3 p-4 md:p-6 border-t border-blue-400/10 bg-slate-800/50 sticky bottom-0">
+              <button
+                onClick={() => setShowModal(false)}
+                className="flex-1 px-3 md:px-4 py-2 border border-blue-400/30 text-blue-300 rounded-lg hover:bg-slate-700/50 transition text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (modalType === 'sale') handleSaveSale();
+                  else if (modalType === 'payment') handleSavePayment();
+                  else if (modalType === 'production') handleSaveProduction();
+                  else if (modalType === 'purchase') handleSavePurchase();
+                  else if (modalType === 'expense') handleSaveExpense();
+                  else if (modalType === 'customer') handleSaveCustomer();
+                }}
+                className="flex-1 px-3 md:px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition flex items-center justify-center gap-2 text-sm"
+              >
+                <Save className="w-4 h-4" /> Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
