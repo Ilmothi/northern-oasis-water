@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, Calendar, ShoppingCart } from 'lucide-react';
+import { supabase } from './supabaseClient';
 
 const initialState = {
   rawMaterials: {
@@ -133,6 +134,67 @@ export default function NorthernWaterSystemApp() {
   const [reportData, setReportData] = useState(null);
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [customerSearch, setCustomerSearch] = useState('');
+
+  // Load data from Supabase on app start (STEP 7C)
+  useEffect(() => {
+    loadDataFromSupabase();
+  }, []);
+
+  const loadDataFromSupabase = async () => {
+    try {
+      // Load customers
+      const { data: customersData } = await supabase
+        .from('customers')
+        .select('*');
+      if (customersData && customersData.length > 0) {
+        setState(prev => ({ ...prev, customers: customersData }));
+      }
+
+      // Load sales
+      const { data: salesData } = await supabase
+        .from('sales')
+        .select('*');
+      if (salesData && salesData.length > 0) {
+        setState(prev => ({ ...prev, sales: salesData }));
+      }
+
+      // Load payments
+      const { data: paymentsData } = await supabase
+        .from('payments')
+        .select('*');
+      if (paymentsData && paymentsData.length > 0) {
+        setState(prev => ({ ...prev, payments: paymentsData }));
+      }
+
+      // Load expenses
+      const { data: expensesData } = await supabase
+        .from('expenses')
+        .select('*');
+      if (expensesData && expensesData.length > 0) {
+        setState(prev => ({ ...prev, expenses: expensesData }));
+      }
+
+      // Load purchases
+      const { data: purchasesData } = await supabase
+        .from('purchases')
+        .select('*');
+      if (purchasesData && purchasesData.length > 0) {
+        setState(prev => ({ ...prev, purchases: purchasesData }));
+      }
+
+      // Load production logs
+      const { data: prodData } = await supabase
+        .from('production_logs')
+        .select('*');
+      if (prodData && prodData.length > 0) {
+        setState(prev => ({ ...prev, productionLogs: prodData }));
+      }
+
+      console.log('✅ Data loaded from Supabase successfully');
+    } catch (error) {
+      console.error('❌ Error loading data from Supabase:', error);
+    }
+  };
 
   const calculateInventoryValue = () => {
     let total = 0;
@@ -622,6 +684,20 @@ export default function NorthernWaterSystemApp() {
         e.id === editingExpense.id ? { ...e, ...formData, amount: parseInt(formData.amount) } : e
       );
       setState({ ...state, expenses: updatedExpenses });
+
+      // Save to Supabase
+      const saveToSupabase = async () => {
+        try {
+          await supabase
+            .from('expenses')
+            .update({ ...formData, amount: parseInt(formData.amount) })
+            .eq('id', editingExpense.id);
+          console.log('✅ Expense updated in Supabase');
+        } catch (error) {
+          console.error('❌ Error updating expense:', error);
+        }
+      };
+      saveToSupabase();
     } else {
       const newExpense = {
         id: Math.max(...state.expenses.map(e => e.id), 0) + 1,
@@ -629,6 +705,17 @@ export default function NorthernWaterSystemApp() {
         amount: parseInt(formData.amount)
       };
       setState({ ...state, expenses: [...state.expenses, newExpense] });
+
+      // Save to Supabase
+      const saveToSupabase = async () => {
+        try {
+          await supabase.from('expenses').insert([newExpense]);
+          console.log('✅ Expense saved to Supabase');
+        } catch (error) {
+          console.error('❌ Error saving expense:', error);
+        }
+      };
+      saveToSupabase();
     }
     setShowModal(false);
   };
@@ -704,6 +791,21 @@ export default function NorthernWaterSystemApp() {
       finishedGoods: updatedFinishedGoods,
       customers: updatedCustomers
     });
+
+    // Save to Supabase (STEP 7D)
+    const saveToSupabase = async () => {
+      try {
+        await supabase.from('sales').insert([newSale]);
+        await supabase
+          .from('customers')
+          .update({ balance: updatedCustomers.find(c => c.id === parseInt(formData.customerId)).balance })
+          .eq('id', parseInt(formData.customerId));
+        console.log('✅ Sale saved to Supabase');
+      } catch (error) {
+        console.error('❌ Error saving sale to Supabase:', error);
+      }
+    };
+    saveToSupabase();
 
     setShowModal(false);
   };
@@ -887,6 +989,20 @@ export default function NorthernWaterSystemApp() {
         c.id === editingCustomer.id ? { ...c, ...formData } : c
       );
       setState({ ...state, customers: updatedCustomers });
+
+      // Save to Supabase
+      const saveToSupabase = async () => {
+        try {
+          await supabase
+            .from('customers')
+            .update(formData)
+            .eq('id', editingCustomer.id);
+          console.log('✅ Customer updated in Supabase');
+        } catch (error) {
+          console.error('❌ Error updating customer:', error);
+        }
+      };
+      saveToSupabase();
     } else {
       const newCustomer = {
         id: Math.max(...state.customers.map(c => c.id), 0) + 1,
@@ -895,6 +1011,17 @@ export default function NorthernWaterSystemApp() {
         isActive: true
       };
       setState({ ...state, customers: [...state.customers, newCustomer] });
+
+      // Save to Supabase
+      const saveToSupabase = async () => {
+        try {
+          await supabase.from('customers').insert([newCustomer]);
+          console.log('✅ Customer saved to Supabase');
+        } catch (error) {
+          console.error('❌ Error saving customer:', error);
+        }
+      };
+      saveToSupabase();
     }
     setShowModal(false);
   };
