@@ -134,6 +134,7 @@ export default function NorthernWaterSystemApp() {
   const [reportData, setReportData] = useState(null);
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [customerSearch, setCustomerSearch] = useState('');
+  const [saleCustomerSearch, setSaleCustomerSearch] = useState('');
   const [cartonCosts, setCartonCosts] = useState({});
 
   // ===== AUTH STATE =====
@@ -1078,6 +1079,7 @@ export default function NorthernWaterSystemApp() {
   // Add Sale
   const handleAddSale = () => {
     setModalType('sale');
+    setSaleCustomerSearch('');
     setFormData({ 
       customerId: '', 
       items: [{ size: '0.5L', quantity: 0, price: 100 }], 
@@ -2775,16 +2777,55 @@ export default function NorthernWaterSystemApp() {
                 <>
                   <div>
                     <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Customer</label>
-                    <select
-                      value={formData.customerId || ''}
-                      onChange={(e) => setFormData({ ...formData, customerId: e.target.value })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
-                    >
-                      <option value="">Select...</option>
-                      {state.customers.map(c => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
-                    </select>
+                    <input
+                      type="text"
+                      value={saleCustomerSearch}
+                      onChange={(e) => setSaleCustomerSearch(e.target.value)}
+                      placeholder="Search customer by name, location, or phone..."
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm placeholder-slate-400 mb-2"
+                    />
+                    <div className="max-h-48 overflow-y-auto border border-blue-400/30 rounded-lg divide-y divide-blue-400/10">
+                      {state.customers
+                        .filter(c => {
+                          const q = saleCustomerSearch.toLowerCase();
+                          return !q ||
+                            c.name.toLowerCase().includes(q) ||
+                            (c.location || '').toLowerCase().includes(q) ||
+                            (c.phone || '').includes(q);
+                        })
+                        .map(c => {
+                          const selected = parseInt(formData.customerId) === c.id;
+                          return (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => setFormData({ ...formData, customerId: c.id })}
+                              className={`w-full text-left px-3 py-2 text-sm transition flex justify-between items-center ${
+                                selected
+                                  ? 'bg-cyan-500/30 text-white'
+                                  : 'bg-slate-700/30 text-blue-200 hover:bg-slate-700/60'
+                              }`}
+                            >
+                              <span>{c.name}</span>
+                              <span className="text-xs text-slate-400">{c.location}</span>
+                            </button>
+                          );
+                        })}
+                      {state.customers.filter(c => {
+                        const q = saleCustomerSearch.toLowerCase();
+                        return !q ||
+                          c.name.toLowerCase().includes(q) ||
+                          (c.location || '').toLowerCase().includes(q) ||
+                          (c.phone || '').includes(q);
+                      }).length === 0 && (
+                        <p className="text-slate-400 text-sm text-center py-3">No matching customers</p>
+                      )}
+                    </div>
+                    {formData.customerId && (
+                      <p className="text-green-300 text-xs mt-2">
+                        ✓ Selected: {state.customers.find(c => c.id === parseInt(formData.customerId))?.name}
+                      </p>
+                    )}
                   </div>
 
                   <div>
