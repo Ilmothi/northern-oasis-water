@@ -134,11 +134,107 @@ export default function NorthernWaterSystemApp() {
   const [reportData, setReportData] = useState(null);
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [customerSearch, setCustomerSearch] = useState('');
+  const [cartonCosts, setCartonCosts] = useState({});
 
-  // Load data from Supabase on app start (STEP 7C)
+  // ===== AUTH STATE =====
+  const [session, setSession] = useState(null);
+  const [userProfile, setUserProfile] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [loggingIn, setLoggingIn] = useState(false);
+
+  // Check for existing session on app start
   useEffect(() => {
-    loadDataFromSupabase();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) {
+        fetchUserProfile(session.user.id);
+      } else {
+        setAuthLoading(false);
+      }
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) {
+        fetchUserProfile(session.user.id);
+      } else {
+        setUserProfile(null);
+        setAuthLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
+
+  const fetchUserProfile = async (userId) => {
+    try {
+      const { data } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+      if (data) {
+        setUserProfile(data);
+        // Sales users can't see dashboard, so land them on Sales tab
+        if (data.role === 'sales') {
+          setActiveTab('sales');
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching profile:', error);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogin = async () => {
+    setLoginError('');
+    setLoggingIn(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: loginEmail,
+        password: loginPassword
+      });
+      if (error) {
+        setLoginError(error.message);
+      }
+    } catch (error) {
+      setLoginError('Login failed. Please try again.');
+    } finally {
+      setLoggingIn(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setUserProfile(null);
+    setSession(null);
+    setActiveTab('dashboard');
+  };
+
+  const role = userProfile?.role || 'sales';
+
+  // Role-based record filtering: Sales sees only their own; Admin/Manager see all
+  const myUserId = session?.user?.id;
+  const visibleSales = role === 'sales'
+    ? state.sales.filter(s => s.created_by === myUserId)
+    : state.sales;
+  const visiblePayments = role === 'sales'
+    ? state.payments.filter(p => p.created_by === myUserId)
+    : state.payments;
+  const visibleExpenses = role === 'sales'
+    ? state.expenses.filter(e => e.created_by === myUserId)
+    : state.expenses;
+
+  // Load data from Supabase on app start (only when logged in)
+  useEffect(() => {
+    if (session) {
+      loadDataFromSupabase();
+    }
+  }, [session]);
 
   const loadDataFromSupabase = async () => {
     try {
@@ -190,30 +286,78 @@ export default function NorthernWaterSystemApp() {
         setState(prev => ({ ...prev, productionLogs: prodData }));
       }
 
+      // Load cost settings (finished-goods carton costs)
+      try {
+        const { data: costData } = await supabase
+          .from('cost_settings')
+          .select('costs')
+          .eq('id', 1)
+          .single();
+        if (costData && costData.costs) {
+          setCartonCosts(costData.costs);
+        }
+      } catch (e) {
+        console.log('No cost settings yet');
+      }
+
       console.log('✅ Data loaded from Supabase successfully');
     } catch (error) {
       console.error('❌ Error loading data from Supabase:', error);
     }
   };
 
+  // Find the most recent purchase unit price for a given material key
+  // (e.g. 'emptyBottles_0.5L', 'seals_short_neck', 'labels_5L', 'kraStamps').
+  // Returns 0 if the material has never been purchased.
+  const getLatestUnitPrice = (materialKey) => {
+    let latestDate = null;
+    let latestPrice = 0;
+    state.purchases.forEach(purchase => {
+      (purchase.items || []).forEach(item => {
+        if (item.material === materialKey && item.unitPrice != null) {
+          if (!latestDate || new Date(purchase.date) >= new Date(latestDate)) {
+            latestDate = purchase.date;
+            latestPrice = item.unitPrice;
+          }
+        }
+      });
+    });
+    return latestPrice;
+  };
+
+  // Raw materials valued at their latest purchase unit price (0 if never bought)
   const calculateInventoryValue = () => {
     let total = 0;
-    Object.keys(state.rawMaterials).forEach(category => {
-      if (typeof state.rawMaterials[category] === 'object') {
-        Object.values(state.rawMaterials[category]).forEach(val => {
-          if (typeof val === 'number') total += val * 5;
+    const rm = state.rawMaterials;
+
+    // Object-type categories: emptyBottles, seals, labels, overwraps
+    ['emptyBottles', 'seals', 'labels', 'overwraps'].forEach(category => {
+      if (rm[category] && typeof rm[category] === 'object') {
+        Object.entries(rm[category]).forEach(([key, qty]) => {
+          if (typeof qty === 'number') {
+            total += qty * getLatestUnitPrice(`${category}_${key}`);
+          }
         });
-      } else {
-        total += state.rawMaterials[category] * 2;
       }
     });
+
+    // Simple number categories: kraStamps, roChemical
+    if (typeof rm.kraStamps === 'number') {
+      total += rm.kraStamps * getLatestUnitPrice('kraStamps');
+    }
+    if (typeof rm.roChemical === 'number') {
+      total += rm.roChemical * getLatestUnitPrice('roChemical');
+    }
+
     return total;
   };
 
+  // Finished goods valued at admin-entered cost per carton (0 if not set)
   const calculateFinishedGoodsValue = () => {
     let total = 0;
     Object.entries(state.finishedGoods).forEach(([size, data]) => {
-      total += data.quantity * BOTTLE_PRICES[size];
+      const costPerCarton = cartonCosts[size] || 0;
+      total += data.quantity * costPerCarton;
     });
     return total;
   };
@@ -246,6 +390,21 @@ export default function NorthernWaterSystemApp() {
     setShowModal(true);
   };
 
+  // Save finished-goods carton costs to Supabase (admin only)
+  const handleSaveCartonCosts = async () => {
+    try {
+      await supabase.from('cost_settings').update({
+        costs: cartonCosts,
+        updated_at: new Date().toISOString()
+      }).eq('id', 1);
+      console.log('✅ Carton costs saved to Supabase');
+      alert('Costs saved successfully');
+    } catch (error) {
+      console.error('❌ Error saving costs:', error);
+      alert('Error saving costs. Please try again.');
+    }
+  };
+
   const handleSavePurchase = () => {
     if (!formData.supplier || !formData.date || formData.items.filter(i => i.material && i.quantity > 0).length === 0) {
       alert('Please fill supplier, date, and add items');
@@ -260,6 +419,20 @@ export default function NorthernWaterSystemApp() {
         p.id === editingPurchase.id ? { ...editingPurchase, ...formData, items: validItems, totalAmount } : p
       );
       setState({ ...state, purchases: updatedPurchases });
+
+      (async () => {
+        try {
+          await supabase.from('purchases').update({
+            date: formData.date,
+            supplier: formData.supplier,
+            items: validItems,
+            totalAmount
+          }).eq('id', editingPurchase.id);
+          console.log('✅ Purchase updated in Supabase');
+        } catch (error) {
+          console.error('❌ Error updating purchase:', error);
+        }
+      })();
     } else {
       const newPurchase = {
         id: Math.max(...state.purchases.map(p => p.id), 0) + 1,
@@ -300,6 +473,15 @@ export default function NorthernWaterSystemApp() {
         purchases: [...state.purchases, newPurchase],
         rawMaterials: updatedRawMaterials
       });
+
+      (async () => {
+        try {
+          await supabase.from('purchases').insert([newPurchase]);
+          console.log('✅ Purchase saved to Supabase');
+        } catch (error) {
+          console.error('❌ Error saving purchase:', error);
+        }
+      })();
     }
 
     setShowModal(false);
@@ -647,16 +829,27 @@ export default function NorthernWaterSystemApp() {
       </html>
     `;
 
-    // Create blob and download
-    const blob = new Blob([htmlContent], { type: 'application/pdf' });
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${reportType}_report_${new Date().toISOString().split('T')[0]}.pdf`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.URL.revokeObjectURL(url);
+    // Open the formatted report in a new window and trigger the print dialog.
+    // The user chooses "Save as PDF" (built into every browser and phone),
+    // which produces a genuine PDF that any reader can open.
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('Please allow pop-ups for this site to download the report.');
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+
+    // Give the new window a moment to render, then open the print dialog
+    printWindow.onload = () => {
+      printWindow.focus();
+      printWindow.print();
+    };
+    // Fallback in case onload doesn't fire
+    setTimeout(() => {
+      try { printWindow.focus(); printWindow.print(); } catch (e) {}
+    }, 500);
   };
 
   // Expense Management
@@ -702,7 +895,8 @@ export default function NorthernWaterSystemApp() {
       const newExpense = {
         id: Math.max(...state.expenses.map(e => e.id), 0) + 1,
         ...formData,
-        amount: parseInt(formData.amount)
+        amount: parseInt(formData.amount),
+        created_by: session?.user?.id || null
       };
       setState({ ...state, expenses: [...state.expenses, newExpense] });
 
@@ -726,7 +920,159 @@ export default function NorthernWaterSystemApp() {
         ...state,
         expenses: state.expenses.filter(e => e.id !== id)
       });
+      // Remove from Supabase
+      (async () => {
+        try {
+          await supabase.from('expenses').delete().eq('id', id);
+          console.log('✅ Expense deleted from Supabase');
+        } catch (error) {
+          console.error('❌ Error deleting expense:', error);
+        }
+      })();
     }
+  };
+
+  // Delete Sale — reverses inventory deduction and customer debt
+  const handleDeleteSale = (id) => {
+    const sale = state.sales.find(s => s.id === id);
+    if (!sale) return;
+
+    const linkedPayments = state.payments.filter(p => p.saleId === id);
+    let confirmMsg = `Delete sale ${sale.invoiceNumber}? This will return the stock to inventory`;
+    if (sale.paid > 0 || linkedPayments.length > 0) {
+      confirmMsg += ` and remove ${linkedPayments.length} linked payment(s)`;
+    }
+    confirmMsg += '. This cannot be undone.';
+    if (!confirm(confirmMsg)) return;
+
+    // 1. Return cartons to finished goods
+    const updatedFinishedGoods = { ...state.finishedGoods };
+    sale.items.forEach(item => {
+      if (updatedFinishedGoods[item.size]) {
+        updatedFinishedGoods[item.size] = {
+          ...updatedFinishedGoods[item.size],
+          quantity: updatedFinishedGoods[item.size].quantity + item.quantity
+        };
+      }
+    });
+
+    // 2. Reverse customer balance:
+    //    Original sale reduced balance by the unpaid amount (debt).
+    //    Payments later increased the balance back. Net effect to undo:
+    //    add back the debt (total - paid) that is still outstanding,
+    //    and remove the effect of the payments too.
+    //    Simplest correct approach: undo the net = -(total) + (paid)
+    //    i.e. balance should increase by (total - paid) when we remove the sale,
+    //    then removing payments would subtract (paid). Net: +total - paid - paid... 
+    //    To avoid confusion we recompute: removing the sale cancels the original
+    //    debit of (total - originalPaidAtCreation) AND we remove all linked payments
+    //    which had credited (sum of payments). Net balance change = +(total - paid).
+    const outstanding = sale.total - sale.paid;
+    const updatedCustomers = state.customers.map(c =>
+      c.id === sale.customerId
+        ? { ...c, balance: c.balance + outstanding }
+        : c
+    );
+
+    // 3. Remove the sale and any linked payments from state
+    const updatedSales = state.sales.filter(s => s.id !== id);
+    const updatedPayments = state.payments.filter(p => p.saleId !== id);
+
+    setState({
+      ...state,
+      sales: updatedSales,
+      payments: updatedPayments,
+      finishedGoods: updatedFinishedGoods,
+      customers: updatedCustomers
+    });
+
+    // 4. Reflect all of this in Supabase
+    (async () => {
+      try {
+        await supabase.from('payments').delete().eq('saleId', id);
+        await supabase.from('sales').delete().eq('id', id);
+        const cust = updatedCustomers.find(c => c.id === sale.customerId);
+        if (cust) {
+          await supabase.from('customers').update({ balance: cust.balance }).eq('id', cust.id);
+        }
+        console.log('✅ Sale deleted and reversed in Supabase');
+      } catch (error) {
+        console.error('❌ Error deleting sale:', error);
+      }
+    })();
+  };
+
+  // Delete Production Log — returns finished goods and restores raw materials
+  const handleDeleteProduction = (id) => {
+    const log = state.productionLogs.find(p => p.id === id);
+    if (!log) return;
+    if (!confirm('Delete this production log? This will reverse the raw materials used and the finished goods produced. This cannot be undone.')) return;
+
+    const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
+    const updatedFinishedGoods = JSON.parse(JSON.stringify(state.finishedGoods));
+
+    Object.entries(log.items).forEach(([size, cartonsProduced]) => {
+      if (!cartonsProduced) return;
+      const bottlesPerCarton = BOTTLES_PER_CARTON[size];
+      const bottlesProduced = cartonsProduced * bottlesPerCarton;
+
+      // Restore empty bottles
+      if (size === '0.5L') updatedRawMaterials.emptyBottles['0.5L'] += bottlesProduced;
+      else if (size === '1.5L') updatedRawMaterials.emptyBottles['1.5L'] += bottlesProduced;
+      else if (size === '5L') updatedRawMaterials.emptyBottles['5L'] += bottlesProduced;
+      else if (size === '18.9L_disposable') updatedRawMaterials.emptyBottles['18.9L_disposable'] += cartonsProduced;
+      else if (size === '18.9L_refill') updatedRawMaterials.emptyBottles['18.9L_refill'] += cartonsProduced;
+
+      // Restore seals (5L and 18.9L here; short neck handled below)
+      if (size === '5L') updatedRawMaterials.seals['5L'] += bottlesProduced;
+      else if (size === '18.9L_disposable' || size === '18.9L_refill') updatedRawMaterials.seals['18.9L'] += cartonsProduced;
+
+      // Restore labels
+      if (size === '0.5L') updatedRawMaterials.labels['0.5L'] += bottlesProduced;
+      else if (size === '1.5L') updatedRawMaterials.labels['1.5L'] += bottlesProduced;
+      else if (size === '5L') updatedRawMaterials.labels['5L'] += bottlesProduced;
+      else if (size === '18.9L_disposable' || size === '18.9L_refill') updatedRawMaterials.labels['18.9L'] += cartonsProduced;
+
+      // Restore overwraps (by size)
+      if (updatedRawMaterials.overwraps[size] !== undefined) {
+        updatedRawMaterials.overwraps[size] += cartonsProduced;
+      }
+
+      // Restore KRA stamps
+      updatedRawMaterials.kraStamps += cartonsProduced;
+
+      // Restore RO chemical
+      updatedRawMaterials.roChemical += (bottlesProduced / 1000);
+
+      // Remove the produced finished goods
+      if (updatedFinishedGoods[size]) {
+        updatedFinishedGoods[size].quantity -= cartonsProduced;
+      }
+    });
+
+    // Restore combined short neck seals (0.5L + 1.5L)
+    const totalShortNeckBottles =
+      ((log.items['0.5L'] || 0) * BOTTLES_PER_CARTON['0.5L']) +
+      ((log.items['1.5L'] || 0) * BOTTLES_PER_CARTON['1.5L']);
+    if (totalShortNeckBottles > 0) {
+      updatedRawMaterials.seals['short_neck'] += totalShortNeckBottles;
+    }
+
+    setState({
+      ...state,
+      productionLogs: state.productionLogs.filter(p => p.id !== id),
+      rawMaterials: updatedRawMaterials,
+      finishedGoods: updatedFinishedGoods
+    });
+
+    (async () => {
+      try {
+        await supabase.from('production_logs').delete().eq('id', id);
+        console.log('✅ Production log deleted and reversed in Supabase');
+      } catch (error) {
+        console.error('❌ Error deleting production log:', error);
+      }
+    })();
   };
 
   // Add Sale
@@ -766,7 +1112,8 @@ export default function NorthernWaterSystemApp() {
       total,
       paid: isPaid ? total : 0,
       status: isPaid ? 'paid' : 'pending',
-      invoiceNumber: `INV-${String(Math.max(...state.sales.map(s => parseInt(s.invoiceNumber?.split('-')[1] || 0)), 0) + 1).padStart(3, '0')}`
+      invoiceNumber: `INV-${String(Math.max(...state.sales.map(s => parseInt(s.invoiceNumber?.split('-')[1] || 0)), 0) + 1).padStart(3, '0')}`,
+      created_by: session?.user?.id || null
     };
 
     const updatedFinishedGoods = { ...state.finishedGoods };
@@ -843,7 +1190,8 @@ export default function NorthernWaterSystemApp() {
       date: formData.date,
       amount: formData.amount,
       method: formData.method,
-      reference: formData.reference
+      reference: formData.reference,
+      created_by: session?.user?.id || null
     };
 
     const newSalesState = state.sales.map(s => {
@@ -871,6 +1219,21 @@ export default function NorthernWaterSystemApp() {
       sales: newSalesState,
       customers: updatedCustomers
     });
+
+    // Save to Supabase
+    const savePaymentToSupabase = async () => {
+      try {
+        await supabase.from('payments').insert([newPayment]);
+        const updatedSale = newSalesState.find(s => s.id === parseInt(formData.saleId));
+        await supabase.from('sales').update({ paid: updatedSale.paid, status: updatedSale.status }).eq('id', updatedSale.id);
+        const updatedCust = updatedCustomers.find(c => c.id === sale.customerId);
+        await supabase.from('customers').update({ balance: updatedCust.balance }).eq('id', updatedCust.id);
+        console.log('✅ Payment saved to Supabase');
+      } catch (error) {
+        console.error('❌ Error saving payment:', error);
+      }
+    };
+    savePaymentToSupabase();
 
     setShowModal(false);
   };
@@ -1035,6 +1398,83 @@ export default function NorthernWaterSystemApp() {
     }
   };
 
+  // ===== LOADING SCREEN =====
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-cyan-400 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-cyan-300 text-lg">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ===== LOGIN SCREEN =====
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 flex items-center justify-center px-4">
+        <div className="w-full max-w-md">
+          <div className="text-center mb-8">
+            <div className="w-20 h-20 bg-gradient-to-br from-cyan-400 to-blue-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
+              <span className="text-white text-2xl font-bold">OS</span>
+            </div>
+            <h1 className="text-2xl md:text-3xl font-bold text-white">Northern Water Co.</h1>
+            <p className="text-cyan-300 text-sm mt-1">OASIS Springs Management System</p>
+          </div>
+
+          <div className="bg-slate-800/50 border border-blue-400/20 rounded-2xl p-6 md:p-8 shadow-xl backdrop-blur">
+            <h2 className="text-white font-semibold text-lg mb-6 text-center">Sign In</h2>
+
+            {loginError && (
+              <div className="bg-red-500/20 border border-red-400/40 text-red-300 rounded-lg px-4 py-3 text-sm mb-4">
+                {loginError}
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-blue-300 text-sm font-medium mb-2">Email</label>
+                <input
+                  type="email"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleLogin(); }}
+                  placeholder="you@example.com"
+                  className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-4 py-2.5 text-sm placeholder-slate-400 focus:outline-none focus:border-cyan-400"
+                />
+              </div>
+
+              <div>
+                <label className="block text-blue-300 text-sm font-medium mb-2">Password</label>
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleLogin(); }}
+                  placeholder="••••••••"
+                  className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-4 py-2.5 text-sm placeholder-slate-400 focus:outline-none focus:border-cyan-400"
+                />
+              </div>
+
+              <button
+                onClick={handleLogin}
+                disabled={loggingIn || !loginEmail || !loginPassword}
+                className="w-full bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg px-4 py-2.5 text-sm transition"
+              >
+                {loggingIn ? 'Signing in...' : 'Sign In'}
+              </button>
+            </div>
+
+            <p className="text-slate-400 text-xs text-center mt-6">
+              Contact your administrator if you need an account.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900">
       {/* Header */}
@@ -1076,10 +1516,26 @@ export default function NorthernWaterSystemApp() {
               </div>
             </div>
             
-            {/* Assets Display */}
-            <div className="text-right">
-              <p className="text-blue-400 text-xs font-semibold">Total Assets</p>
-              <p className="text-lg md:text-2xl font-bold text-cyan-300">KES {(calculateInventoryValue() + calculateFinishedGoodsValue()).toLocaleString()}</p>
+            {/* Assets Display + User Menu */}
+            <div className="flex items-center gap-3 md:gap-5">
+              {role !== 'sales' && (
+                <div className="text-right">
+                  <p className="text-blue-400 text-xs font-semibold">Total Assets</p>
+                  <p className="text-lg md:text-2xl font-bold text-cyan-300">KES {(calculateInventoryValue() + calculateFinishedGoodsValue()).toLocaleString()}</p>
+                </div>
+              )}
+              <div className="flex items-center gap-2 md:gap-3 border-l border-blue-400/20 pl-3 md:pl-5">
+                <div className="text-right hidden sm:block">
+                  <p className="text-white text-xs md:text-sm font-semibold truncate max-w-[140px]">{userProfile?.email}</p>
+                  <p className="text-cyan-400 text-xs capitalize">{role}</p>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  className="bg-slate-700/60 hover:bg-red-500/30 border border-blue-400/20 hover:border-red-400/40 text-blue-300 hover:text-red-300 rounded-lg px-3 py-1.5 text-xs md:text-sm transition whitespace-nowrap"
+                >
+                  Logout
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1090,16 +1546,17 @@ export default function NorthernWaterSystemApp() {
         <div className="w-full">
           <div className="flex gap-2 md:gap-8 px-4 md:px-6 min-w-max md:min-w-0">
             {[
-              { id: 'dashboard', label: 'Home', icon: BarChart3 },
-              { id: 'reports', label: 'Reports', icon: TrendingUp },
-              { id: 'inventory', label: 'Stock', icon: Package },
-              { id: 'purchases', label: 'Buy', icon: ShoppingCart },
-              { id: 'production', label: 'Prod', icon: ClipboardList },
-              { id: 'sales', label: 'Sales', icon: DollarSign },
-              { id: 'payments', label: 'Pay', icon: Users },
-              { id: 'expenses', label: 'Cost', icon: DollarSign },
-              { id: 'customers', label: 'Clients', icon: Users },
-            ].map(tab => {
+              { id: 'dashboard', label: 'Home', icon: BarChart3, roles: ['admin', 'manager'] },
+              { id: 'sales', label: 'Sales', icon: DollarSign, roles: ['admin', 'manager', 'sales'] },
+              { id: 'inventory', label: 'Stocks', icon: Package, roles: ['admin', 'manager', 'sales'] },
+              { id: 'purchases', label: 'Purchases', icon: ShoppingCart, roles: ['admin', 'manager'] },
+              { id: 'production', label: 'Production', icon: ClipboardList, roles: ['admin', 'manager', 'sales'] },
+              { id: 'payments', label: 'Payments', icon: Users, roles: ['admin', 'manager', 'sales'] },
+              { id: 'expenses', label: 'Expenses', icon: DollarSign, roles: ['admin', 'manager', 'sales'] },
+              { id: 'customers', label: 'Customers', icon: Users, roles: ['admin', 'manager', 'sales'] },
+              { id: 'costsettings', label: 'Costs', icon: DollarSign, roles: ['admin'] },
+              { id: 'reports', label: 'Reports', icon: TrendingUp, roles: ['admin', 'manager'] },
+            ].filter(tab => tab.roles.includes(role)).map(tab => {
               const Icon = tab.icon;
               return (
                 <button
@@ -1457,7 +1914,7 @@ export default function NorthernWaterSystemApp() {
                     onClick={downloadReportAsPDF}
                     className="flex items-center gap-2 bg-cyan-500 hover:bg-cyan-600 text-white px-3 md:px-4 py-2 rounded-lg transition text-sm w-full md:w-auto justify-center"
                   >
-                    <Download className="w-4 h-4" /> Download
+                    <Download className="w-4 h-4" /> Save as PDF
                   </button>
                 </div>
 
@@ -1653,6 +2110,16 @@ export default function NorthernWaterSystemApp() {
                         ))}
                       </div>
                       {log.notes && <p className="text-blue-300 text-xs italic">{log.notes}</p>}
+                      {(role === 'admin' || role === 'manager') && (
+                        <div className="flex justify-end pt-2 mt-2 border-t border-blue-400/10">
+                          <button
+                            onClick={() => handleDeleteProduction(log.id)}
+                            className="flex items-center gap-1 text-xs text-red-300 hover:text-red-200 hover:bg-red-500/20 px-2 py-1 rounded transition"
+                          >
+                            <Trash2 className="w-3 h-3" /> Delete
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ))
                 )}
@@ -1677,10 +2144,10 @@ export default function NorthernWaterSystemApp() {
             <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
               <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">History</h3>
               <div className="space-y-2 md:space-y-3 max-h-96 overflow-y-auto">
-                {state.sales.length === 0 ? (
+                {visibleSales.length === 0 ? (
                   <p className="text-blue-300 text-center py-4 md:py-8 text-sm">No sales</p>
                 ) : (
-                  state.sales.slice().reverse().map(sale => {
+                  visibleSales.slice().reverse().map(sale => {
                     const customer = state.customers.find(c => c.id === sale.customerId);
                     return (
                       <div key={sale.id} className="p-3 md:p-4 bg-slate-700/30 rounded-lg border border-blue-400/10">
@@ -1707,6 +2174,16 @@ export default function NorthernWaterSystemApp() {
                             </div>
                           ))}
                         </div>
+                        {(role === 'admin' || role === 'manager') && (
+                          <div className="flex justify-end pt-2 mt-2 border-t border-blue-400/10">
+                            <button
+                              onClick={() => handleDeleteSale(sale.id)}
+                              className="flex items-center gap-1 text-xs text-red-300 hover:text-red-200 hover:bg-red-500/20 px-2 py-1 rounded transition"
+                            >
+                              <Trash2 className="w-3 h-3" /> Delete
+                            </button>
+                          </div>
+                        )}
                       </div>
                     );
                   })
@@ -1873,10 +2350,10 @@ export default function NorthernWaterSystemApp() {
               <div className="bg-slate-800/30 border border-blue-400/20 rounded-b-lg rounded-tr-lg p-4 md:p-6">
                 <h3 className="text-white font-semibold mb-4 text-base">Payment History</h3>
                 <div className="space-y-2 md:space-y-3 max-h-96 overflow-y-auto">
-                  {state.payments.length === 0 ? (
+                  {visiblePayments.length === 0 ? (
                     <p className="text-blue-300 text-center py-8 text-sm">No payments recorded</p>
                   ) : (
-                    state.payments.slice().reverse().map(payment => {
+                    visiblePayments.slice().reverse().map(payment => {
                       const customer = state.customers.find(c => c.id === payment.customerId);
                       const sale = state.sales.find(s => s.id === payment.saleId);
                       return (
@@ -1961,6 +2438,8 @@ export default function NorthernWaterSystemApp() {
               </button>
             </div>
 
+            {role !== 'sales' && (
+            <>
             {/* Summary by Category */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-6">
               {Object.entries(getTotalExpensesByCategory()).map(([category, amount]) => (
@@ -2020,10 +2499,16 @@ export default function NorthernWaterSystemApp() {
                 )}
               </div>
             </div>
+            </>
+            )}
+
+            {role === 'sales' && (
+              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+                <p className="text-blue-300 text-center py-4 text-sm">Use the "New Expense" button above to record an expense.</p>
+              </div>
+            )}
           </div>
         )}
-
-        {/* Pricing Management Tab */}
         {/* Customers Tab */}
         {activeTab === 'customers' && (
           <div className="space-y-4 md:space-y-6">
@@ -2098,6 +2583,61 @@ export default function NorthernWaterSystemApp() {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* Cost Settings Tab (admin only) */}
+        {activeTab === 'costsettings' && role === 'admin' && (
+          <div className="space-y-4 md:space-y-6">
+            <div>
+              <h2 className="text-xl md:text-2xl font-bold text-white">Cost Settings</h2>
+              <p className="text-blue-300 text-sm mt-1">Enter the cost per carton for each product size. Used to value finished goods stock. Raw material values come automatically from your latest purchase prices.</p>
+            </div>
+
+            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-white font-semibold mb-4 text-sm md:text-base">Finished Goods — Cost per Carton (KES)</h3>
+              <div className="space-y-3">
+                {['0.5L', '1.5L', '5L', '18.9L_disposable', '18.9L_refill'].map(size => (
+                  <div key={size} className="flex items-center justify-between gap-3">
+                    <label className="text-blue-300 text-sm">
+                      {size === '18.9L_disposable' ? '18.9L Disposable' : size === '18.9L_refill' ? '18.9L Refill' : size}
+                    </label>
+                    <input
+                      type="number"
+                      value={cartonCosts[size] || ''}
+                      onChange={(e) => setCartonCosts({ ...cartonCosts, [size]: parseFloat(e.target.value) || 0 })}
+                      placeholder="0"
+                      className="w-32 bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 py-2 text-sm text-right"
+                    />
+                  </div>
+                ))}
+              </div>
+              <button
+                onClick={handleSaveCartonCosts}
+                className="mt-6 w-full md:w-auto bg-cyan-500 hover:bg-cyan-600 text-white px-6 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+              >
+                <Save className="w-4 h-4" /> Save Costs
+              </button>
+            </div>
+
+            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-white font-semibold mb-3 text-sm md:text-base">Current Asset Valuation</h3>
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between p-2 bg-slate-700/30 rounded">
+                  <span className="text-blue-300">Raw Materials (at latest purchase prices)</span>
+                  <span className="text-white font-semibold">KES {calculateInventoryValue().toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between p-2 bg-slate-700/30 rounded">
+                  <span className="text-blue-300">Finished Goods (at carton cost)</span>
+                  <span className="text-white font-semibold">KES {calculateFinishedGoodsValue().toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between p-2 bg-slate-700/50 rounded border border-green-400/30">
+                  <span className="text-green-300 font-semibold">Total Assets</span>
+                  <span className="text-green-400 font-bold">KES {(calculateInventoryValue() + calculateFinishedGoodsValue()).toLocaleString()}</span>
+                </div>
+              </div>
+              <p className="text-slate-400 text-xs mt-3">Note: Materials with no purchase recorded yet are valued at 0 until you log a purchase for them.</p>
             </div>
           </div>
         )}
