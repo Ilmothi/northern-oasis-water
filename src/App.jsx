@@ -135,6 +135,7 @@ export default function NorthernWaterSystemApp() {
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [customerSearch, setCustomerSearch] = useState('');
   const [saleCustomerSearch, setSaleCustomerSearch] = useState('');
+  const [breakdownCard, setBreakdownCard] = useState(null);
   const [cartonCosts, setCartonCosts] = useState({});
 
   // ===== AUTH STATE =====
@@ -1587,15 +1588,20 @@ export default function NorthernWaterSystemApp() {
           <div className="space-y-4 md:space-y-6">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
               {[
-                { label: 'Customers', value: state.customers.length, color: 'from-blue-500 to-blue-600' },
-                { label: 'Debt', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0).toLocaleString()}`, color: 'from-red-500 to-red-600' },
-                { label: 'Sales', value: `KES ${state.sales.reduce((sum, s) => sum + s.total, 0).toLocaleString()}`, color: 'from-green-500 to-green-600' },
-                { label: 'Costs', value: `KES ${(getTotalExpenses() + getTotalPurchases()).toLocaleString()}`, color: 'from-purple-500 to-purple-600' },
+                { id: 'customers', label: 'Customers', value: state.customers.length, color: 'from-blue-500 to-blue-600' },
+                { id: 'debt', label: 'Debt', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0).toLocaleString()}`, color: 'from-red-500 to-red-600' },
+                { id: 'sales', label: 'Sales', value: `KES ${state.sales.reduce((sum, s) => sum + s.total, 0).toLocaleString()}`, color: 'from-green-500 to-green-600' },
+                { id: 'costs', label: 'Costs', value: `KES ${(getTotalExpenses() + getTotalPurchases()).toLocaleString()}`, color: 'from-purple-500 to-purple-600' },
               ].map((card, i) => (
-                <div key={i} className={`bg-gradient-to-br ${card.color} rounded-lg md:rounded-xl p-3 md:p-6 text-white shadow-lg`}>
+                <button
+                  key={i}
+                  onClick={() => setBreakdownCard(card.id)}
+                  className={`bg-gradient-to-br ${card.color} rounded-lg md:rounded-xl p-3 md:p-6 text-white shadow-lg text-left hover:brightness-110 transition cursor-pointer`}
+                >
                   <p className="text-xs md:text-sm opacity-90 mb-1 md:mb-2">{card.label}</p>
                   <p className="text-sm md:text-3xl font-bold break-words">{card.value}</p>
-                </div>
+                  <p className="text-xs opacity-70 mt-1 md:mt-2">Tap for details →</p>
+                </button>
               ))}
             </div>
 
@@ -2640,6 +2646,114 @@ export default function NorthernWaterSystemApp() {
                 </div>
               </div>
               <p className="text-slate-400 text-xs mt-3">Note: Materials with no purchase recorded yet are valued at 0 until you log a purchase for them.</p>
+            </div>
+          </div>
+        )}
+
+        {/* Dashboard Card Breakdown Modal */}
+        {breakdownCard && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setBreakdownCard(null)}>
+            <div className="bg-slate-800 border border-blue-400/30 rounded-xl p-5 md:p-6 max-w-lg w-full max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-white font-bold text-lg capitalize">
+                  {breakdownCard === 'customers' && 'All Customers'}
+                  {breakdownCard === 'debt' && 'Outstanding Debts'}
+                  {breakdownCard === 'sales' && 'All Sales'}
+                  {breakdownCard === 'costs' && 'Cost Breakdown'}
+                </h3>
+                <button onClick={() => setBreakdownCard(null)} className="text-blue-300 hover:text-white">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Customers breakdown */}
+              {breakdownCard === 'customers' && (
+                <div className="space-y-2">
+                  {state.customers.length === 0 ? (
+                    <p className="text-blue-300 text-center py-4 text-sm">No customers</p>
+                  ) : state.customers.map(c => (
+                    <div key={c.id} className="flex justify-between items-center p-2 bg-slate-700/30 rounded text-sm">
+                      <div>
+                        <p className="text-white">{c.name}</p>
+                        <p className="text-slate-400 text-xs">{c.location} · {c.phone}</p>
+                      </div>
+                      <span className={c.balance < 0 ? 'text-red-300' : 'text-green-300'}>
+                        KES {c.balance.toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Debt breakdown */}
+              {breakdownCard === 'debt' && (
+                <div className="space-y-2">
+                  {state.customers.filter(c => c.balance < 0).length === 0 ? (
+                    <p className="text-blue-300 text-center py-4 text-sm">No outstanding debts</p>
+                  ) : state.customers.filter(c => c.balance < 0).map(c => (
+                    <div key={c.id} className="flex justify-between items-center p-2 bg-slate-700/30 rounded text-sm">
+                      <div>
+                        <p className="text-white">{c.name}</p>
+                        <p className="text-slate-400 text-xs">{c.location} · {c.phone}</p>
+                      </div>
+                      <span className="text-red-300 font-semibold">KES {Math.abs(c.balance).toLocaleString()}</span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between p-2 bg-red-500/20 rounded border border-red-400/30 mt-2 text-sm">
+                    <span className="text-red-300 font-semibold">Total Debt</span>
+                    <span className="text-red-300 font-bold">KES {state.customers.reduce((s, c) => s + Math.max(0, -c.balance), 0).toLocaleString()}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Sales breakdown */}
+              {breakdownCard === 'sales' && (
+                <div className="space-y-2">
+                  {state.sales.length === 0 ? (
+                    <p className="text-blue-300 text-center py-4 text-sm">No sales</p>
+                  ) : state.sales.slice().reverse().map(s => {
+                    const cust = state.customers.find(c => c.id === s.customerId);
+                    return (
+                      <div key={s.id} className="flex justify-between items-center p-2 bg-slate-700/30 rounded text-sm">
+                        <div>
+                          <p className="text-white">{s.invoiceNumber} · {cust?.name || 'Unknown'}</p>
+                          <p className="text-slate-400 text-xs">{s.date} · {s.status}</p>
+                        </div>
+                        <span className="text-green-300">KES {s.total.toLocaleString()}</span>
+                      </div>
+                    );
+                  })}
+                  <div className="flex justify-between p-2 bg-green-500/20 rounded border border-green-400/30 mt-2 text-sm">
+                    <span className="text-green-300 font-semibold">Total Sales</span>
+                    <span className="text-green-300 font-bold">KES {state.sales.reduce((sum, s) => sum + s.total, 0).toLocaleString()}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Costs breakdown */}
+              {breakdownCard === 'costs' && (
+                <div className="space-y-2">
+                  <div className="flex justify-between p-2 bg-slate-700/30 rounded text-sm">
+                    <span className="text-blue-300">Total Expenses</span>
+                    <span className="text-white font-semibold">KES {getTotalExpenses().toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between p-2 bg-slate-700/30 rounded text-sm">
+                    <span className="text-blue-300">Total Purchases</span>
+                    <span className="text-white font-semibold">KES {getTotalPurchases().toLocaleString()}</span>
+                  </div>
+                  <p className="text-blue-300 text-xs font-semibold mt-3 mb-1">Expenses by Category</p>
+                  {Object.entries(getTotalExpensesByCategory()).map(([cat, amt]) => (
+                    <div key={cat} className="flex justify-between p-2 bg-slate-700/20 rounded text-xs">
+                      <span className="text-slate-300">{cat}</span>
+                      <span className="text-white">KES {amt.toLocaleString()}</span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between p-2 bg-purple-500/20 rounded border border-purple-400/30 mt-2 text-sm">
+                    <span className="text-purple-300 font-semibold">Total Costs</span>
+                    <span className="text-purple-300 font-bold">KES {(getTotalExpenses() + getTotalPurchases()).toLocaleString()}</span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
