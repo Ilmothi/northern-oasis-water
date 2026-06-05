@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, Calendar, ShoppingCart } from 'lucide-react';
 import { supabase } from './supabaseClient';
 
@@ -26,6 +26,9 @@ const initialState = {
       '1.5L': 10000,
       '5L': 3000,
       '18.9L': 1500
+    },
+    caps: {
+      '18.9L': 2000
     },
     kraStamps: 50000,
     roChemical: 1000
@@ -99,6 +102,7 @@ const initialState = {
     'Labels - 1.5L': { material: 'labels_1.5L', category: 'Labels' },
     'Labels - 5L': { material: 'labels_5L', category: 'Labels' },
     'Labels - 18.9L': { material: 'labels_18.9L', category: 'Labels' },
+    'Caps - 18.9L': { material: 'caps_18.9L', category: 'Caps' },
     'KRA Stamps': { material: 'kraStamps', category: 'KRA Stamps' },
     'RO Machine Chemicals': { material: 'roChemical', category: 'RO Machine Chemicals' }
   }
@@ -109,7 +113,22 @@ const BOTTLE_PRICES = {
   '1.5L': 150,
   '5L': 350,
   '18.9L_disposable': 650,
-  '18.9L_refill': 600
+  '18.9L_refill': 600,
+  'refill_10L': 50,
+  'refill_15L': 75,
+  'refill_20L': 100
+};
+
+// Friendly labels for sale item sizes
+const SIZE_LABELS = {
+  '0.5L': '0.5L',
+  '1.5L': '1.5L',
+  '5L': '5L',
+  '18.9L_disposable': '18.9L Disposable',
+  '18.9L_refill': '18.9L Refill (bottle)',
+  'refill_10L': 'Water Refill 10L',
+  'refill_15L': 'Water Refill 15L',
+  'refill_20L': 'Water Refill 20L'
 };
 
 const BOTTLES_PER_CARTON = {
@@ -231,10 +250,17 @@ export default function NorthernWaterSystemApp() {
     ? state.expenses.filter(e => e.created_by === myUserId)
     : state.expenses;
 
-  // Load data from Supabase on app start (only when logged in)
+  // Load data from Supabase on app start — ONCE per login.
+  // Using a guard so silent session/token refreshes don't reload data
+  // and overwrite values the user is actively editing (e.g. carton costs).
+  const hasLoadedData = useRef(false);
   useEffect(() => {
-    if (session) {
+    if (session && !hasLoadedData.current) {
+      hasLoadedData.current = true;
       loadDataFromSupabase();
+    }
+    if (!session) {
+      hasLoadedData.current = false;
     }
   }, [session]);
 
@@ -333,7 +359,7 @@ export default function NorthernWaterSystemApp() {
     const rm = state.rawMaterials;
 
     // Object-type categories: emptyBottles, seals, labels, overwraps
-    ['emptyBottles', 'seals', 'labels', 'overwraps'].forEach(category => {
+    ['emptyBottles', 'seals', 'labels', 'overwraps', 'caps'].forEach(category => {
       if (rm[category] && typeof rm[category] === 'object') {
         Object.entries(rm[category]).forEach(([key, qty]) => {
           if (typeof qty === 'number') {
@@ -465,6 +491,11 @@ export default function NorthernWaterSystemApp() {
           if (updatedRawMaterials.labels[size]) {
             updatedRawMaterials.labels[size] += item.quantity;
           }
+        } else if (category === 'caps') {
+          const size = item.material.replace('caps_', '');
+          if (updatedRawMaterials.caps && updatedRawMaterials.caps[size] != null) {
+            updatedRawMaterials.caps[size] += item.quantity;
+          }
         } else if (updatedRawMaterials[category]) {
           updatedRawMaterials[category] += item.quantity;
         }
@@ -500,11 +531,25 @@ export default function NorthernWaterSystemApp() {
 
   // Report Generators
   const generateAgingDebtorsReport = () => {
-    const debtors = state.customers.filter(c => c.balance < 0).map(c => ({
-      ...c,
-      debt: Math.abs(c.balance),
-      daysOverdue: Math.floor(Math.random() * 90) + 1
-    })).sort((a, b) => b.debt - a.debt);
+    const today = new Date();
+    const debtors = state.customers.filter(c => c.balance < 0).map(c => {
+      // Find this customer's oldest sale that isn't fully paid
+      const unpaidSales = state.sales
+        .filter(s => s.customerId === c.id && (s.paid || 0) < s.total)
+        .sort((a, b) => new Date(a.date) - new Date(b.date));
+
+      let daysOverdue = 0;
+      if (unpaidSales.length > 0) {
+        const oldest = new Date(unpaidSales[0].date);
+        daysOverdue = Math.max(0, Math.floor((today - oldest) / (1000 * 60 * 60 * 24)));
+      }
+
+      return {
+        ...c,
+        debt: Math.abs(c.balance),
+        daysOverdue
+      };
+    }).sort((a, b) => b.debt - a.debt);
 
     return {
       title: 'Aging Debtors Report',
@@ -553,39 +598,140 @@ export default function NorthernWaterSystemApp() {
     };
   };
 
+  const generateCashCollectedReport = () => {
+    const inPeriod = (d) => {
+      if (!dateRange.start || !dateRange.end) return true;
+      return d >= dateRange.start && d <= dateRange.end;
+    };
+
+    // Cash sales: sales paid on the spot (paid > 0 at sale), counted on sale date
+    let cashSalesTotal = 0;
+    const cashSalesList = [];
+    state.sales.forEach(s => {
+      if (inPeriod(s.date) && (s.paid || 0) > 0) {
+        // Only the portion paid AT point of sale. Later debt payments are counted
+        // separately via payment records. A sale created "paid" has status 'paid'.
+        // To avoid double-counting, count the sale's paid amount only if there are
+        // no separate payment records linked to it.
+        const linkedPayments = state.payments.filter(p => p.saleId === s.id);
+        const paidViaPayments = linkedPayments.reduce((sum, p) => sum + p.amount, 0);
+        const paidAtSale = (s.paid || 0) - paidViaPayments;
+        if (paidAtSale > 0) {
+          cashSalesTotal += paidAtSale;
+          const customer = state.customers.find(c => c.id === s.customerId);
+          cashSalesList.push({
+            date: s.date,
+            invoice: s.invoiceNumber,
+            customer: customer?.name || 'Unknown',
+            amount: paidAtSale
+          });
+        }
+      }
+    });
+
+    // Debt payments: payment records within the period
+    let debtPaymentsTotal = 0;
+    const debtPaymentsList = [];
+    state.payments.forEach(p => {
+      if (inPeriod(p.date)) {
+        debtPaymentsTotal += p.amount;
+        const customer = state.customers.find(c => c.id === p.customerId);
+        debtPaymentsList.push({
+          date: p.date,
+          customer: customer?.name || 'Unknown',
+          method: p.method || '',
+          reference: p.reference || '',
+          amount: p.amount
+        });
+      }
+    });
+
+    return {
+      title: 'Cash Collected Report',
+      date: new Date().toLocaleDateString(),
+      period: dateRange.start ? `${dateRange.start} to ${dateRange.end}` : 'All Time',
+      cashSalesTotal,
+      debtPaymentsTotal,
+      totalCollected: cashSalesTotal + debtPaymentsTotal,
+      cashSalesList: cashSalesList.sort((a, b) => new Date(b.date) - new Date(a.date)),
+      debtPaymentsList: debtPaymentsList.sort((a, b) => new Date(b.date) - new Date(a.date))
+    };
+  };
+
   const generateExpenseReport = () => {
-    const totalExpenses = getTotalExpenses();
-    const byCategory = getTotalExpensesByCategory();
+    let filtered = state.expenses;
+    if (dateRange.start && dateRange.end) {
+      filtered = state.expenses.filter(e => e.date >= dateRange.start && e.date <= dateRange.end);
+    }
+
+    const totalExpenses = filtered.reduce((sum, e) => sum + e.amount, 0);
+    const byCategory = {};
+    filtered.forEach(e => {
+      byCategory[e.category] = (byCategory[e.category] || 0) + e.amount;
+    });
 
     return {
       title: 'Expense Report',
       date: new Date().toLocaleDateString(),
+      period: dateRange.start ? `${dateRange.start} to ${dateRange.end}` : 'All Time',
       totalExpenses,
       byCategory,
-      expenses: state.expenses.sort((a, b) => new Date(b.date) - new Date(a.date))
+      expenses: filtered.slice().sort((a, b) => new Date(b.date) - new Date(a.date))
     };
   };
 
   const generateProfitLossReport = () => {
-    const totalRevenue = state.sales.reduce((sum, s) => sum + s.total, 0);
-    const totalExpenses = getTotalExpenses() + getTotalPurchases() + calculateInventoryValue();
-    const profit = totalRevenue - totalExpenses;
+    const inPeriod = (d) => {
+      if (!dateRange.start || !dateRange.end) return true;
+      return d >= dateRange.start && d <= dateRange.end;
+    };
+
+    const periodSales = state.sales.filter(s => inPeriod(s.date));
+    const periodExpenses = state.expenses.filter(e => inPeriod(e.date));
+
+    // Sales revenue in period
+    const totalRevenue = periodSales.reduce((sum, s) => sum + s.total, 0);
+
+    // COGS = cartons sold × cost per carton (carton cost already includes
+    // casual labour and overtime). Counts only what was actually sold.
+    let cogs = 0;
+    periodSales.forEach(sale => {
+      sale.items.forEach(item => {
+        const costPerCarton = cartonCosts[item.size] || 0;
+        cogs += item.quantity * costPerCarton;
+      });
+    });
+
+    const grossProfit = totalRevenue - cogs;
+
+    // Operating expenses = Salaries (from Labour) + all Operations.
+    // Exclude Casual Pay, Overtime (in COGS), and Raw Materials (in COGS via carton cost).
+    let operatingExpenses = 0;
+    const operatingBreakdown = {};
+    periodExpenses.forEach(e => {
+      const isSalary = e.category === 'Labour' && e.subcategory === 'Salaries';
+      const isOperations = e.category === 'Operations';
+      if (isSalary || isOperations) {
+        operatingExpenses += e.amount;
+        const key = isSalary ? 'Salaries' : (e.subcategory || 'Operations');
+        operatingBreakdown[key] = (operatingBreakdown[key] || 0) + e.amount;
+      }
+    });
+
+    const netProfit = grossProfit - operatingExpenses;
 
     return {
       title: 'Profit & Loss Statement',
       date: new Date().toLocaleDateString(),
-      revenue: {
-        sales: totalRevenue,
-        label: 'Total Sales Revenue'
-      },
-      expenses: {
-        recorded: getTotalExpenses(),
-        purchases: getTotalPurchases(),
-        inventory: calculateInventoryValue(),
-        total: totalExpenses
-      },
-      profit,
-      profitMargin: totalRevenue > 0 ? ((profit / totalRevenue) * 100).toFixed(2) : 0
+      period: dateRange.start ? `${dateRange.start} to ${dateRange.end}` : 'All Time',
+      revenue: totalRevenue,
+      cogs,
+      grossProfit,
+      grossMargin: totalRevenue > 0 ? ((grossProfit / totalRevenue) * 100).toFixed(1) : 0,
+      operatingExpenses,
+      operatingBreakdown,
+      netProfit,
+      netMargin: totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) : 0
     };
   };
 
@@ -595,6 +741,8 @@ export default function NorthernWaterSystemApp() {
       data = generateAgingDebtorsReport();
     } else if (type === 'sales') {
       data = generateSalesReport();
+    } else if (type === 'cash') {
+      data = generateCashCollectedReport();
     } else if (type === 'expense') {
       data = generateExpenseReport();
     } else if (type === 'profitloss') {
@@ -758,10 +906,50 @@ export default function NorthernWaterSystemApp() {
       Object.entries(reportData.salesBySize).forEach(([size, qty]) => {
         htmlContent += `
               <tr>
-                <td>${size}</td>
+                <td>${SIZE_LABELS[size] || size}</td>
                 <td>${qty} cartons</td>
               </tr>
         `;
+      });
+      htmlContent += `
+            </tbody>
+          </table>
+        </div>
+      `;
+    } else if (reportType === 'cash') {
+      htmlContent += `
+        <div class="section">
+          <h2>Cash Collected Report</h2>
+          <div class="summary">
+            Period: ${reportData.period}<br/>
+            Cash Sales Collected: KES ${reportData.cashSalesTotal.toLocaleString()}<br/>
+            Debt Payments Collected: KES ${reportData.debtPaymentsTotal.toLocaleString()}<br/>
+            <strong>Total Collected: KES ${reportData.totalCollected.toLocaleString()}</strong>
+          </div>
+          <h2>Cash Sales (paid at point of sale)</h2>
+          <table>
+            <thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Amount</th></tr></thead>
+            <tbody>
+      `;
+      if (reportData.cashSalesList.length === 0) {
+        htmlContent += `<tr><td colspan="4">None in this period</td></tr>`;
+      }
+      reportData.cashSalesList.forEach(c => {
+        htmlContent += `<tr><td>${c.date}</td><td>${c.invoice}</td><td>${c.customer}</td><td>KES ${c.amount.toLocaleString()}</td></tr>`;
+      });
+      htmlContent += `
+            </tbody>
+          </table>
+          <h2>Debt Payments Received</h2>
+          <table>
+            <thead><tr><th>Date</th><th>Customer</th><th>Method</th><th>Amount</th></tr></thead>
+            <tbody>
+      `;
+      if (reportData.debtPaymentsList.length === 0) {
+        htmlContent += `<tr><td colspan="4">None in this period</td></tr>`;
+      }
+      reportData.debtPaymentsList.forEach(p => {
+        htmlContent += `<tr><td>${p.date}</td><td>${p.customer}</td><td>${p.method}</td><td>KES ${p.amount.toLocaleString()}</td></tr>`;
       });
       htmlContent += `
             </tbody>
@@ -798,26 +986,37 @@ export default function NorthernWaterSystemApp() {
         </div>
       `;
     } else if (reportType === 'profitloss') {
+      let opRows = '';
+      Object.entries(reportData.operatingBreakdown).forEach(([k, v]) => {
+        opRows += `<tr><td style="padding-left:20px;">${k}</td><td>KES ${v.toLocaleString()}</td></tr>`;
+      });
       htmlContent += `
         <div class="section">
+          <div class="summary">Period: ${reportData.period}</div>
           <table>
             <tr>
-              <td><strong>Revenue from Sales</strong></td>
-              <td><strong>KES ${reportData.revenue.sales.toLocaleString()}</strong></td>
+              <td><strong>Sales Revenue</strong></td>
+              <td><strong>KES ${reportData.revenue.toLocaleString()}</strong></td>
             </tr>
             <tr>
-              <td><strong>Total Expenses</strong></td>
-              <td><strong>KES ${reportData.expenses.total.toLocaleString()}</strong></td>
+              <td>Less: Cost of Goods Sold</td>
+              <td>− KES ${reportData.cogs.toLocaleString()}</td>
             </tr>
+            <tr style="background: #ecfdf5;">
+              <td><strong>Gross Profit</strong></td>
+              <td><strong>KES ${reportData.grossProfit.toLocaleString()} (${reportData.grossMargin}%)</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Operating Expenses</strong></td>
+              <td>− KES ${reportData.operatingExpenses.toLocaleString()}</td>
+            </tr>
+            ${opRows}
             <tr style="background: #10b981; color: white;">
               <td><strong>Net Profit/Loss</strong></td>
-              <td><strong>KES ${reportData.profit.toLocaleString()}</strong></td>
-            </tr>
-            <tr>
-              <td><strong>Profit Margin</strong></td>
-              <td><strong>${reportData.profitMargin}%</strong></td>
+              <td><strong>KES ${reportData.netProfit.toLocaleString()} (${reportData.netMargin}%)</strong></td>
             </tr>
           </table>
+          <p style="font-size:11px;color:#666;margin-top:10px;">COGS is based on cartons sold × cost per carton (includes casual labour). Raw material purchases and casual/overtime pay are not counted again as operating expenses.</p>
         </div>
       `;
     }
@@ -1034,6 +1233,13 @@ export default function NorthernWaterSystemApp() {
       else if (size === '1.5L') updatedRawMaterials.labels['1.5L'] += bottlesProduced;
       else if (size === '5L') updatedRawMaterials.labels['5L'] += bottlesProduced;
       else if (size === '18.9L_disposable' || size === '18.9L_refill') updatedRawMaterials.labels['18.9L'] += cartonsProduced;
+
+      // Restore caps (18.9L only)
+      if (size === '18.9L_disposable' || size === '18.9L_refill') {
+        if (updatedRawMaterials.caps && updatedRawMaterials.caps['18.9L'] != null) {
+          updatedRawMaterials.caps['18.9L'] += cartonsProduced;
+        }
+      }
 
       // Restore overwraps (by size)
       if (updatedRawMaterials.overwraps[size] !== undefined) {
@@ -1299,6 +1505,13 @@ export default function NorthernWaterSystemApp() {
       else if (size === '1.5L') updatedRawMaterials.labels['1.5L'] -= bottlesNeeded;
       else if (size === '5L') updatedRawMaterials.labels['5L'] -= bottlesNeeded;
       else if (size === '18.9L_disposable' || size === '18.9L_refill') updatedRawMaterials.labels['18.9L'] -= cartonsProduced;
+
+      // ===== DEDUCT CAPS (18.9L only — both disposable and refill) =====
+      if (size === '18.9L_disposable' || size === '18.9L_refill') {
+        if (updatedRawMaterials.caps && updatedRawMaterials.caps['18.9L'] != null) {
+          updatedRawMaterials.caps['18.9L'] -= cartonsProduced;
+        }
+      }
 
       // ===== DEDUCT OVERWRAPS (per carton, BY SIZE) =====
       if (updatedRawMaterials.overwraps[size]) {
@@ -1810,6 +2023,18 @@ export default function NorthernWaterSystemApp() {
               </div>
 
               <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+                <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm">Caps</h3>
+                <div className="space-y-2 md:space-y-3">
+                  {Object.entries(state.rawMaterials.caps || {}).map(([size, qty]) => (
+                    <div key={size} className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
+                      <p className="text-blue-300">{size}</p>
+                      <p className="text-white font-semibold">{qty}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
                 <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm">Overwraps by Size</h3>
                 <div className="space-y-2 md:space-y-3">
                   <div className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
@@ -1858,6 +2083,7 @@ export default function NorthernWaterSystemApp() {
               {[
                 { id: 'aging', label: 'Debtors', icon: '📊' },
                 { id: 'sales', label: 'Sales', icon: '📈' },
+                { id: 'cash', label: 'Cash Collected', icon: '💵' },
                 { id: 'expense', label: 'Expenses', icon: '💰' },
                 { id: 'profitloss', label: 'P&L', icon: '📉' },
               ].map(report => (
@@ -1876,8 +2102,8 @@ export default function NorthernWaterSystemApp() {
               ))}
             </div>
 
-            {/* Date Range for Sales Report */}
-            {reportType === 'sales' && (
+            {/* Date Range — applies to all event-based reports */}
+            {(reportType === 'sales' || reportType === 'cash' || reportType === 'expense' || reportType === 'profitloss') && (
               <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-3 md:p-4">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
                   <div>
@@ -1898,15 +2124,25 @@ export default function NorthernWaterSystemApp() {
                       className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-2 md:px-4 py-1 md:py-2 text-sm"
                     />
                   </div>
-                  <div className="flex items-end">
+                  <div className="flex items-end gap-2">
                     <button
-                      onClick={() => handleGenerateReport('sales')}
-                      className="w-full bg-cyan-500 hover:bg-cyan-600 text-white px-2 md:px-4 py-1 md:py-2 rounded-lg transition text-sm"
+                      onClick={() => handleGenerateReport(reportType)}
+                      className="flex-1 bg-cyan-500 hover:bg-cyan-600 text-white px-2 md:px-4 py-1 md:py-2 rounded-lg transition text-sm"
                     >
                       Generate
                     </button>
+                    <button
+                      onClick={() => { setDateRange({ start: '', end: '' }); setTimeout(() => handleGenerateReport(reportType), 0); }}
+                      className="bg-slate-600 hover:bg-slate-500 text-white px-2 md:px-3 py-1 md:py-2 rounded-lg transition text-xs"
+                      title="Clear dates (show all time)"
+                    >
+                      All Time
+                    </button>
                   </div>
                 </div>
+                <p className="text-slate-400 text-xs mt-2">
+                  {dateRange.start && dateRange.end ? `Showing: ${dateRange.start} to ${dateRange.end}` : 'Showing: All Time (set dates to filter)'}
+                </p>
               </div>
             )}
 
@@ -1989,7 +2225,7 @@ export default function NorthernWaterSystemApp() {
                         <div className="space-y-1 md:space-y-2">
                           {Object.entries(reportData.salesBySize).map(([size, qty]) => (
                             <div key={size} className="flex justify-between p-2 bg-slate-700/30 rounded text-xs md:text-sm">
-                              <p className="text-blue-300">{size}</p>
+                              <p className="text-blue-300">{SIZE_LABELS[size] || size}</p>
                               <p className="text-white font-semibold">{qty} cartons</p>
                             </div>
                           ))}
@@ -2007,7 +2243,7 @@ export default function NorthernWaterSystemApp() {
                             <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                               {Object.entries(cartons).map(([size, qty]) => (
                                 <div key={`${location}-${size}`} className="bg-slate-700/50 p-2 rounded text-xs text-center">
-                                  <p className="text-blue-300 font-semibold">{size}</p>
+                                  <p className="text-blue-300 font-semibold">{SIZE_LABELS[size] || size}</p>
                                   <p className="text-white font-bold">{qty} cartons</p>
                                 </div>
                               ))}
@@ -2015,6 +2251,51 @@ export default function NorthernWaterSystemApp() {
                           </div>
                         ))}
                       </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Cash Collected Report */}
+                {reportType === 'cash' && (
+                  <div className="space-y-3 md:space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="bg-green-500/20 border border-green-500/50 rounded-lg p-3 md:p-4">
+                        <p className="text-green-300 text-xs">Cash Sales Collected</p>
+                        <p className="text-white text-lg md:text-xl font-bold">KES {reportData.cashSalesTotal.toLocaleString()}</p>
+                      </div>
+                      <div className="bg-cyan-500/20 border border-cyan-500/50 rounded-lg p-3 md:p-4">
+                        <p className="text-cyan-300 text-xs">Debt Payments Collected</p>
+                        <p className="text-white text-lg md:text-xl font-bold">KES {reportData.debtPaymentsTotal.toLocaleString()}</p>
+                      </div>
+                      <div className="bg-gradient-to-br from-green-500 to-emerald-600 rounded-lg p-3 md:p-4">
+                        <p className="text-white/80 text-xs">Total Collected</p>
+                        <p className="text-white text-lg md:text-xl font-bold">KES {reportData.totalCollected.toLocaleString()}</p>
+                      </div>
+                    </div>
+                    <p className="text-blue-300 text-xs">Period: {reportData.period}</p>
+
+                    <div className="bg-slate-700/30 rounded-lg p-3 md:p-4">
+                      <h4 className="text-white font-semibold mb-2 text-sm">Cash Sales (paid at point of sale)</h4>
+                      {reportData.cashSalesList.length === 0 ? (
+                        <p className="text-slate-400 text-xs py-2">None in this period</p>
+                      ) : reportData.cashSalesList.map((c, i) => (
+                        <div key={i} className="flex justify-between text-xs py-1 border-b border-blue-400/10">
+                          <span className="text-blue-200">{c.date} · {c.invoice} · {c.customer}</span>
+                          <span className="text-green-300">KES {c.amount.toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="bg-slate-700/30 rounded-lg p-3 md:p-4">
+                      <h4 className="text-white font-semibold mb-2 text-sm">Debt Payments Received</h4>
+                      {reportData.debtPaymentsList.length === 0 ? (
+                        <p className="text-slate-400 text-xs py-2">None in this period</p>
+                      ) : reportData.debtPaymentsList.map((p, i) => (
+                        <div key={i} className="flex justify-between text-xs py-1 border-b border-blue-400/10">
+                          <span className="text-blue-200">{p.date} · {p.customer}{p.method ? ` · ${p.method}` : ''}</span>
+                          <span className="text-cyan-300">KES {p.amount.toLocaleString()}</span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -2039,24 +2320,52 @@ export default function NorthernWaterSystemApp() {
                 {/* P&L Report */}
                 {reportType === 'profitloss' && (
                   <div className="space-y-3 md:space-y-4">
-                    <div className={`border-2 rounded-lg p-3 md:p-4 ${reportData.profit >= 0 ? 'border-green-500/50 bg-green-500/20' : 'border-red-500/50 bg-red-500/20'}`}>
-                      <p className={reportData.profit >= 0 ? 'text-green-300' : 'text-red-300'}>Net Profit</p>
-                      <p className={`text-2xl md:text-3xl font-bold ${reportData.profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                        KES {reportData.profit.toLocaleString()}
-                      </p>
-                      <p className="text-xs mt-2">Margin: {reportData.profitMargin}%</p>
+                    <p className="text-blue-300 text-xs">Period: {reportData.period}</p>
+
+                    {/* Revenue → COGS → Gross Profit */}
+                    <div className="bg-slate-700/30 rounded-lg p-3 md:p-4 space-y-2">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-blue-300">Sales Revenue</span>
+                        <span className="text-white font-semibold">KES {reportData.revenue.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-blue-300">Less: Cost of Goods Sold</span>
+                        <span className="text-red-300">− KES {reportData.cogs.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between text-sm pt-2 border-t border-blue-400/20">
+                        <span className="text-green-300 font-semibold">Gross Profit</span>
+                        <span className="text-green-300 font-bold">KES {reportData.grossProfit.toLocaleString()}</span>
+                      </div>
+                      <p className="text-xs text-slate-400 text-right">Gross margin: {reportData.grossMargin}%</p>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
-                      <div className="bg-green-500/20 border border-green-500/50 rounded-lg p-3 md:p-4">
-                        <p className="text-green-300 text-xs md:text-sm">Revenue</p>
-                        <p className="text-white text-xl md:text-2xl font-bold">KES {reportData.revenue.sales.toLocaleString()}</p>
+                    {/* Operating expenses */}
+                    <div className="bg-slate-700/30 rounded-lg p-3 md:p-4 space-y-2">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-blue-300 font-semibold">Operating Expenses</span>
+                        <span className="text-red-300">− KES {reportData.operatingExpenses.toLocaleString()}</span>
                       </div>
-                      <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 md:p-4">
-                        <p className="text-red-300 text-xs md:text-sm">Expenses</p>
-                        <p className="text-white text-xl md:text-2xl font-bold">KES {reportData.expenses.total.toLocaleString()}</p>
-                      </div>
+                      {Object.entries(reportData.operatingBreakdown).map(([k, v]) => (
+                        <div key={k} className="flex justify-between text-xs pl-3">
+                          <span className="text-slate-400">{k}</span>
+                          <span className="text-slate-300">KES {v.toLocaleString()}</span>
+                        </div>
+                      ))}
+                      {Object.keys(reportData.operatingBreakdown).length === 0 && (
+                        <p className="text-slate-400 text-xs pl-3">No operating expenses in period</p>
+                      )}
                     </div>
+
+                    {/* Net Profit */}
+                    <div className={`border-2 rounded-lg p-3 md:p-4 ${reportData.netProfit >= 0 ? 'border-green-500/50 bg-green-500/20' : 'border-red-500/50 bg-red-500/20'}`}>
+                      <p className={reportData.netProfit >= 0 ? 'text-green-300' : 'text-red-300'}>Net Profit</p>
+                      <p className={`text-2xl md:text-3xl font-bold ${reportData.netProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        KES {reportData.netProfit.toLocaleString()}
+                      </p>
+                      <p className="text-xs mt-2">Net margin: {reportData.netMargin}%</p>
+                    </div>
+
+                    <p className="text-slate-400 text-xs">Note: COGS is based on cartons sold × cost per carton (which includes casual labour). Raw material purchases and casual/overtime pay are not counted again as operating expenses.</p>
                   </div>
                 )}
               </div>
@@ -2177,7 +2486,7 @@ export default function NorthernWaterSystemApp() {
                         <div className="grid grid-cols-2 gap-1 text-xs pt-2 border-t border-blue-400/10">
                           {sale.items.slice(0, 2).map((item, i) => (
                             <div key={i}>
-                              <p className="text-slate-400">{item.size}</p>
+                              <p className="text-slate-400">{SIZE_LABELS[item.size] || item.size}</p>
                               <p className="text-white">{item.quantity}×{item.price}</p>
                             </div>
                           ))}
@@ -2606,10 +2915,10 @@ export default function NorthernWaterSystemApp() {
             <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
               <h3 className="text-white font-semibold mb-4 text-sm md:text-base">Finished Goods — Cost per Carton (KES)</h3>
               <div className="space-y-3">
-                {['0.5L', '1.5L', '5L', '18.9L_disposable', '18.9L_refill'].map(size => (
+                {['0.5L', '1.5L', '5L', '18.9L_disposable', '18.9L_refill', 'refill_10L', 'refill_15L', 'refill_20L'].map(size => (
                   <div key={size} className="flex items-center justify-between gap-3">
                     <label className="text-blue-300 text-sm">
-                      {size === '18.9L_disposable' ? '18.9L Disposable' : size === '18.9L_refill' ? '18.9L Refill' : size}
+                      {size === '18.9L_disposable' ? '18.9L Disposable' : size === '18.9L_refill' ? '18.9L Refill (bottle)' : size === 'refill_10L' ? 'Water Refill 10L' : size === 'refill_15L' ? 'Water Refill 15L' : size === 'refill_20L' ? 'Water Refill 20L' : size}
                     </label>
                     <input
                       type="number"
@@ -2998,7 +3307,7 @@ export default function NorthernWaterSystemApp() {
                               className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded px-2 py-1"
                             >
                               {Object.keys(BOTTLE_PRICES).map(s => (
-                                <option key={s} value={s}>{s}</option>
+                                <option key={s} value={s}>{SIZE_LABELS[s] || s}</option>
                               ))}
                             </select>
                           </div>
