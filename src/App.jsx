@@ -264,6 +264,30 @@ export default function NorthernWaterSystemApp() {
     }
   }, [session]);
 
+  // Persist inventory (raw materials + finished goods) to Supabase whenever
+  // it changes — but only after the initial load, so we don't overwrite the
+  // saved data with the hardcoded defaults before it's loaded.
+  const inventorySaveReady = useRef(false);
+  useEffect(() => {
+    if (!hasLoadedData.current) return; // wait until initial load done
+    if (!inventorySaveReady.current) {
+      // skip the very first run right after load
+      inventorySaveReady.current = true;
+      return;
+    }
+    const saveInventory = async () => {
+      try {
+        await supabase.from('inventory_state').upsert([
+          { id: 'rawMaterials', data: state.rawMaterials, updated_at: new Date().toISOString() },
+          { id: 'finishedGoods', data: state.finishedGoods, updated_at: new Date().toISOString() }
+        ]);
+      } catch (e) {
+        console.error('❌ Error saving inventory:', e);
+      }
+    };
+    saveInventory();
+  }, [state.rawMaterials, state.finishedGoods]);
+
   const loadDataFromSupabase = async () => {
     try {
       // Load customers
@@ -326,6 +350,24 @@ export default function NorthernWaterSystemApp() {
         }
       } catch (e) {
         console.log('No cost settings yet');
+      }
+
+      // Load saved inventory (raw materials + finished goods)
+      try {
+        const { data: invData } = await supabase
+          .from('inventory_state')
+          .select('*');
+        if (invData && invData.length > 0) {
+          const rm = invData.find(r => r.id === 'rawMaterials');
+          const fg = invData.find(r => r.id === 'finishedGoods');
+          setState(prev => ({
+            ...prev,
+            rawMaterials: rm && rm.data ? rm.data : prev.rawMaterials,
+            finishedGoods: fg && fg.data ? fg.data : prev.finishedGoods
+          }));
+        }
+      } catch (e) {
+        console.log('No saved inventory yet');
       }
 
       console.log('✅ Data loaded from Supabase successfully');
@@ -431,6 +473,96 @@ export default function NorthernWaterSystemApp() {
       console.error('❌ Error saving costs:', error);
       alert('Error saving costs. Please try again.');
     }
+  };
+
+  // ===== STOCK ADJUSTMENT (admin only) =====
+  // Build a flat list of every adjustable stock item with current quantity.
+  const getStockItems = () => {
+    const items = [];
+    // Raw materials — object categories
+    ['emptyBottles', 'overwraps', 'seals', 'labels', 'caps'].forEach(cat => {
+      if (state.rawMaterials[cat] && typeof state.rawMaterials[cat] === 'object') {
+        Object.keys(state.rawMaterials[cat]).forEach(key => {
+          items.push({
+            id: `rm:${cat}:${key}`,
+            label: `${cat} — ${SIZE_LABELS[key] || key}`,
+            qty: state.rawMaterials[cat][key]
+          });
+        });
+      }
+    });
+    // Raw materials — simple numbers
+    items.push({ id: 'rm:kraStamps', label: 'KRA Stamps', qty: state.rawMaterials.kraStamps });
+    items.push({ id: 'rm:roChemical', label: 'RO Chemical', qty: state.rawMaterials.roChemical });
+    // Finished goods
+    Object.keys(state.finishedGoods).forEach(size => {
+      items.push({
+        id: `fg:${size}`,
+        label: `Finished Goods — ${SIZE_LABELS[size] || size}`,
+        qty: state.finishedGoods[size].quantity
+      });
+    });
+    return items;
+  };
+
+  const handleStockAdjustment = () => {
+    const { itemId, newQty, reason } = formData;
+    if (!itemId || newQty === '' || newQty == null) {
+      alert('Please select an item and enter a new quantity');
+      return;
+    }
+    const qty = parseFloat(newQty);
+    if (isNaN(qty) || qty < 0) {
+      alert('Enter a valid quantity (0 or more)');
+      return;
+    }
+
+    const updatedRaw = JSON.parse(JSON.stringify(state.rawMaterials));
+    const updatedFG = JSON.parse(JSON.stringify(state.finishedGoods));
+    let oldQty = 0;
+    let label = '';
+
+    if (itemId.startsWith('rm:')) {
+      const parts = itemId.split(':');
+      if (parts.length === 3) {
+        const [, cat, key] = parts;
+        oldQty = updatedRaw[cat][key];
+        updatedRaw[cat][key] = qty;
+        label = `${cat} ${key}`;
+      } else {
+        const [, simpleKey] = parts;
+        oldQty = updatedRaw[simpleKey];
+        updatedRaw[simpleKey] = qty;
+        label = simpleKey;
+      }
+    } else if (itemId.startsWith('fg:')) {
+      const size = itemId.replace('fg:', '');
+      oldQty = updatedFG[size].quantity;
+      updatedFG[size].quantity = qty;
+      label = `Finished Goods ${size}`;
+    }
+
+    setState({ ...state, rawMaterials: updatedRaw, finishedGoods: updatedFG });
+
+    // Log the adjustment to Supabase
+    (async () => {
+      try {
+        await supabase.from('stock_adjustments').insert([{
+          item: label,
+          old_qty: oldQty,
+          new_qty: qty,
+          reason: reason || '',
+          adjusted_by: userProfile?.email || '',
+          date: new Date().toISOString()
+        }]);
+        console.log('✅ Stock adjustment saved');
+      } catch (e) {
+        console.error('❌ Error saving adjustment:', e);
+      }
+    })();
+
+    setShowModal(false);
+    alert(`Updated ${label}: ${oldQty} → ${qty}`);
   };
 
   const handleSavePurchase = () => {
@@ -1771,6 +1903,7 @@ export default function NorthernWaterSystemApp() {
               { id: 'expenses', label: 'Expenses', icon: DollarSign, roles: ['admin', 'manager', 'sales'] },
               { id: 'customers', label: 'Customers', icon: Users, roles: ['admin', 'manager', 'sales'] },
               { id: 'costsettings', label: 'Costs', icon: DollarSign, roles: ['admin'] },
+              { id: 'adjust', label: 'Adjust', icon: Package, roles: ['admin'] },
               { id: 'reports', label: 'Reports', icon: TrendingUp, roles: ['admin', 'manager'] },
             ].filter(tab => tab.roles.includes(role)).map(tab => {
               const Icon = tab.icon;
@@ -2959,6 +3092,39 @@ export default function NorthernWaterSystemApp() {
           </div>
         )}
 
+        {/* Stock Adjustment Tab (admin only) */}
+        {activeTab === 'adjust' && role === 'admin' && (
+          <div className="space-y-4 md:space-y-6">
+            <div>
+              <h2 className="text-xl md:text-2xl font-bold text-white">Stock Adjustment</h2>
+              <p className="text-blue-300 text-sm mt-1">Set the actual quantity of any stock item after a physical count. Use this to align the system with reality (opening stock, stock-take, breakage). Each change is logged.</p>
+            </div>
+
+            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+              <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+                {getStockItems().map(item => (
+                  <div key={item.id} className="flex items-center justify-between gap-3 p-2 bg-slate-700/30 rounded-lg">
+                    <div className="min-w-0">
+                      <p className="text-white text-sm truncate">{item.label}</p>
+                      <p className="text-slate-400 text-xs">Current: {item.qty}</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setModalType('adjust');
+                        setFormData({ itemId: item.id, itemLabel: item.label, currentQty: item.qty, newQty: '', reason: '' });
+                        setShowModal(true);
+                      }}
+                      className="bg-cyan-500/80 hover:bg-cyan-500 text-white px-3 py-1.5 rounded text-xs whitespace-nowrap"
+                    >
+                      Adjust
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Dashboard Card Breakdown Modal */}
         {breakdownCard && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setBreakdownCard(null)}>
@@ -3080,6 +3246,7 @@ export default function NorthernWaterSystemApp() {
                 {modalType === 'purchase' && (editingPurchase ? 'Edit Purchase' : 'New Purchase')}
                 {modalType === 'expense' && (editingExpense ? 'Edit Expense' : 'New Expense')}
                 {modalType === 'customer' && (editingCustomer ? 'Edit' : 'New Customer')}
+                {modalType === 'adjust' && 'Adjust Stock'}
               </h3>
               <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-white">
                 <X className="w-5 h-5" />
@@ -3157,10 +3324,11 @@ export default function NorthernWaterSystemApp() {
                               <label className="text-blue-300 text-xs block mb-1">Unit Price</label>
                               <input
                                 type="number"
-                                value={item.unitPrice || 0}
+                                step="0.01"
+                                value={item.unitPrice || ''}
                                 onChange={(e) => {
                                   const newItems = [...formData.items];
-                                  newItems[idx].unitPrice = parseInt(e.target.value) || 0;
+                                  newItems[idx].unitPrice = parseFloat(e.target.value) || 0;
                                   newItems[idx].total = newItems[idx].quantity * newItems[idx].unitPrice;
                                   setFormData({ ...formData, items: newItems });
                                 }}
@@ -3621,6 +3789,41 @@ export default function NorthernWaterSystemApp() {
                   </div>
                 </>
               )}
+
+              {modalType === 'adjust' && (
+                <>
+                  <div className="bg-slate-700/30 rounded-lg p-3">
+                    <p className="text-white text-sm font-semibold">{formData.itemLabel}</p>
+                    <p className="text-slate-400 text-xs mt-1">Current quantity: {formData.currentQty}</p>
+                  </div>
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">New Actual Quantity</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={formData.newQty}
+                      onChange={(e) => setFormData({ ...formData, newQty: e.target.value })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      placeholder="Enter counted quantity"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Reason</label>
+                    <select
+                      value={formData.reason || ''}
+                      onChange={(e) => setFormData({ ...formData, reason: e.target.value })}
+                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                    >
+                      <option value="">Select reason...</option>
+                      <option value="Opening stock">Opening stock</option>
+                      <option value="Stock-take correction">Stock-take correction</option>
+                      <option value="Breakage / damage">Breakage / damage</option>
+                      <option value="Loss / theft">Loss / theft</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="flex gap-2 md:gap-3 p-4 md:p-6 border-t border-blue-400/10 bg-slate-800/50 sticky bottom-0">
@@ -3638,6 +3841,7 @@ export default function NorthernWaterSystemApp() {
                   else if (modalType === 'purchase') handleSavePurchase();
                   else if (modalType === 'expense') handleSaveExpense();
                   else if (modalType === 'customer') handleSaveCustomer();
+                  else if (modalType === 'adjust') handleStockAdjustment();
                 }}
                 className="flex-1 px-3 md:px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
