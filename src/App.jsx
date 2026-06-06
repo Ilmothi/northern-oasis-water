@@ -93,9 +93,10 @@ const initialState = {
     'Empty Bottles - 5L': { material: 'emptyBottles_5L', category: 'Empty Bottles' },
     'Empty Bottles - 18.9L Disposable': { material: 'emptyBottles_18.9L_disposable', category: 'Empty Bottles' },
     'Empty Bottles - 18.9L Refill': { material: 'emptyBottles_18.9L_refill', category: 'Empty Bottles' },
-    'Overwraps': { material: 'overwraps', category: 'Overwraps' },
-    'Seals - Short Neck 0.5L': { material: 'seals_short_neck_05', category: 'Seals' },
-    'Seals - Short Neck 1.5L': { material: 'seals_short_neck_15', category: 'Seals' },
+    'Overwraps - 0.5L': { material: 'overwraps_0.5L', category: 'Overwraps' },
+    'Overwraps - 1.5L': { material: 'overwraps_1.5L', category: 'Overwraps' },
+    'Overwraps - 5L': { material: 'overwraps_5L', category: 'Overwraps' },
+    'Seals - Short Neck (0.5L & 1.5L)': { material: 'seals_short_neck', category: 'Seals' },
     'Seals - 5L': { material: 'seals_5L', category: 'Seals' },
     'Seals - 18.9L': { material: 'seals_18.9L', category: 'Seals' },
     'Labels - 0.5L': { material: 'labels_0.5L', category: 'Labels' },
@@ -628,6 +629,11 @@ export default function NorthernWaterSystemApp() {
           if (updatedRawMaterials.caps && updatedRawMaterials.caps[size] != null) {
             updatedRawMaterials.caps[size] += item.quantity;
           }
+        } else if (category === 'overwraps') {
+          const size = item.material.replace('overwraps_', '');
+          if (updatedRawMaterials.overwraps[size] != null) {
+            updatedRawMaterials.overwraps[size] += item.quantity;
+          }
         } else if (updatedRawMaterials[category]) {
           updatedRawMaterials[category] += item.quantity;
         }
@@ -653,12 +659,62 @@ export default function NorthernWaterSystemApp() {
   };
 
   const handleDeletePurchase = (id) => {
-    if (confirm('Delete this purchase?')) {
-      setState({
-        ...state,
-        purchases: state.purchases.filter(p => p.id !== id)
-      });
-    }
+    const purchase = state.purchases.find(p => p.id === id);
+    if (!purchase) return;
+    if (!confirm('Delete this purchase? The materials it added will be removed from inventory. This cannot be undone.')) return;
+
+    // Reverse the inventory that this purchase added
+    const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
+    (purchase.items || []).forEach(item => {
+      if (!item.material) return;
+      const category = item.material.split('_')[0];
+
+      if (category === 'emptyBottles') {
+        const size = item.material.replace('emptyBottles_', '');
+        if (updatedRawMaterials.emptyBottles[size] != null) {
+          updatedRawMaterials.emptyBottles[size] -= item.quantity;
+        }
+      } else if (category === 'seals') {
+        const type = item.material.replace('seals_', '');
+        if (updatedRawMaterials.seals[type] != null) {
+          updatedRawMaterials.seals[type] -= item.quantity;
+        }
+      } else if (category === 'labels') {
+        const size = item.material.replace('labels_', '');
+        if (updatedRawMaterials.labels[size] != null) {
+          updatedRawMaterials.labels[size] -= item.quantity;
+        }
+      } else if (category === 'caps') {
+        const size = item.material.replace('caps_', '');
+        if (updatedRawMaterials.caps && updatedRawMaterials.caps[size] != null) {
+          updatedRawMaterials.caps[size] -= item.quantity;
+        }
+      } else if (category === 'overwraps') {
+        const size = item.material.replace('overwraps_', '');
+        if (updatedRawMaterials.overwraps[size] != null) {
+          updatedRawMaterials.overwraps[size] -= item.quantity;
+        }
+      } else if (updatedRawMaterials[item.material] != null) {
+        // simple categories like kraStamps, roChemical
+        updatedRawMaterials[item.material] -= item.quantity;
+      }
+    });
+
+    setState({
+      ...state,
+      purchases: state.purchases.filter(p => p.id !== id),
+      rawMaterials: updatedRawMaterials
+    });
+
+    // Remove from Supabase
+    (async () => {
+      try {
+        await supabase.from('purchases').delete().eq('id', id);
+        console.log('✅ Purchase deleted and inventory reversed');
+      } catch (error) {
+        console.error('❌ Error deleting purchase:', error);
+      }
+    })();
   };
 
   // Report Generators
