@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, Calendar, ShoppingCart } from 'lucide-react';
+import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, Calendar, ShoppingCart, Wallet } from 'lucide-react';
 import { supabase } from './supabaseClient';
 
 const initialState = {
@@ -1805,10 +1805,10 @@ export default function NorthernWaterSystemApp() {
   // ===== LOADING SCREEN =====
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 flex items-center justify-center">
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="text-center">
           <div className="w-16 h-16 border-4 border-cyan-400 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-cyan-300 text-lg">Loading...</p>
+          <p className="text-sky-600 text-lg">Loading...</p>
         </div>
       </div>
     );
@@ -1817,60 +1817,60 @@ export default function NorthernWaterSystemApp() {
   // ===== LOGIN SCREEN =====
   if (!session) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 flex items-center justify-center px-4">
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
         <div className="w-full max-w-md">
           <div className="text-center mb-8">
             <div className="w-20 h-20 bg-gradient-to-br from-cyan-400 to-blue-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
               <span className="text-white text-2xl font-bold">OS</span>
             </div>
-            <h1 className="text-2xl md:text-3xl font-bold text-white">Northern Water Co.</h1>
-            <p className="text-cyan-300 text-sm mt-1">OASIS Springs Management System</p>
+            <h1 className="text-2xl md:text-3xl font-bold text-slate-900">Northern Water Co.</h1>
+            <p className="text-sky-600 text-sm mt-1">OASIS Springs Management System</p>
           </div>
 
-          <div className="bg-slate-800/50 border border-blue-400/20 rounded-2xl p-6 md:p-8 shadow-xl backdrop-blur">
-            <h2 className="text-white font-semibold text-lg mb-6 text-center">Sign In</h2>
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 md:p-8 shadow-xl backdrop-blur">
+            <h2 className="text-slate-900 font-semibold text-lg mb-6 text-center">Sign In</h2>
 
             {loginError && (
-              <div className="bg-red-500/20 border border-red-400/40 text-red-300 rounded-lg px-4 py-3 text-sm mb-4">
+              <div className="bg-rose-50 border border-rose-200 text-rose-600 rounded-lg px-4 py-3 text-sm mb-4">
                 {loginError}
               </div>
             )}
 
             <div className="space-y-4">
               <div>
-                <label className="block text-blue-300 text-sm font-medium mb-2">Email</label>
+                <label className="block text-slate-500 text-sm font-medium mb-2">Email</label>
                 <input
                   type="email"
                   value={loginEmail}
                   onChange={(e) => setLoginEmail(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') handleLogin(); }}
                   placeholder="you@example.com"
-                  className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-4 py-2.5 text-sm placeholder-slate-400 focus:outline-none focus:border-cyan-400"
+                  className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-4 py-2.5 text-sm placeholder-slate-400 focus:outline-none focus:border-cyan-400"
                 />
               </div>
 
               <div>
-                <label className="block text-blue-300 text-sm font-medium mb-2">Password</label>
+                <label className="block text-slate-500 text-sm font-medium mb-2">Password</label>
                 <input
                   type="password"
                   value={loginPassword}
                   onChange={(e) => setLoginPassword(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') handleLogin(); }}
                   placeholder="••••••••"
-                  className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-4 py-2.5 text-sm placeholder-slate-400 focus:outline-none focus:border-cyan-400"
+                  className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-4 py-2.5 text-sm placeholder-slate-400 focus:outline-none focus:border-cyan-400"
                 />
               </div>
 
               <button
                 onClick={handleLogin}
                 disabled={loggingIn || !loginEmail || !loginPassword}
-                className="w-full bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg px-4 py-2.5 text-sm transition"
+                className="w-full bg-sky-500 hover:bg-sky-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-semibold rounded-lg px-4 py-2.5 text-sm transition"
               >
                 {loggingIn ? 'Signing in...' : 'Sign In'}
               </button>
             </div>
 
-            <p className="text-slate-400 text-xs text-center mt-6">
+            <p className="text-slate-500 text-xs text-center mt-6">
               Contact your administrator if you need an account.
             </p>
           </div>
@@ -1880,9 +1880,9 @@ export default function NorthernWaterSystemApp() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900">
+    <div className="min-h-screen bg-slate-50">
       {/* Header */}
-      <header className="border-b border-blue-400/20 bg-gradient-to-r from-slate-900 via-blue-900 to-slate-900 backdrop-blur sticky top-0 z-40 shadow-lg">
+      <header className="border-b border-slate-200 bg-white/90 backdrop-blur sticky top-0 z-40 shadow-sm">
         <div className="w-full px-4 md:px-6 py-3 md:py-4">
           <div className="flex items-center justify-between gap-3">
             {/* Logo and Company Name */}
@@ -1915,8 +1915,8 @@ export default function NorthernWaterSystemApp() {
               </svg>
               
               <div className="min-w-0">
-                <h1 className="text-lg md:text-2xl font-bold text-white truncate">Northern Water Co.</h1>
-                <p className="text-cyan-300 text-xs md:text-sm truncate font-semibold">🌊 OASIS Springs - Purified Water</p>
+                <h1 className="text-lg md:text-2xl font-bold text-slate-900 truncate">Northern Water Co.</h1>
+                <p className="text-sky-600 text-xs md:text-sm truncate font-semibold">🌊 OASIS Springs - Purified Water</p>
               </div>
             </div>
             
@@ -1924,18 +1924,18 @@ export default function NorthernWaterSystemApp() {
             <div className="flex items-center gap-3 md:gap-5">
               {role !== 'sales' && (
                 <div className="text-right">
-                  <p className="text-blue-400 text-xs font-semibold">Total Assets</p>
-                  <p className="text-lg md:text-2xl font-bold text-cyan-300">KES {(calculateInventoryValue() + calculateFinishedGoodsValue()).toLocaleString()}</p>
+                  <p className="text-sky-600 text-xs font-semibold">Total Assets</p>
+                  <p className="text-lg md:text-2xl font-bold text-sky-600">KES {(calculateInventoryValue() + calculateFinishedGoodsValue()).toLocaleString()}</p>
                 </div>
               )}
-              <div className="flex items-center gap-2 md:gap-3 border-l border-blue-400/20 pl-3 md:pl-5">
+              <div className="flex items-center gap-2 md:gap-3 border-l border-slate-200 pl-3 md:pl-5">
                 <div className="text-right hidden sm:block">
-                  <p className="text-white text-xs md:text-sm font-semibold truncate max-w-[140px]">{userProfile?.email}</p>
-                  <p className="text-cyan-400 text-xs capitalize">{role}</p>
+                  <p className="text-slate-900 text-xs md:text-sm font-semibold truncate max-w-[140px]">{userProfile?.email}</p>
+                  <p className="text-sky-600 text-xs capitalize">{role}</p>
                 </div>
                 <button
                   onClick={handleLogout}
-                  className="bg-slate-700/60 hover:bg-red-500/30 border border-blue-400/20 hover:border-red-400/40 text-blue-300 hover:text-red-300 rounded-lg px-3 py-1.5 text-xs md:text-sm transition whitespace-nowrap"
+                  className="bg-slate-100 hover:bg-red-500/30 border border-slate-200 hover:border-rose-200 text-slate-500 hover:text-rose-600 rounded-lg px-3 py-1.5 text-xs md:text-sm transition whitespace-nowrap"
                 >
                   Logout
                 </button>
@@ -1945,42 +1945,82 @@ export default function NorthernWaterSystemApp() {
         </div>
       </header>
 
-      {/* Navigation */}
-      <div className="bg-slate-800/50 border-b border-blue-400/10 sticky top-16 z-30 overflow-x-auto">
-        <div className="w-full">
-          <div className="flex gap-2 md:gap-8 px-4 md:px-6 min-w-max md:min-w-0">
-            {[
-              { id: 'dashboard', label: 'Home', icon: BarChart3, roles: ['admin', 'manager'] },
-              { id: 'sales', label: 'Sales', icon: DollarSign, roles: ['admin', 'manager', 'sales'] },
-              { id: 'inventory', label: 'Stocks', icon: Package, roles: ['admin', 'manager', 'sales'] },
-              { id: 'purchases', label: 'Purchases', icon: ShoppingCart, roles: ['admin', 'manager'] },
-              { id: 'production', label: 'Production', icon: ClipboardList, roles: ['admin', 'manager', 'sales'] },
-              { id: 'payments', label: 'Payments', icon: Users, roles: ['admin', 'manager', 'sales'] },
-              { id: 'expenses', label: 'Expenses', icon: DollarSign, roles: ['admin', 'manager', 'sales'] },
-              { id: 'customers', label: 'Customers', icon: Users, roles: ['admin', 'manager', 'sales'] },
-              { id: 'costsettings', label: 'Costs', icon: DollarSign, roles: ['admin'] },
-              { id: 'adjust', label: 'Adjust', icon: Package, roles: ['admin'] },
-              { id: 'reports', label: 'Reports', icon: TrendingUp, roles: ['admin', 'manager'] },
-            ].filter(tab => tab.roles.includes(role)).map(tab => {
-              const Icon = tab.icon;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-1 md:gap-2 px-2 md:px-4 py-3 md:py-4 border-b-2 transition-all whitespace-nowrap text-sm md:text-base ${
-                    activeTab === tab.id
-                      ? 'border-cyan-400 text-cyan-400'
-                      : 'border-transparent text-blue-300 hover:text-white'
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                  <span className="hidden sm:inline">{tab.label}</span>
-                </button>
-              );
-            })}
+      {/* Navigation — consolidated pillars */}
+      {(() => {
+        // Pillar definitions. Each pillar shows if the user can access at least
+        // one of its tabs. Sub-tabs are individually role-gated.
+        const PILLARS = [
+          { id: 'home', label: 'Home', icon: BarChart3, tabs: [{ id: 'dashboard', roles: ['admin', 'manager'] }] },
+          { id: 'sales', label: 'Sales', icon: DollarSign, tabs: [
+            { id: 'sales', label: 'Sales History', roles: ['admin', 'manager', 'sales'] },
+            { id: 'payments', label: 'Payments', roles: ['admin', 'manager', 'sales'] },
+          ]},
+          { id: 'inventory', label: 'Inventory', icon: Package, tabs: [
+            { id: 'inventory', label: 'Raw Stock', roles: ['admin', 'manager', 'sales'] },
+            { id: 'production', label: 'Production', roles: ['admin', 'manager', 'sales'] },
+            { id: 'purchases', label: 'Purchases', roles: ['admin', 'manager'] },
+            { id: 'costsettings', label: 'Cost Settings', roles: ['admin'] },
+            { id: 'adjust', label: 'Stock Adjustments', roles: ['admin'] },
+          ]},
+          { id: 'expenses', label: 'Expenses', icon: DollarSign, tabs: [{ id: 'expenses', roles: ['admin', 'manager', 'sales'] }] },
+          { id: 'customers', label: 'Customers', icon: Users, tabs: [{ id: 'customers', roles: ['admin', 'manager', 'sales'] }] },
+          { id: 'reports', label: 'Reports', icon: TrendingUp, tabs: [{ id: 'reports', roles: ['admin', 'manager'] }] },
+        ];
+
+        // Filter to pillars/tabs this role can see
+        const visiblePillars = PILLARS
+          .map(p => ({ ...p, tabs: p.tabs.filter(t => t.roles.includes(role)) }))
+          .filter(p => p.tabs.length > 0);
+
+        // Which pillar contains the current activeTab?
+        const currentPillar = visiblePillars.find(p => p.tabs.some(t => t.id === activeTab)) || visiblePillars[0];
+        const subTabs = currentPillar && currentPillar.tabs.length > 1 ? currentPillar.tabs : [];
+
+        return (
+          <div className="bg-white border-b border-slate-100 sticky top-16 z-30">
+            {/* Top pillar row */}
+            <div className="overflow-x-auto">
+              <div className="flex gap-2 md:gap-8 px-4 md:px-6 min-w-max md:min-w-0">
+                {visiblePillars.map(p => {
+                  const Icon = p.icon;
+                  const isActive = currentPillar && currentPillar.id === p.id;
+                  return (
+                    <button
+                      key={p.id}
+                      onClick={() => setActiveTab(p.tabs[0].id)}
+                      className={`flex items-center gap-1 md:gap-2 px-2 md:px-4 py-3 md:py-4 border-b-2 transition-all whitespace-nowrap text-sm md:text-base ${
+                        isActive ? 'border-sky-500 text-sky-600' : 'border-transparent text-slate-500 hover:text-slate-900'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4" />
+                      <span className="hidden sm:inline">{p.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Sub-tab row (only when the active pillar has more than one tab) */}
+            {subTabs.length > 0 && (
+              <div className="overflow-x-auto bg-slate-50 border-t border-slate-100">
+                <div className="flex gap-1 px-4 md:px-6 py-2 min-w-max md:min-w-0">
+                  {subTabs.map(t => (
+                    <button
+                      key={t.id}
+                      onClick={() => setActiveTab(t.id)}
+                      className={`px-3 py-1.5 rounded-md text-xs md:text-sm font-medium whitespace-nowrap transition ${
+                        activeTab === t.id ? 'bg-sky-500 text-white' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* Main Content */}
       <main className="w-full px-4 md:px-6 py-4 md:py-8">
@@ -1988,92 +2028,78 @@ export default function NorthernWaterSystemApp() {
         {/* Dashboard */}
         {activeTab === 'dashboard' && (
           <div className="space-y-4 md:space-y-6">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
               {[
-                { id: 'customers', label: 'Customers', value: state.customers.length, color: 'from-blue-500 to-blue-600' },
-                { id: 'debt', label: 'Debt', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0).toLocaleString()}`, color: 'from-red-500 to-red-600' },
-                { id: 'sales', label: 'Sales', value: `KES ${state.sales.reduce((sum, s) => sum + s.total, 0).toLocaleString()}`, color: 'from-green-500 to-green-600' },
-                { id: 'costs', label: 'Costs', value: `KES ${(getTotalExpenses() + getTotalPurchases()).toLocaleString()}`, color: 'from-purple-500 to-purple-600' },
+                { id: 'customers', label: 'Customers', value: state.customers.length.toLocaleString(), accent: 'bg-sky-500', sub: 'total accounts' },
+                { id: 'debt', label: 'Outstanding Debts', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-rose-500', sub: 'across debtors' },
+                { id: 'sales', label: 'Sales', value: `KES ${state.sales.reduce((sum, s) => sum + s.total, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-emerald-500', sub: 'total sales' },
+                { id: 'costs', label: 'Operating Costs', value: `KES ${(getTotalExpenses() + getTotalPurchases()).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-amber-500', sub: 'expenses + purchases' },
               ].map((card, i) => (
                 <button
                   key={i}
                   onClick={() => setBreakdownCard(card.id)}
-                  className={`bg-gradient-to-br ${card.color} rounded-lg md:rounded-xl p-3 md:p-6 text-white shadow-lg text-left hover:brightness-110 transition cursor-pointer`}
+                  className="relative overflow-hidden bg-white border border-slate-200 rounded-xl shadow-sm p-4 text-left hover:border-sky-300 transition cursor-pointer"
                 >
-                  <p className="text-xs md:text-sm opacity-90 mb-1 md:mb-2">{card.label}</p>
-                  <p className="text-sm md:text-3xl font-bold break-words">{card.value}</p>
-                  <p className="text-xs opacity-70 mt-1 md:mt-2">Tap for details →</p>
+                  <div className={`absolute left-0 top-0 bottom-0 w-1 ${card.accent}`} />
+                  <p className="text-slate-500 text-xs mb-1 pl-1">{card.label}</p>
+                  <p className="text-slate-900 text-lg md:text-2xl font-bold pl-1 break-words">{card.value}</p>
+                  <p className="text-slate-400 text-xs pl-1 mt-1">{card.sub}</p>
                 </button>
               ))}
             </div>
 
             {/* Quick Actions */}
-            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-              <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">Actions</h3>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-4">
-                <button
-                  onClick={handleAddSale}
-                  className="bg-green-500/20 hover:bg-green-500/30 border border-green-500/50 text-green-300 py-2 md:py-3 rounded-lg transition flex items-center justify-center gap-1 text-xs md:text-sm"
-                >
-                  <Plus className="w-4 h-4" /> Sale
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-6">
+              <h3 className="text-slate-700 font-semibold mb-3 md:mb-4 text-sm">Quick Actions</h3>
+              <div className="grid grid-cols-5 gap-2">
+                <button onClick={handleAddSale} className="flex flex-col items-center gap-1.5 py-3 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 transition">
+                  <Plus className="w-4 h-4 text-sky-600" /> <span className="text-[11px] text-slate-600">Sale</span>
                 </button>
-                <button
-                  onClick={handleAddPayment}
-                  className="bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 text-cyan-300 py-2 md:py-3 rounded-lg transition flex items-center justify-center gap-1 text-xs md:text-sm"
-                >
-                  <Plus className="w-4 h-4" /> Pay
+                <button onClick={handleAddPayment} className="flex flex-col items-center gap-1.5 py-3 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 transition">
+                  <Wallet className="w-4 h-4 text-sky-600" /> <span className="text-[11px] text-slate-600">Pay</span>
                 </button>
-                <button
-                  onClick={handleAddProduction}
-                  className="bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 text-blue-300 py-2 md:py-3 rounded-lg transition flex items-center justify-center gap-1 text-xs md:text-sm"
-                >
-                  <Plus className="w-4 h-4" /> Prod
+                <button onClick={handleAddProduction} className="flex flex-col items-center gap-1.5 py-3 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 transition">
+                  <ClipboardList className="w-4 h-4 text-sky-600" /> <span className="text-[11px] text-slate-600">Prod</span>
                 </button>
-                <button
-                  onClick={handleAddPurchase}
-                  className="bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/50 text-indigo-300 py-2 md:py-3 rounded-lg transition flex items-center justify-center gap-1 text-xs md:text-sm"
-                >
-                  <Plus className="w-4 h-4" /> Buy
+                <button onClick={handleAddPurchase} className="flex flex-col items-center gap-1.5 py-3 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 transition">
+                  <ShoppingCart className="w-4 h-4 text-sky-600" /> <span className="text-[11px] text-slate-600">Buy</span>
                 </button>
-                <button
-                  onClick={() => { setActiveTab('reports'); setReportType('aging'); handleGenerateReport('aging'); }}
-                  className="bg-yellow-500/20 hover:bg-yellow-500/30 border border-yellow-500/50 text-yellow-300 py-2 md:py-3 rounded-lg transition flex items-center justify-center gap-1 text-xs md:text-sm"
-                >
-                  <TrendingUp className="w-4 h-4" /> Report
+                <button onClick={() => { setActiveTab('reports'); setReportType('aging'); handleGenerateReport('aging'); }} className="flex flex-col items-center gap-1.5 py-3 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 transition">
+                  <BarChart3 className="w-4 h-4 text-sky-600" /> <span className="text-[11px] text-slate-600">Report</span>
                 </button>
               </div>
             </div>
 
             {/* Recent Activity */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
-              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-                <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">Recent Sales</h3>
+              <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+                <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm md:text-base">Recent Sales</h3>
                 <div className="space-y-2 md:space-y-3">
                   {state.sales.slice(-5).reverse().map(sale => {
                     const customer = state.customers.find(c => c.id === sale.customerId);
                     return (
-                      <div key={sale.id} className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-base">
+                      <div key={sale.id} className="flex justify-between items-center p-2 md:p-3 bg-slate-50 rounded-lg text-xs md:text-base">
                         <div>
-                          <p className="text-white font-medium truncate">{customer?.name}</p>
-                          <p className="text-blue-300 text-xs">{sale.date}</p>
+                          <p className="text-slate-900 font-medium truncate">{customer?.name}</p>
+                          <p className="text-slate-500 text-xs">{sale.date}</p>
                         </div>
-                        <p className="text-green-400 font-semibold">KES {sale.total.toLocaleString()}</p>
+                        <p className="text-emerald-600 font-semibold">KES {sale.total.toLocaleString()}</p>
                       </div>
                     );
                   })}
                 </div>
               </div>
 
-              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-                <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">Recent Purchases</h3>
+              <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+                <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm md:text-base">Recent Purchases</h3>
                 <div className="space-y-2 md:space-y-3">
                   {state.purchases.slice(-5).reverse().map(purchase => (
-                    <div key={purchase.id} className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-base">
+                    <div key={purchase.id} className="flex justify-between items-center p-2 md:p-3 bg-slate-50 rounded-lg text-xs md:text-base">
                       <div>
-                        <p className="text-white font-medium truncate">{purchase.supplier}</p>
-                        <p className="text-blue-300 text-xs">{purchase.date}</p>
+                        <p className="text-slate-900 font-medium truncate">{purchase.supplier}</p>
+                        <p className="text-slate-500 text-xs">{purchase.date}</p>
                       </div>
-                      <p className="text-indigo-400 font-semibold">KES {purchase.totalAmount.toLocaleString()}</p>
+                      <p className="text-sky-600 font-semibold">KES {purchase.totalAmount.toLocaleString()}</p>
                     </div>
                   ))}
                 </div>
@@ -2086,10 +2112,10 @@ export default function NorthernWaterSystemApp() {
         {activeTab === 'purchases' && (
           <div className="space-y-4 md:space-y-6">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
-              <h2 className="text-xl md:text-2xl font-bold text-white">Raw Materials Purchases</h2>
+              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Raw Materials Purchases</h2>
               <button
                 onClick={handleAddPurchase}
-                className="w-full md:w-auto bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-slate-900 px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
                 <Plus className="w-4 h-4" /> New Purchase
               </button>
@@ -2097,32 +2123,33 @@ export default function NorthernWaterSystemApp() {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-6">
               {[
-                { label: 'Total Purchased', value: `KES ${getTotalPurchases().toLocaleString()}`, color: 'from-indigo-500 to-indigo-600' },
-                { label: 'Purchase Count', value: state.purchases.length, color: 'from-blue-500 to-blue-600' },
-                { label: 'Current Stock Value', value: `KES ${calculateInventoryValue().toLocaleString()}`, color: 'from-cyan-500 to-cyan-600' },
+                { label: 'Total Purchased', value: `KES ${getTotalPurchases().toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-sky-500' },
+                { label: 'Purchase Count', value: state.purchases.length.toLocaleString(), accent: 'bg-slate-400' },
+                { label: 'Current Stock Value', value: `KES ${calculateInventoryValue().toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-emerald-500' },
               ].map((card, i) => (
-                <div key={i} className={`bg-gradient-to-br ${card.color} rounded-lg md:rounded-xl p-3 md:p-6 text-white shadow-lg`}>
-                  <p className="text-xs md:text-sm opacity-90 mb-1 md:mb-2">{card.label}</p>
-                  <p className="text-lg md:text-3xl font-bold break-words">{card.value}</p>
+                <div key={i} className="relative overflow-hidden bg-white border border-slate-200 rounded-xl shadow-sm p-4">
+                  <div className={`absolute left-0 top-0 bottom-0 w-1 ${card.accent}`} />
+                  <p className="text-slate-500 text-xs mb-1 pl-1">{card.label}</p>
+                  <p className="text-slate-900 text-lg md:text-2xl font-bold pl-1 break-words">{card.value}</p>
                 </div>
               ))}
             </div>
 
-            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-              <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">Purchase History</h3>
+            <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm md:text-base">Purchase History</h3>
               <div className="space-y-3 max-h-96 overflow-y-auto">
                 {state.purchases.length === 0 ? (
-                  <p className="text-blue-300 text-center py-4 md:py-8 text-sm">No purchases recorded</p>
+                  <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No purchases recorded</p>
                 ) : (
                   state.purchases.slice().reverse().map(purchase => (
-                    <div key={purchase.id} className="p-3 md:p-4 bg-slate-700/30 rounded-lg border border-blue-400/10">
+                    <div key={purchase.id} className="p-3 md:p-4 bg-slate-50 rounded-lg border border-slate-100">
                       <div className="flex justify-between items-start gap-2 mb-2">
                         <div className="min-w-0 flex-1">
-                          <p className="text-white font-semibold text-sm truncate">{purchase.supplier}</p>
-                          <p className="text-blue-300 text-xs">{purchase.date}</p>
+                          <p className="text-slate-900 font-semibold text-sm truncate">{purchase.supplier}</p>
+                          <p className="text-slate-500 text-xs">{purchase.date}</p>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
-                          <p className="text-indigo-400 font-semibold">KES {purchase.totalAmount.toLocaleString()}</p>
+                          <p className="text-sky-600 font-semibold">KES {purchase.totalAmount.toLocaleString()}</p>
                           <div className="flex gap-1">
                             <button
                               onClick={() => {
@@ -2131,25 +2158,25 @@ export default function NorthernWaterSystemApp() {
                                 setFormData(purchase);
                                 setShowModal(true);
                               }}
-                              className="p-1 hover:bg-blue-500/30 rounded transition"
+                              className="p-1 hover:bg-slate-100 rounded transition"
                             >
-                              <Edit2 className="w-3 h-3 text-blue-300" />
+                              <Edit2 className="w-3 h-3 text-slate-500" />
                             </button>
                             <button
                               onClick={() => handleDeletePurchase(purchase.id)}
                               className="p-1 hover:bg-red-500/30 rounded transition"
                             >
-                              <Trash2 className="w-3 h-3 text-red-300" />
+                              <Trash2 className="w-3 h-3 text-rose-600" />
                             </button>
                           </div>
                         </div>
                       </div>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-1 text-xs">
                         {purchase.items.map((item, i) => (
-                          <div key={i} className="p-2 bg-slate-600/30 rounded">
-                            <p className="text-slate-400 text-xs">{item.description}</p>
-                            <p className="text-white font-semibold">{item.quantity} units</p>
-                            <p className="text-indigo-300">KES {item.total.toLocaleString()}</p>
+                          <div key={i} className="p-2 bg-slate-100 rounded">
+                            <p className="text-slate-500 text-xs">{item.description}</p>
+                            <p className="text-slate-900 font-semibold">{item.quantity} units</p>
+                            <p className="text-sky-600">KES {item.total.toLocaleString()}</p>
                           </div>
                         ))}
                       </div>
@@ -2164,16 +2191,16 @@ export default function NorthernWaterSystemApp() {
         {/* Inventory Tab */}
         {activeTab === 'inventory' && (
           <div className="space-y-4 md:space-y-6">
-            <h2 className="text-xl md:text-2xl font-bold text-white">Raw Materials Inventory</h2>
+            <h2 className="text-xl md:text-2xl font-bold text-slate-900">Raw Materials Inventory</h2>
 
             {/* Empty Bottles */}
-            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-              <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">Empty Bottles</h3>
+            <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm md:text-base">Empty Bottles</h3>
               <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-4">
                 {Object.entries(state.rawMaterials.emptyBottles).map(([size, quantity]) => (
-                  <div key={size} className="bg-slate-700/30 rounded-lg p-3 md:p-4 border border-blue-400/10">
-                    <p className="text-blue-300 text-xs md:text-sm mb-2">{size}</p>
-                    <p className="text-white text-lg md:text-2xl font-bold">{quantity}</p>
+                  <div key={size} className="bg-slate-50 rounded-lg p-3 md:p-4 border border-slate-100">
+                    <p className="text-slate-500 text-xs md:text-sm mb-2">{size}</p>
+                    <p className="text-slate-900 text-lg md:text-2xl font-bold">{quantity}</p>
                   </div>
                 ))}
               </div>
@@ -2181,8 +2208,8 @@ export default function NorthernWaterSystemApp() {
 
             {/* Other Materials */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 md:gap-6">
-              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-                <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm">Seals</h3>
+              <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+                <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm">Seals</h3>
                 <div className="space-y-2 md:space-y-3">
                   {Object.entries(state.rawMaterials.seals).map(([type, qty]) => {
                     let label = type;
@@ -2190,71 +2217,71 @@ export default function NorthernWaterSystemApp() {
                     else if (type === '5L') label = '5L';
                     else if (type === '18.9L') label = '18.9L';
                     return (
-                      <div key={type} className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
-                        <p className="text-blue-300">{label}</p>
-                        <p className="text-white font-semibold">{qty}</p>
+                      <div key={type} className="flex justify-between items-center p-2 md:p-3 bg-slate-50 rounded-lg text-xs md:text-sm">
+                        <p className="text-slate-500">{label}</p>
+                        <p className="text-slate-900 font-semibold">{qty}</p>
                       </div>
                     );
                   })}
                 </div>
               </div>
 
-              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-                <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm">Labels</h3>
+              <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+                <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm">Labels</h3>
                 <div className="space-y-2 md:space-y-3">
                   {Object.entries(state.rawMaterials.labels).map(([size, qty]) => (
-                    <div key={size} className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
-                      <p className="text-blue-300">{size}</p>
-                      <p className="text-white font-semibold">{qty}</p>
+                    <div key={size} className="flex justify-between items-center p-2 md:p-3 bg-slate-50 rounded-lg text-xs md:text-sm">
+                      <p className="text-slate-500">{size}</p>
+                      <p className="text-slate-900 font-semibold">{qty}</p>
                     </div>
                   ))}
                 </div>
               </div>
 
-              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-                <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm">Caps</h3>
+              <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+                <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm">Caps</h3>
                 <div className="space-y-2 md:space-y-3">
                   {Object.entries(state.rawMaterials.caps || {}).map(([size, qty]) => (
-                    <div key={size} className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
-                      <p className="text-blue-300">{size}</p>
-                      <p className="text-white font-semibold">{qty}</p>
+                    <div key={size} className="flex justify-between items-center p-2 md:p-3 bg-slate-50 rounded-lg text-xs md:text-sm">
+                      <p className="text-slate-500">{size}</p>
+                      <p className="text-slate-900 font-semibold">{qty}</p>
                     </div>
                   ))}
                 </div>
               </div>
 
-              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-                <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm">Overwraps by Size</h3>
+              <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+                <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm">Overwraps by Size</h3>
                 <div className="space-y-2 md:space-y-3">
-                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
-                    <p className="text-blue-300">0.5L Cartons</p>
-                    <p className="text-white font-semibold">{state.rawMaterials.overwraps['0.5L']}</p>
+                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-50 rounded-lg text-xs md:text-sm">
+                    <p className="text-slate-500">0.5L Cartons</p>
+                    <p className="text-slate-900 font-semibold">{state.rawMaterials.overwraps['0.5L']}</p>
                   </div>
-                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
-                    <p className="text-blue-300">1.5L Cartons</p>
-                    <p className="text-white font-semibold">{state.rawMaterials.overwraps['1.5L']}</p>
+                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-50 rounded-lg text-xs md:text-sm">
+                    <p className="text-slate-500">1.5L Cartons</p>
+                    <p className="text-slate-900 font-semibold">{state.rawMaterials.overwraps['1.5L']}</p>
                   </div>
-                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
-                    <p className="text-blue-300">5L Cartons</p>
-                    <p className="text-white font-semibold">{state.rawMaterials.overwraps['5L']}</p>
+                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-50 rounded-lg text-xs md:text-sm">
+                    <p className="text-slate-500">5L Cartons</p>
+                    <p className="text-slate-900 font-semibold">{state.rawMaterials.overwraps['5L']}</p>
                   </div>
-                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-700/50 rounded-lg text-xs md:text-sm border border-green-400/30 mt-2">
-                    <p className="text-green-300 font-semibold">Total Overwraps</p>
-                    <p className="text-green-400 font-bold">{Object.values(state.rawMaterials.overwraps).reduce((a, b) => a + b, 0)}</p>
+                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-50 rounded-lg text-xs md:text-sm border border-emerald-200 mt-2">
+                    <p className="text-emerald-600 font-semibold">Total Overwraps</p>
+                    <p className="text-emerald-600 font-bold">{Object.values(state.rawMaterials.overwraps).reduce((a, b) => a + b, 0)}</p>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-                <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm">Other Materials</h3>
+              <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+                <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm">Other Materials</h3>
                 <div className="space-y-2 md:space-y-3">
-                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
-                    <p className="text-blue-300">KRA Stamps</p>
-                    <p className="text-white font-semibold">{state.rawMaterials.kraStamps}</p>
+                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-50 rounded-lg text-xs md:text-sm">
+                    <p className="text-slate-500">KRA Stamps</p>
+                    <p className="text-slate-900 font-semibold">{state.rawMaterials.kraStamps}</p>
                   </div>
-                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-700/30 rounded-lg text-xs md:text-sm">
-                    <p className="text-blue-300">RO Chemical</p>
-                    <p className="text-white font-semibold">{state.rawMaterials.roChemical.toFixed(1)}L</p>
+                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-50 rounded-lg text-xs md:text-sm">
+                    <p className="text-slate-500">RO Chemical</p>
+                    <p className="text-slate-900 font-semibold">{state.rawMaterials.roChemical.toFixed(1)}L</p>
                   </div>
                 </div>
               </div>
@@ -2265,7 +2292,7 @@ export default function NorthernWaterSystemApp() {
         {/* Reports Tab */}
         {activeTab === 'reports' && (
           <div className="space-y-4 md:space-y-6">
-            <h2 className="text-xl md:text-2xl font-bold text-white">Reports</h2>
+            <h2 className="text-xl md:text-2xl font-bold text-slate-900">Reports</h2>
 
             {/* Report Selection */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
@@ -2281,55 +2308,55 @@ export default function NorthernWaterSystemApp() {
                   onClick={() => handleGenerateReport(report.id)}
                   className={`p-3 md:p-4 rounded-lg md:rounded-xl border-2 transition text-sm md:text-base ${
                     reportType === report.id
-                      ? 'border-cyan-400 bg-cyan-500/20'
-                      : 'border-blue-400/30 bg-slate-800/30 hover:border-cyan-400'
+                      ? 'border-cyan-400 bg-sky-500/20'
+                      : 'border-slate-300 bg-white hover:border-cyan-400'
                   }`}
                 >
                   <p className="text-xl md:text-2xl mb-1 md:mb-2">{report.icon}</p>
-                  <p className={`font-semibold ${reportType === report.id ? 'text-cyan-300' : 'text-blue-300'}`}>{report.label}</p>
+                  <p className={`font-semibold ${reportType === report.id ? 'text-sky-600' : 'text-slate-500'}`}>{report.label}</p>
                 </button>
               ))}
             </div>
 
             {/* Date Range — applies to all event-based reports */}
             {(reportType === 'sales' || reportType === 'cash' || reportType === 'expense' || reportType === 'profitloss') && (
-              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-3 md:p-4">
+              <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-3 md:p-4">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
                   <div>
-                    <label className="text-blue-300 text-xs md:text-sm block mb-1 md:mb-2">Start Date</label>
+                    <label className="text-slate-500 text-xs md:text-sm block mb-1 md:mb-2">Start Date</label>
                     <input
                       type="date"
                       value={dateRange.start}
                       onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-2 md:px-4 py-1 md:py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-2 md:px-4 py-1 md:py-2 text-sm"
                     />
                   </div>
                   <div>
-                    <label className="text-blue-300 text-xs md:text-sm block mb-1 md:mb-2">End Date</label>
+                    <label className="text-slate-500 text-xs md:text-sm block mb-1 md:mb-2">End Date</label>
                     <input
                       type="date"
                       value={dateRange.end}
                       onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-2 md:px-4 py-1 md:py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-2 md:px-4 py-1 md:py-2 text-sm"
                     />
                   </div>
                   <div className="flex items-end gap-2">
                     <button
                       onClick={() => handleGenerateReport(reportType)}
-                      className="flex-1 bg-cyan-500 hover:bg-cyan-600 text-white px-2 md:px-4 py-1 md:py-2 rounded-lg transition text-sm"
+                      className="flex-1 bg-sky-500 hover:bg-sky-600 text-slate-900 px-2 md:px-4 py-1 md:py-2 rounded-lg transition text-sm"
                     >
                       Generate
                     </button>
                     <button
                       onClick={() => { setDateRange({ start: '', end: '' }); setTimeout(() => handleGenerateReport(reportType), 0); }}
-                      className="bg-slate-600 hover:bg-slate-500 text-white px-2 md:px-3 py-1 md:py-2 rounded-lg transition text-xs"
+                      className="bg-slate-600 hover:bg-slate-500 text-slate-900 px-2 md:px-3 py-1 md:py-2 rounded-lg transition text-xs"
                       title="Clear dates (show all time)"
                     >
                       All Time
                     </button>
                   </div>
                 </div>
-                <p className="text-slate-400 text-xs mt-2">
+                <p className="text-slate-500 text-xs mt-2">
                   {dateRange.start && dateRange.end ? `Showing: ${dateRange.start} to ${dateRange.end}` : 'Showing: All Time (set dates to filter)'}
                 </p>
               </div>
@@ -2337,15 +2364,15 @@ export default function NorthernWaterSystemApp() {
 
             {/* Report Display */}
             {reportData && (
-              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+              <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 mb-4 md:mb-6">
                   <div>
-                    <h3 className="text-white font-semibold text-base md:text-xl">{reportData.title}</h3>
-                    <p className="text-blue-300 text-xs md:text-sm">Generated: {reportData.date}</p>
+                    <h3 className="text-slate-900 font-semibold text-base md:text-xl">{reportData.title}</h3>
+                    <p className="text-slate-500 text-xs md:text-sm">Generated: {reportData.date}</p>
                   </div>
                   <button
                     onClick={downloadReportAsPDF}
-                    className="flex items-center gap-2 bg-cyan-500 hover:bg-cyan-600 text-white px-3 md:px-4 py-2 rounded-lg transition text-sm w-full md:w-auto justify-center"
+                    className="flex items-center gap-2 bg-sky-500 hover:bg-sky-600 text-slate-900 px-3 md:px-4 py-2 rounded-lg transition text-sm w-full md:w-auto justify-center"
                   >
                     <Download className="w-4 h-4" /> Save as PDF
                   </button>
@@ -2354,24 +2381,24 @@ export default function NorthernWaterSystemApp() {
                 {/* Aging Debtors Report */}
                 {reportType === 'aging' && (
                   <div className="space-y-3">
-                    <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 md:p-4 mb-4">
-                      <p className="text-red-300 text-xs md:text-sm">Total Outstanding Debt</p>
-                      <p className="text-white text-2xl md:text-3xl font-bold">KES {reportData.total.toLocaleString()}</p>
+                    <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 md:p-4 mb-4">
+                      <p className="text-rose-600 text-xs md:text-sm">Total Outstanding Debt</p>
+                      <p className="text-slate-900 text-2xl md:text-3xl font-bold">KES {reportData.total.toLocaleString()}</p>
                     </div>
                     {reportData.data.length === 0 ? (
-                      <p className="text-blue-300 text-center py-4 md:py-8 text-sm">No debtors</p>
+                      <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No debtors</p>
                     ) : (
                       <div className="space-y-2 md:space-y-3">
                         {reportData.data.map((debtor, i) => (
-                          <div key={i} className="p-3 md:p-4 bg-slate-700/30 rounded-lg border-l-4 border-red-500 text-xs md:text-sm">
+                          <div key={i} className="p-3 md:p-4 bg-slate-50 rounded-lg border-l-4 border-red-500 text-xs md:text-sm">
                             <div className="flex justify-between items-start gap-2 mb-2">
                               <div>
-                                <p className="text-white font-semibold">{debtor.name}</p>
-                                <p className="text-blue-300 text-xs">{debtor.location}</p>
+                                <p className="text-slate-900 font-semibold">{debtor.name}</p>
+                                <p className="text-slate-500 text-xs">{debtor.location}</p>
                               </div>
-                              <p className="text-red-400 font-semibold">KES {debtor.debt.toLocaleString()}</p>
+                              <p className="text-rose-600 font-semibold">KES {debtor.debt.toLocaleString()}</p>
                             </div>
-                            <div className="flex justify-between text-xs text-slate-400">
+                            <div className="flex justify-between text-xs text-slate-500">
                               <span>Ph: {debtor.phone}</span>
                               <span>{debtor.daysOverdue}d overdue</span>
                             </div>
@@ -2386,36 +2413,36 @@ export default function NorthernWaterSystemApp() {
                 {reportType === 'sales' && (
                   <div className="space-y-4 md:space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
-                      <div className="bg-green-500/20 border border-green-500/50 rounded-lg p-3 md:p-4">
-                        <p className="text-green-300 text-xs md:text-sm">Total Sales</p>
-                        <p className="text-white text-xl md:text-2xl font-bold">KES {reportData.totalSales.toLocaleString()}</p>
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 md:p-4">
+                        <p className="text-emerald-600 text-xs md:text-sm">Total Sales</p>
+                        <p className="text-slate-900 text-xl md:text-2xl font-bold">KES {reportData.totalSales.toLocaleString()}</p>
                       </div>
-                      <div className="bg-blue-500/20 border border-blue-500/50 rounded-lg p-3 md:p-4">
-                        <p className="text-blue-300 text-xs md:text-sm">Transactions</p>
-                        <p className="text-white text-xl md:text-2xl font-bold">{reportData.totalTransactions}</p>
+                      <div className="bg-sky-50 border border-slate-200 rounded-lg p-3 md:p-4">
+                        <p className="text-slate-500 text-xs md:text-sm">Transactions</p>
+                        <p className="text-slate-900 text-xl md:text-2xl font-bold">{reportData.totalTransactions}</p>
                       </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-6">
                       <div>
-                        <h4 className="text-white font-semibold mb-2 md:mb-3 text-sm">Sales Revenue by Location</h4>
+                        <h4 className="text-slate-900 font-semibold mb-2 md:mb-3 text-sm">Sales Revenue by Location</h4>
                         <div className="space-y-1 md:space-y-2">
                           {Object.entries(reportData.salesByLocation).map(([location, amount]) => (
-                            <div key={location} className="flex justify-between p-2 bg-slate-700/30 rounded text-xs md:text-sm">
-                              <p className="text-blue-300">{location}</p>
-                              <p className="text-white font-semibold">KES {amount.toLocaleString()}</p>
+                            <div key={location} className="flex justify-between p-2 bg-slate-50 rounded text-xs md:text-sm">
+                              <p className="text-slate-500">{location}</p>
+                              <p className="text-slate-900 font-semibold">KES {amount.toLocaleString()}</p>
                             </div>
                           ))}
                         </div>
                       </div>
 
                       <div>
-                        <h4 className="text-white font-semibold mb-2 md:mb-3 text-sm">Total Cartons by Size</h4>
+                        <h4 className="text-slate-900 font-semibold mb-2 md:mb-3 text-sm">Total Cartons by Size</h4>
                         <div className="space-y-1 md:space-y-2">
                           {Object.entries(reportData.salesBySize).map(([size, qty]) => (
-                            <div key={size} className="flex justify-between p-2 bg-slate-700/30 rounded text-xs md:text-sm">
-                              <p className="text-blue-300">{SIZE_LABELS[size] || size}</p>
-                              <p className="text-white font-semibold">{qty} cartons</p>
+                            <div key={size} className="flex justify-between p-2 bg-slate-50 rounded text-xs md:text-sm">
+                              <p className="text-slate-500">{SIZE_LABELS[size] || size}</p>
+                              <p className="text-slate-900 font-semibold">{qty} cartons</p>
                             </div>
                           ))}
                         </div>
@@ -2423,17 +2450,17 @@ export default function NorthernWaterSystemApp() {
                     </div>
 
                     {/* Cartons by Location and Size */}
-                    <div className="bg-slate-700/30 rounded-lg p-4 border border-blue-400/20">
-                      <h4 className="text-white font-semibold mb-4 text-base">📊 Carton Sales by Location & Size</h4>
+                    <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+                      <h4 className="text-slate-900 font-semibold mb-4 text-base">📊 Carton Sales by Location & Size</h4>
                       <div className="space-y-4">
                         {Object.entries(reportData.bottlesByLocationAndSize).map(([location, cartons]) => (
-                          <div key={location} className="bg-slate-800/50 rounded-lg p-3 border border-blue-400/10">
-                            <p className="text-cyan-400 font-bold text-sm mb-2">{location}</p>
+                          <div key={location} className="bg-white rounded-lg p-3 border border-slate-100">
+                            <p className="text-sky-600 font-bold text-sm mb-2">{location}</p>
                             <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                               {Object.entries(cartons).map(([size, qty]) => (
-                                <div key={`${location}-${size}`} className="bg-slate-700/50 p-2 rounded text-xs text-center">
-                                  <p className="text-blue-300 font-semibold">{SIZE_LABELS[size] || size}</p>
-                                  <p className="text-white font-bold">{qty} cartons</p>
+                                <div key={`${location}-${size}`} className="bg-slate-50 p-2 rounded text-xs text-center">
+                                  <p className="text-slate-500 font-semibold">{SIZE_LABELS[size] || size}</p>
+                                  <p className="text-slate-900 font-bold">{qty} cartons</p>
                                 </div>
                               ))}
                             </div>
@@ -2448,41 +2475,41 @@ export default function NorthernWaterSystemApp() {
                 {reportType === 'cash' && (
                   <div className="space-y-3 md:space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      <div className="bg-green-500/20 border border-green-500/50 rounded-lg p-3 md:p-4">
-                        <p className="text-green-300 text-xs">Cash Sales Collected</p>
-                        <p className="text-white text-lg md:text-xl font-bold">KES {reportData.cashSalesTotal.toLocaleString()}</p>
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 md:p-4">
+                        <p className="text-emerald-600 text-xs">Cash Sales Collected</p>
+                        <p className="text-slate-900 text-lg md:text-xl font-bold">KES {reportData.cashSalesTotal.toLocaleString()}</p>
                       </div>
-                      <div className="bg-cyan-500/20 border border-cyan-500/50 rounded-lg p-3 md:p-4">
-                        <p className="text-cyan-300 text-xs">Debt Payments Collected</p>
-                        <p className="text-white text-lg md:text-xl font-bold">KES {reportData.debtPaymentsTotal.toLocaleString()}</p>
+                      <div className="bg-sky-500/20 border border-sky-200 rounded-lg p-3 md:p-4">
+                        <p className="text-sky-600 text-xs">Debt Payments Collected</p>
+                        <p className="text-slate-900 text-lg md:text-xl font-bold">KES {reportData.debtPaymentsTotal.toLocaleString()}</p>
                       </div>
                       <div className="bg-gradient-to-br from-green-500 to-emerald-600 rounded-lg p-3 md:p-4">
                         <p className="text-white/80 text-xs">Total Collected</p>
                         <p className="text-white text-lg md:text-xl font-bold">KES {reportData.totalCollected.toLocaleString()}</p>
                       </div>
                     </div>
-                    <p className="text-blue-300 text-xs">Period: {reportData.period}</p>
+                    <p className="text-slate-500 text-xs">Period: {reportData.period}</p>
 
-                    <div className="bg-slate-700/30 rounded-lg p-3 md:p-4">
-                      <h4 className="text-white font-semibold mb-2 text-sm">Cash Sales (paid at point of sale)</h4>
+                    <div className="bg-slate-50 rounded-lg p-3 md:p-4">
+                      <h4 className="text-slate-900 font-semibold mb-2 text-sm">Cash Sales (paid at point of sale)</h4>
                       {reportData.cashSalesList.length === 0 ? (
-                        <p className="text-slate-400 text-xs py-2">None in this period</p>
+                        <p className="text-slate-500 text-xs py-2">None in this period</p>
                       ) : reportData.cashSalesList.map((c, i) => (
-                        <div key={i} className="flex justify-between text-xs py-1 border-b border-blue-400/10">
-                          <span className="text-blue-200">{c.date} · {c.invoice} · {c.customer}</span>
-                          <span className="text-green-300">KES {c.amount.toLocaleString()}</span>
+                        <div key={i} className="flex justify-between text-xs py-1 border-b border-slate-100">
+                          <span className="text-slate-600">{c.date} · {c.invoice} · {c.customer}</span>
+                          <span className="text-emerald-600">KES {c.amount.toLocaleString()}</span>
                         </div>
                       ))}
                     </div>
 
-                    <div className="bg-slate-700/30 rounded-lg p-3 md:p-4">
-                      <h4 className="text-white font-semibold mb-2 text-sm">Debt Payments Received</h4>
+                    <div className="bg-slate-50 rounded-lg p-3 md:p-4">
+                      <h4 className="text-slate-900 font-semibold mb-2 text-sm">Debt Payments Received</h4>
                       {reportData.debtPaymentsList.length === 0 ? (
-                        <p className="text-slate-400 text-xs py-2">None in this period</p>
+                        <p className="text-slate-500 text-xs py-2">None in this period</p>
                       ) : reportData.debtPaymentsList.map((p, i) => (
-                        <div key={i} className="flex justify-between text-xs py-1 border-b border-blue-400/10">
-                          <span className="text-blue-200">{p.date} · {p.customer}{p.method ? ` · ${p.method}` : ''}</span>
-                          <span className="text-cyan-300">KES {p.amount.toLocaleString()}</span>
+                        <div key={i} className="flex justify-between text-xs py-1 border-b border-slate-100">
+                          <span className="text-slate-600">{p.date} · {p.customer}{p.method ? ` · ${p.method}` : ''}</span>
+                          <span className="text-sky-600">KES {p.amount.toLocaleString()}</span>
                         </div>
                       ))}
                     </div>
@@ -2492,15 +2519,15 @@ export default function NorthernWaterSystemApp() {
                 {/* Expense Report */}
                 {reportType === 'expense' && (
                   <div className="space-y-2 md:space-y-3">
-                    <div className="bg-orange-500/20 border border-orange-500/50 rounded-lg p-3 md:p-4 mb-4">
-                      <p className="text-orange-300 text-xs md:text-sm">Total Expenses</p>
-                      <p className="text-white text-2xl md:text-3xl font-bold">KES {reportData.totalExpenses.toLocaleString()}</p>
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 md:p-4 mb-4">
+                      <p className="text-amber-600 text-xs md:text-sm">Total Expenses</p>
+                      <p className="text-slate-900 text-2xl md:text-3xl font-bold">KES {reportData.totalExpenses.toLocaleString()}</p>
                     </div>
-                    <h4 className="text-white font-semibold text-sm">By Category:</h4>
+                    <h4 className="text-slate-900 font-semibold text-sm">By Category:</h4>
                     {Object.entries(reportData.byCategory).map(([category, amount]) => (
-                      <div key={category} className="flex justify-between items-center p-3 md:p-4 bg-slate-700/30 rounded-lg text-xs md:text-sm">
-                        <p className="text-blue-300">{category}</p>
-                        <p className="text-white font-semibold">KES {amount.toLocaleString()}</p>
+                      <div key={category} className="flex justify-between items-center p-3 md:p-4 bg-slate-50 rounded-lg text-xs md:text-sm">
+                        <p className="text-slate-500">{category}</p>
+                        <p className="text-slate-900 font-semibold">KES {amount.toLocaleString()}</p>
                       </div>
                     ))}
                   </div>
@@ -2509,52 +2536,52 @@ export default function NorthernWaterSystemApp() {
                 {/* P&L Report */}
                 {reportType === 'profitloss' && (
                   <div className="space-y-3 md:space-y-4">
-                    <p className="text-blue-300 text-xs">Period: {reportData.period}</p>
+                    <p className="text-slate-500 text-xs">Period: {reportData.period}</p>
 
                     {/* Revenue → COGS → Gross Profit */}
-                    <div className="bg-slate-700/30 rounded-lg p-3 md:p-4 space-y-2">
+                    <div className="bg-slate-50 rounded-lg p-3 md:p-4 space-y-2">
                       <div className="flex justify-between text-sm">
-                        <span className="text-blue-300">Sales Revenue</span>
-                        <span className="text-white font-semibold">KES {reportData.revenue.toLocaleString()}</span>
+                        <span className="text-slate-500">Sales Revenue</span>
+                        <span className="text-slate-900 font-semibold">KES {reportData.revenue.toLocaleString()}</span>
                       </div>
                       <div className="flex justify-between text-sm">
-                        <span className="text-blue-300">Less: Cost of Goods Sold</span>
-                        <span className="text-red-300">− KES {reportData.cogs.toLocaleString()}</span>
+                        <span className="text-slate-500">Less: Cost of Goods Sold</span>
+                        <span className="text-rose-600">− KES {reportData.cogs.toLocaleString()}</span>
                       </div>
-                      <div className="flex justify-between text-sm pt-2 border-t border-blue-400/20">
-                        <span className="text-green-300 font-semibold">Gross Profit</span>
-                        <span className="text-green-300 font-bold">KES {reportData.grossProfit.toLocaleString()}</span>
+                      <div className="flex justify-between text-sm pt-2 border-t border-slate-200">
+                        <span className="text-emerald-600 font-semibold">Gross Profit</span>
+                        <span className="text-emerald-600 font-bold">KES {reportData.grossProfit.toLocaleString()}</span>
                       </div>
-                      <p className="text-xs text-slate-400 text-right">Gross margin: {reportData.grossMargin}%</p>
+                      <p className="text-xs text-slate-500 text-right">Gross margin: {reportData.grossMargin}%</p>
                     </div>
 
                     {/* Operating expenses */}
-                    <div className="bg-slate-700/30 rounded-lg p-3 md:p-4 space-y-2">
+                    <div className="bg-slate-50 rounded-lg p-3 md:p-4 space-y-2">
                       <div className="flex justify-between text-sm">
-                        <span className="text-blue-300 font-semibold">Operating Expenses</span>
-                        <span className="text-red-300">− KES {reportData.operatingExpenses.toLocaleString()}</span>
+                        <span className="text-slate-500 font-semibold">Operating Expenses</span>
+                        <span className="text-rose-600">− KES {reportData.operatingExpenses.toLocaleString()}</span>
                       </div>
                       {Object.entries(reportData.operatingBreakdown).map(([k, v]) => (
                         <div key={k} className="flex justify-between text-xs pl-3">
-                          <span className="text-slate-400">{k}</span>
-                          <span className="text-slate-300">KES {v.toLocaleString()}</span>
+                          <span className="text-slate-500">{k}</span>
+                          <span className="text-slate-600">KES {v.toLocaleString()}</span>
                         </div>
                       ))}
                       {Object.keys(reportData.operatingBreakdown).length === 0 && (
-                        <p className="text-slate-400 text-xs pl-3">No operating expenses in period</p>
+                        <p className="text-slate-500 text-xs pl-3">No operating expenses in period</p>
                       )}
                     </div>
 
                     {/* Net Profit */}
-                    <div className={`border-2 rounded-lg p-3 md:p-4 ${reportData.netProfit >= 0 ? 'border-green-500/50 bg-green-500/20' : 'border-red-500/50 bg-red-500/20'}`}>
-                      <p className={reportData.netProfit >= 0 ? 'text-green-300' : 'text-red-300'}>Net Profit</p>
-                      <p className={`text-2xl md:text-3xl font-bold ${reportData.netProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    <div className={`border-2 rounded-lg p-3 md:p-4 ${reportData.netProfit >= 0 ? 'border-emerald-200 bg-emerald-50' : 'border-rose-200 bg-rose-50'}`}>
+                      <p className={reportData.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}>Net Profit</p>
+                      <p className={`text-2xl md:text-3xl font-bold ${reportData.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                         KES {reportData.netProfit.toLocaleString()}
                       </p>
                       <p className="text-xs mt-2">Net margin: {reportData.netMargin}%</p>
                     </div>
 
-                    <p className="text-slate-400 text-xs">Note: COGS is based on cartons sold × cost per carton (which includes casual labour). Raw material purchases and casual/overtime pay are not counted again as operating expenses.</p>
+                    <p className="text-slate-500 text-xs">Note: COGS is based on cartons sold × cost per carton (which includes casual labour). Raw material purchases and casual/overtime pay are not counted again as operating expenses.</p>
                   </div>
                 )}
               </div>
@@ -2566,23 +2593,23 @@ export default function NorthernWaterSystemApp() {
         {activeTab === 'production' && (
           <div className="space-y-4 md:space-y-6">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
-              <h2 className="text-xl md:text-2xl font-bold text-white">Production</h2>
+              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Production</h2>
               <button
                 onClick={handleAddProduction}
-                className="w-full md:w-auto bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-slate-900 px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
                 <Plus className="w-4 h-4" /> New
               </button>
             </div>
 
             {/* Finished Goods */}
-            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-              <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">Finished Goods</h3>
+            <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm md:text-base">Finished Goods</h3>
               <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-4">
                 {Object.entries(state.finishedGoods).map(([size, data]) => (
-                  <div key={size} className="bg-gradient-to-br from-slate-700 to-slate-800 rounded-lg p-3 md:p-4 border border-green-400/20">
-                    <p className="text-green-300 text-xs md:text-sm mb-2">{size}</p>
-                    <p className="text-white text-lg md:text-2xl font-bold">{data.quantity}</p>
+                  <div key={size} className="bg-slate-50 border border-slate-200 rounded-lg p-3 md:p-4">
+                    <p className="text-slate-500 text-xs md:text-sm mb-2">{SIZE_LABELS[size] || size}</p>
+                    <p className="text-slate-900 text-lg md:text-2xl font-bold">{data.quantity}</p>
                     <p className="text-slate-400 text-xs mt-2">{data.quantity * data.bottlesPerCarton} btls</p>
                   </div>
                 ))}
@@ -2590,37 +2617,37 @@ export default function NorthernWaterSystemApp() {
             </div>
 
             {/* Production History */}
-            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-              <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">History</h3>
+            <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm md:text-base">History</h3>
               <div className="space-y-2 md:space-y-3 max-h-96 overflow-y-auto">
                 {state.productionLogs.length === 0 ? (
-                  <p className="text-blue-300 text-center py-4 md:py-8 text-sm">No logs</p>
+                  <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No logs</p>
                 ) : (
                   state.productionLogs.slice().reverse().map(log => (
-                    <div key={log.id} className="p-3 md:p-4 bg-slate-700/30 rounded-lg border border-blue-400/10">
+                    <div key={log.id} className="p-3 md:p-4 bg-slate-50 rounded-lg border border-slate-100">
                       <div className="flex justify-between items-start mb-2">
                         <div>
-                          <p className="text-white font-semibold text-sm">Prod #{log.id}</p>
-                          <p className="text-blue-300 text-xs">{log.date}</p>
+                          <p className="text-slate-900 font-semibold text-sm">Prod #{log.id}</p>
+                          <p className="text-slate-500 text-xs">{log.date}</p>
                         </div>
-                        <span className="bg-purple-500/30 text-purple-300 px-2 py-1 rounded text-xs">
+                        <span className="bg-sky-50 text-sky-700 border border-sky-200 px-2 py-1 rounded text-xs">
                           {log.unit}
                         </span>
                       </div>
                       <div className="grid grid-cols-2 md:grid-cols-5 gap-1 text-xs mb-2">
                         {Object.entries(log.items).map(([size, qty]) => (
                           <div key={size}>
-                            <p className="text-slate-400">{size}</p>
-                            <p className="text-white font-semibold">{qty}</p>
+                            <p className="text-slate-500">{size}</p>
+                            <p className="text-slate-900 font-semibold">{qty}</p>
                           </div>
                         ))}
                       </div>
-                      {log.notes && <p className="text-blue-300 text-xs italic">{log.notes}</p>}
+                      {log.notes && <p className="text-slate-500 text-xs italic">{log.notes}</p>}
                       {(role === 'admin' || role === 'manager') && (
-                        <div className="flex justify-end pt-2 mt-2 border-t border-blue-400/10">
+                        <div className="flex justify-end pt-2 mt-2 border-t border-slate-100">
                           <button
                             onClick={() => handleDeleteProduction(log.id)}
-                            className="flex items-center gap-1 text-xs text-red-300 hover:text-red-200 hover:bg-red-500/20 px-2 py-1 rounded transition"
+                            className="flex items-center gap-1 text-xs text-rose-600 hover:text-red-200 hover:bg-rose-50 px-2 py-1 rounded transition"
                           >
                             <Trash2 className="w-3 h-3" /> Delete
                           </button>
@@ -2638,53 +2665,53 @@ export default function NorthernWaterSystemApp() {
         {activeTab === 'sales' && (
           <div className="space-y-4 md:space-y-6">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
-              <h2 className="text-xl md:text-2xl font-bold text-white">Sales</h2>
+              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Sales</h2>
               <button
                 onClick={handleAddSale}
-                className="w-full md:w-auto bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-slate-900 px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
                 <Plus className="w-4 h-4" /> New Sale
               </button>
             </div>
 
-            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-              <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">History</h3>
+            <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm md:text-base">History</h3>
               <div className="space-y-2 md:space-y-3 max-h-96 overflow-y-auto">
                 {visibleSales.length === 0 ? (
-                  <p className="text-blue-300 text-center py-4 md:py-8 text-sm">No sales</p>
+                  <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No sales</p>
                 ) : (
                   visibleSales.slice().reverse().map(sale => {
                     const customer = state.customers.find(c => c.id === sale.customerId);
                     return (
-                      <div key={sale.id} className="p-3 md:p-4 bg-slate-700/30 rounded-lg border border-blue-400/10">
+                      <div key={sale.id} className="p-3 md:p-4 bg-slate-50 rounded-lg border border-slate-100">
                         <div className="flex justify-between items-start gap-2 mb-2">
                           <div className="min-w-0">
                             <div className="flex items-center gap-2">
-                              <p className="text-white font-semibold text-sm truncate">{customer?.name}</p>
-                              <p className="text-slate-400 text-xs">{sale.invoiceNumber}</p>
+                              <p className="text-slate-900 font-semibold text-sm truncate">{customer?.name}</p>
+                              <p className="text-slate-500 text-xs">{sale.invoiceNumber}</p>
                             </div>
-                            <p className="text-blue-300 text-xs">{sale.date}</p>
+                            <p className="text-slate-500 text-xs">{sale.date}</p>
                           </div>
                           <div className="text-right flex-shrink-0">
-                            <p className="text-green-400 font-semibold text-sm">KES {sale.total.toLocaleString()}</p>
-                            <span className={`text-xs px-2 py-1 rounded block mt-1 ${sale.status === 'paid' ? 'bg-green-500/30 text-green-300' : sale.status === 'partial' ? 'bg-orange-500/30 text-orange-300' : 'bg-red-500/30 text-red-300'}`}>
+                            <p className="text-emerald-600 font-semibold text-sm">KES {sale.total.toLocaleString()}</p>
+                            <span className={`text-xs px-2 py-1 rounded block mt-1 ${sale.status === 'paid' ? 'bg-slate-100 text-emerald-600' : sale.status === 'partial' ? 'bg-orange-500/30 text-amber-600' : 'bg-red-500/30 text-rose-600'}`}>
                               {sale.status === 'paid' ? '✓' : sale.status === 'partial' ? '◐' : '○'}
                             </span>
                           </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-1 text-xs pt-2 border-t border-blue-400/10">
+                        <div className="grid grid-cols-2 gap-1 text-xs pt-2 border-t border-slate-100">
                           {sale.items.slice(0, 2).map((item, i) => (
                             <div key={i}>
-                              <p className="text-slate-400">{SIZE_LABELS[item.size] || item.size}</p>
-                              <p className="text-white">{item.quantity}×{item.price}</p>
+                              <p className="text-slate-500">{SIZE_LABELS[item.size] || item.size}</p>
+                              <p className="text-slate-900">{item.quantity}×{item.price}</p>
                             </div>
                           ))}
                         </div>
                         {(role === 'admin' || role === 'manager') && (
-                          <div className="flex justify-end pt-2 mt-2 border-t border-blue-400/10">
+                          <div className="flex justify-end pt-2 mt-2 border-t border-slate-100">
                             <button
                               onClick={() => handleDeleteSale(sale.id)}
-                              className="flex items-center gap-1 text-xs text-red-300 hover:text-red-200 hover:bg-red-500/20 px-2 py-1 rounded transition"
+                              className="flex items-center gap-1 text-xs text-rose-600 hover:text-red-200 hover:bg-rose-50 px-2 py-1 rounded transition"
                             >
                               <Trash2 className="w-3 h-3" /> Delete
                             </button>
@@ -2703,10 +2730,10 @@ export default function NorthernWaterSystemApp() {
         {activeTab === 'payments' && (
           <div className="space-y-4 md:space-y-6">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
-              <h2 className="text-xl md:text-2xl font-bold text-white">Payments & Debts</h2>
+              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Payments & Debts</h2>
               <button
                 onClick={handleAddPayment}
-                className="w-full md:w-auto bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-slate-900 px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
                 <Plus className="w-4 h-4" /> Record Payment
               </button>
@@ -2715,31 +2742,32 @@ export default function NorthernWaterSystemApp() {
             {/* Summary Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-6">
               {[
-                { label: 'Total Debt', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0).toLocaleString()}`, color: 'from-red-500 to-red-600' },
-                { label: 'Total Credits', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, c.balance), 0).toLocaleString()}`, color: 'from-green-500 to-green-600' },
-                { label: 'Total Received', value: `KES ${state.payments.reduce((sum, p) => sum + p.amount, 0).toLocaleString()}`, color: 'from-blue-500 to-blue-600' },
+                { label: 'Total Debt', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-rose-500', tab: 'debts' },
+                { label: 'Total Credits', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, c.balance), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-emerald-500' },
+                { label: 'Total Received', value: `KES ${state.payments.reduce((sum, p) => sum + p.amount, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-sky-500' },
               ].map((card, i) => (
                 <div 
                   key={i} 
-                  className={`bg-gradient-to-br ${card.color} rounded-lg md:rounded-xl p-3 md:p-6 text-white shadow-lg cursor-pointer transition hover:shadow-xl ${
-                    card.label === 'Total Debt' && paymentsTab === 'debts' ? 'ring-2 ring-yellow-300' : ''
+                  className={`relative overflow-hidden bg-white border border-slate-200 rounded-xl shadow-sm p-4 transition hover:border-sky-300 ${card.tab ? 'cursor-pointer' : ''} ${
+                    card.label === 'Total Debt' && paymentsTab === 'debts' ? 'ring-2 ring-sky-300' : ''
                   }`}
-                  onClick={() => card.label === 'Total Debt' && setPaymentsTab('debts')}
+                  onClick={() => card.tab && setPaymentsTab('debts')}
                 >
-                  <p className="text-xs md:text-sm opacity-90 mb-1 md:mb-2">{card.label}</p>
-                  <p className="text-lg md:text-3xl font-bold break-words">{card.value}</p>
+                  <div className={`absolute left-0 top-0 bottom-0 w-1 ${card.accent}`} />
+                  <p className="text-slate-500 text-xs mb-1 pl-1">{card.label}</p>
+                  <p className="text-slate-900 text-lg md:text-2xl font-bold pl-1 break-words">{card.value}</p>
                 </div>
               ))}
             </div>
 
             {/* Tab Navigation */}
-            <div className="bg-slate-800/30 border-b border-blue-400/20 rounded-t-lg flex gap-2 p-2">
+            <div className="bg-white border-b border-slate-200 rounded-t-lg flex gap-2 p-2">
               <button
                 onClick={() => setPaymentsTab('debts')}
                 className={`flex-1 py-2 px-4 rounded-t-lg transition text-sm font-semibold ${
                   paymentsTab === 'debts'
-                    ? 'bg-red-500/30 text-red-300 border-b-2 border-red-400'
-                    : 'text-blue-300 hover:text-white'
+                    ? 'bg-red-500/30 text-rose-600 border-b-2 border-red-400'
+                    : 'text-slate-500 hover:text-slate-900'
                 }`}
               >
                 💰 Outstanding Debts
@@ -2748,8 +2776,8 @@ export default function NorthernWaterSystemApp() {
                 onClick={() => setPaymentsTab('history')}
                 className={`flex-1 py-2 px-4 rounded-t-lg transition text-sm font-semibold ${
                   paymentsTab === 'history'
-                    ? 'bg-cyan-500/30 text-cyan-300 border-b-2 border-cyan-400'
-                    : 'text-blue-300 hover:text-white'
+                    ? 'bg-sky-500/30 text-sky-600 border-b-2 border-cyan-400'
+                    : 'text-slate-500 hover:text-slate-900'
                 }`}
               >
                 📋 Payment History
@@ -2758,8 +2786,8 @@ export default function NorthernWaterSystemApp() {
                 onClick={() => setPaymentsTab('accounts')}
                 className={`flex-1 py-2 px-4 rounded-t-lg transition text-sm font-semibold ${
                   paymentsTab === 'accounts'
-                    ? 'bg-green-500/30 text-green-300 border-b-2 border-green-400'
-                    : 'text-blue-300 hover:text-white'
+                    ? 'bg-slate-100 text-emerald-600 border-b-2 border-green-400'
+                    : 'text-slate-500 hover:text-slate-900'
                 }`}
               >
                 👥 All Accounts
@@ -2768,13 +2796,13 @@ export default function NorthernWaterSystemApp() {
 
             {/* Outstanding Debts Tab */}
             {paymentsTab === 'debts' && (
-              <div className="bg-slate-800/30 border border-blue-400/20 rounded-b-lg rounded-tr-lg p-4 md:p-6">
-                <h3 className="text-white font-semibold mb-4 text-base">Customers with Outstanding Debts</h3>
+              <div className="bg-white border border-slate-200 rounded-b-lg rounded-tr-lg p-4 md:p-6">
+                <h3 className="text-slate-900 font-semibold mb-4 text-base">Customers with Outstanding Debts</h3>
                 <div className="space-y-3">
                   {state.customers.filter(c => c.balance < 0).length === 0 ? (
                     <div className="text-center py-8">
-                      <p className="text-green-400 text-lg font-semibold">✓ No Outstanding Debts!</p>
-                      <p className="text-blue-300 text-sm mt-2">All customers are up to date</p>
+                      <p className="text-emerald-600 text-lg font-semibold">✓ No Outstanding Debts!</p>
+                      <p className="text-slate-500 text-sm mt-2">All customers are up to date</p>
                     </div>
                   ) : (
                     state.customers
@@ -2786,36 +2814,36 @@ export default function NorthernWaterSystemApp() {
                         const lastSale = sales.length > 0 ? sales[sales.length - 1] : null;
                         
                         return (
-                          <div key={customer.id} className="p-4 bg-red-900/20 border-2 border-red-500/50 rounded-lg">
+                          <div key={customer.id} className="p-4 bg-red-900/20 border-2 border-rose-200 rounded-lg">
                             {/* Customer Header */}
                             <div className="flex justify-between items-start mb-3">
                               <div className="flex-1">
-                                <p className="text-white text-lg font-bold">{customer.name}</p>
-                                <p className="text-red-300 text-sm">{customer.location}</p>
+                                <p className="text-slate-900 text-lg font-bold">{customer.name}</p>
+                                <p className="text-rose-600 text-sm">{customer.location}</p>
                               </div>
                               <div className="text-right">
-                                <p className="text-red-400 text-2xl font-bold">KES {debt.toLocaleString()}</p>
-                                <p className="text-red-300 text-xs">Outstanding</p>
+                                <p className="text-rose-600 text-2xl font-bold">KES {debt.toLocaleString()}</p>
+                                <p className="text-rose-600 text-xs">Outstanding</p>
                               </div>
                             </div>
 
                             {/* Customer Details */}
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 py-3 border-t border-b border-red-500/30">
                               <div>
-                                <p className="text-slate-400 text-xs">Phone</p>
-                                <p className="text-white font-semibold text-sm">{customer.phone}</p>
+                                <p className="text-slate-500 text-xs">Phone</p>
+                                <p className="text-slate-900 font-semibold text-sm">{customer.phone}</p>
                               </div>
                               <div>
-                                <p className="text-slate-400 text-xs">Unpaid Invoices</p>
-                                <p className="text-white font-semibold text-sm">{sales.length}</p>
+                                <p className="text-slate-500 text-xs">Unpaid Invoices</p>
+                                <p className="text-slate-900 font-semibold text-sm">{sales.length}</p>
                               </div>
                               <div>
-                                <p className="text-slate-400 text-xs">Last Sale Date</p>
-                                <p className="text-white font-semibold text-sm">{lastSale?.date || 'N/A'}</p>
+                                <p className="text-slate-500 text-xs">Last Sale Date</p>
+                                <p className="text-slate-900 font-semibold text-sm">{lastSale?.date || 'N/A'}</p>
                               </div>
                               <div>
-                                <p className="text-slate-400 text-xs">Status</p>
-                                <p className={`font-semibold text-sm ${customer.isActive ? 'text-green-400' : 'text-orange-400'}`}>
+                                <p className="text-slate-500 text-xs">Status</p>
+                                <p className={`font-semibold text-sm ${customer.isActive ? 'text-emerald-600' : 'text-amber-600'}`}>
                                   {customer.isActive ? 'Active' : 'Inactive'}
                                 </p>
                               </div>
@@ -2824,12 +2852,12 @@ export default function NorthernWaterSystemApp() {
                             {/* Unpaid Invoices */}
                             {sales.length > 0 && (
                               <div className="mt-3 pt-3 border-t border-red-500/30">
-                                <p className="text-red-300 font-semibold text-sm mb-2">Unpaid Invoices:</p>
+                                <p className="text-rose-600 font-semibold text-sm mb-2">Unpaid Invoices:</p>
                                 <div className="space-y-1">
                                   {sales.map((sale) => (
-                                    <div key={sale.id} className="flex justify-between text-xs bg-slate-700/50 p-2 rounded">
-                                      <span className="text-white">{sale.invoiceNumber} • {sale.date}</span>
-                                      <span className="text-red-300 font-semibold">KES {(sale.total - sale.paid).toLocaleString()}</span>
+                                    <div key={sale.id} className="flex justify-between text-xs bg-slate-50 p-2 rounded">
+                                      <span className="text-slate-900">{sale.invoiceNumber} • {sale.date}</span>
+                                      <span className="text-rose-600 font-semibold">KES {(sale.total - sale.paid).toLocaleString()}</span>
                                     </div>
                                   ))}
                                 </div>
@@ -2839,7 +2867,7 @@ export default function NorthernWaterSystemApp() {
                             {/* Action Button */}
                             <button
                               onClick={handleAddPayment}
-                              className="mt-3 w-full bg-green-500/30 hover:bg-green-500/50 border border-green-500/50 text-green-300 py-2 px-3 rounded-lg transition text-sm font-semibold"
+                              className="mt-3 w-full bg-slate-100 hover:bg-green-500/50 border border-emerald-200 text-emerald-600 py-2 px-3 rounded-lg transition text-sm font-semibold"
                             >
                               Record Payment
                             </button>
@@ -2853,28 +2881,28 @@ export default function NorthernWaterSystemApp() {
 
             {/* Payment History Tab */}
             {paymentsTab === 'history' && (
-              <div className="bg-slate-800/30 border border-blue-400/20 rounded-b-lg rounded-tr-lg p-4 md:p-6">
-                <h3 className="text-white font-semibold mb-4 text-base">Payment History</h3>
+              <div className="bg-white border border-slate-200 rounded-b-lg rounded-tr-lg p-4 md:p-6">
+                <h3 className="text-slate-900 font-semibold mb-4 text-base">Payment History</h3>
                 <div className="space-y-2 md:space-y-3 max-h-96 overflow-y-auto">
                   {visiblePayments.length === 0 ? (
-                    <p className="text-blue-300 text-center py-8 text-sm">No payments recorded</p>
+                    <p className="text-slate-500 text-center py-8 text-sm">No payments recorded</p>
                   ) : (
                     visiblePayments.slice().reverse().map(payment => {
                       const customer = state.customers.find(c => c.id === payment.customerId);
                       const sale = state.sales.find(s => s.id === payment.saleId);
                       return (
-                        <div key={payment.id} className="p-3 md:p-4 bg-slate-700/30 rounded-lg border border-cyan-400/20">
+                        <div key={payment.id} className="p-3 md:p-4 bg-slate-50 rounded-lg border border-cyan-400/20">
                           <div className="flex justify-between items-start mb-2">
                             <div className="min-w-0 flex-1">
-                              <p className="text-white font-semibold truncate">{customer?.name}</p>
-                              <p className="text-blue-300 text-xs">{payment.date}</p>
+                              <p className="text-slate-900 font-semibold truncate">{customer?.name}</p>
+                              <p className="text-slate-500 text-xs">{payment.date}</p>
                             </div>
-                            <p className="text-green-400 font-bold text-lg ml-2">KES {payment.amount.toLocaleString()}</p>
+                            <p className="text-emerald-600 font-bold text-lg ml-2">KES {payment.amount.toLocaleString()}</p>
                           </div>
-                          <div className="flex gap-2 text-xs text-slate-400">
-                            <span className="bg-slate-600/50 px-2 py-1 rounded">{payment.method}</span>
-                            <span className="bg-slate-600/50 px-2 py-1 rounded">{sale?.invoiceNumber || 'N/A'}</span>
-                            {payment.reference && <span className="bg-slate-600/50 px-2 py-1 rounded">Ref: {payment.reference}</span>}
+                          <div className="flex gap-2 text-xs text-slate-500">
+                            <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">{payment.method}</span>
+                            <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">{sale?.invoiceNumber || 'N/A'}</span>
+                            {payment.reference && <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">Ref: {payment.reference}</span>}
                           </div>
                         </div>
                       );
@@ -2886,11 +2914,11 @@ export default function NorthernWaterSystemApp() {
 
             {/* All Accounts Tab */}
             {paymentsTab === 'accounts' && (
-              <div className="bg-slate-800/30 border border-blue-400/20 rounded-b-lg rounded-tr-lg p-4 md:p-6">
-                <h3 className="text-white font-semibold mb-4 text-base">All Customer Accounts</h3>
+              <div className="bg-white border border-slate-200 rounded-b-lg rounded-tr-lg p-4 md:p-6">
+                <h3 className="text-slate-900 font-semibold mb-4 text-base">All Customer Accounts</h3>
                 <div className="space-y-2 max-h-96 overflow-y-auto">
                   {state.customers.length === 0 ? (
-                    <p className="text-blue-300 text-center py-8 text-sm">No customers</p>
+                    <p className="text-slate-500 text-center py-8 text-sm">No customers</p>
                   ) : (
                     state.customers.sort((a, b) => a.balance - b.balance).map(customer => {
                       const isDebtor = customer.balance < 0;
@@ -2904,20 +2932,20 @@ export default function NorthernWaterSystemApp() {
                               ? 'bg-red-900/20 border-red-500 hover:bg-red-900/30' 
                               : isCreditor 
                               ? 'bg-green-900/20 border-green-500 hover:bg-green-900/30'
-                              : 'bg-slate-700/30 border-blue-400/30 hover:bg-slate-700/50'
+                              : 'bg-slate-50 border-slate-300 hover:bg-slate-50'
                           }`}
                         >
                           <div className="min-w-0">
-                            <p className="text-white font-semibold truncate">{customer.name}</p>
-                            <p className="text-slate-400 text-xs">{customer.location} • {customer.phone}</p>
+                            <p className="text-slate-900 font-semibold truncate">{customer.name}</p>
+                            <p className="text-slate-500 text-xs">{customer.location} • {customer.phone}</p>
                           </div>
                           <div className="text-right flex-shrink-0 ml-2">
                             <p className={`font-bold text-base ${
-                              isDebtor ? 'text-red-400' : isCreditor ? 'text-green-400' : 'text-blue-300'
+                              isDebtor ? 'text-rose-600' : isCreditor ? 'text-emerald-600' : 'text-slate-500'
                             }`}>
                               {isDebtor ? '- ' : isCreditor ? '+ ' : ''}KES {Math.abs(customer.balance).toLocaleString()}
                             </p>
-                            <p className={`text-xs ${isDebtor ? 'text-red-300' : isCreditor ? 'text-green-300' : 'text-blue-300'}`}>
+                            <p className={`text-xs ${isDebtor ? 'text-rose-600' : isCreditor ? 'text-emerald-600' : 'text-slate-500'}`}>
                               {isDebtor ? 'OWES' : isCreditor ? 'CREDIT' : 'BALANCED'}
                             </p>
                           </div>
@@ -2935,10 +2963,10 @@ export default function NorthernWaterSystemApp() {
         {activeTab === 'expenses' && (
           <div className="space-y-4 md:space-y-6">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
-              <h2 className="text-xl md:text-2xl font-bold text-white">Expenses</h2>
+              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Expenses</h2>
               <button
                 onClick={handleAddExpense}
-                className="w-full md:w-auto bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-slate-900 px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
                 <Plus className="w-4 h-4" /> New Expense
               </button>
@@ -2949,36 +2977,37 @@ export default function NorthernWaterSystemApp() {
             {/* Summary by Category */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-6">
               {Object.entries(getTotalExpensesByCategory()).map(([category, amount]) => (
-                <div key={category} className="bg-orange-500/20 border border-orange-500/50 rounded-lg md:rounded-xl p-3 md:p-4">
-                  <p className="text-orange-300 text-xs md:text-sm">{category}</p>
-                  <p className="text-white text-lg md:text-2xl font-bold">KES {amount.toLocaleString()}</p>
+                <div key={category} className="bg-amber-50 border border-amber-200 rounded-lg md:rounded-xl p-3 md:p-4">
+                  <p className="text-amber-600 text-xs md:text-sm">{category}</p>
+                  <p className="text-slate-900 text-lg md:text-2xl font-bold">KES {amount.toLocaleString()}</p>
                 </div>
               ))}
             </div>
 
             {/* Total Expenses */}
-            <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg md:rounded-xl p-4 md:p-6 text-white shadow-lg">
-              <p className="text-sm opacity-90 mb-2">Total Expenses</p>
-              <p className="text-3xl md:text-4xl font-bold">KES {getTotalExpenses().toLocaleString()}</p>
+            <div className="relative overflow-hidden bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-6">
+              <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-500" />
+              <p className="text-slate-500 text-sm mb-1 pl-1">Total Expenses</p>
+              <p className="text-slate-900 text-3xl md:text-4xl font-bold pl-1">KES {getTotalExpenses().toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
             </div>
 
             {/* Expenses List */}
-            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-              <h3 className="text-white font-semibold mb-3 md:mb-4 text-sm md:text-base">Expense Records</h3>
+            <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm md:text-base">Expense Records</h3>
               <div className="space-y-2 md:space-y-3 max-h-96 overflow-y-auto">
                 {state.expenses.length === 0 ? (
-                  <p className="text-blue-300 text-center py-4 md:py-8 text-sm">No expenses recorded</p>
+                  <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No expenses recorded</p>
                 ) : (
                   state.expenses.slice().reverse().map(expense => (
-                    <div key={expense.id} className="p-3 md:p-4 bg-slate-700/30 rounded-lg border border-blue-400/10">
+                    <div key={expense.id} className="p-3 md:p-4 bg-slate-50 rounded-lg border border-slate-100">
                       <div className="flex justify-between items-start gap-2 mb-2">
                         <div className="min-w-0 flex-1">
-                          <p className="text-white font-semibold text-sm truncate">{expense.description || expense.subcategory}</p>
-                          <p className="text-blue-300 text-xs">{expense.date}</p>
-                          <p className="text-slate-400 text-xs">{expense.category} • {expense.subcategory}</p>
+                          <p className="text-slate-900 font-semibold text-sm truncate">{expense.description || expense.subcategory}</p>
+                          <p className="text-slate-500 text-xs">{expense.date}</p>
+                          <p className="text-slate-500 text-xs">{expense.category} • {expense.subcategory}</p>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
-                          <p className="text-orange-400 font-semibold">KES {expense.amount.toLocaleString()}</p>
+                          <p className="text-amber-600 font-semibold">KES {expense.amount.toLocaleString()}</p>
                           <div className="flex gap-1">
                             <button
                               onClick={() => {
@@ -2987,15 +3016,15 @@ export default function NorthernWaterSystemApp() {
                                 setFormData(expense);
                                 setShowModal(true);
                               }}
-                              className="p-1 hover:bg-blue-500/30 rounded transition"
+                              className="p-1 hover:bg-slate-100 rounded transition"
                             >
-                              <Edit2 className="w-3 h-3 text-blue-300" />
+                              <Edit2 className="w-3 h-3 text-slate-500" />
                             </button>
                             <button
                               onClick={() => handleDeleteExpense(expense.id)}
                               className="p-1 hover:bg-red-500/30 rounded transition"
                             >
-                              <Trash2 className="w-3 h-3 text-red-300" />
+                              <Trash2 className="w-3 h-3 text-rose-600" />
                             </button>
                           </div>
                         </div>
@@ -3009,8 +3038,8 @@ export default function NorthernWaterSystemApp() {
             )}
 
             {role === 'sales' && (
-              <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-                <p className="text-blue-300 text-center py-4 text-sm">Use the "New Expense" button above to record an expense.</p>
+              <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+                <p className="text-slate-500 text-center py-4 text-sm">Use the "New Expense" button above to record an expense.</p>
               </div>
             )}
           </div>
@@ -3019,23 +3048,23 @@ export default function NorthernWaterSystemApp() {
         {activeTab === 'customers' && (
           <div className="space-y-4 md:space-y-6">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
-              <h2 className="text-xl md:text-2xl font-bold text-white">Customers</h2>
+              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Customers</h2>
               <button
                 onClick={handleAddCustomer}
-                className="w-full md:w-auto bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-slate-900 px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
                 <Plus className="w-4 h-4" /> New
               </button>
             </div>
 
             {/* Customer Search Bar */}
-            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg p-3 md:p-4">
+            <div className="bg-white border border-slate-200 rounded-lg p-3 md:p-4">
               <input
                 type="text"
                 placeholder="Search customers by name, location, or phone..."
                 value={customerSearch}
                 onChange={(e) => setCustomerSearch(e.target.value)}
-                className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-4 py-2 text-sm placeholder-slate-400"
+                className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-4 py-2 text-sm placeholder-slate-400"
               />
             </div>
 
@@ -3050,11 +3079,11 @@ export default function NorthernWaterSystemApp() {
                   );
                 })
                 .map(customer => (
-                <div key={customer.id} className="p-4 md:p-6 bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl">
+                <div key={customer.id} className="p-4 md:p-6 bg-white border border-slate-200 rounded-lg md:rounded-xl">
                   <div className="flex justify-between items-start gap-3 mb-3">
                     <div className="min-w-0">
-                      <p className="text-white text-base md:text-lg font-semibold">{customer.name}</p>
-                      <p className="text-blue-300 text-xs md:text-sm">{customer.location} • {customer.phone}</p>
+                      <p className="text-slate-900 text-base md:text-lg font-semibold">{customer.name}</p>
+                      <p className="text-slate-500 text-xs md:text-sm">{customer.location} • {customer.phone}</p>
                     </div>
                     <div className="flex gap-2 flex-shrink-0">
                       <button
@@ -3064,26 +3093,26 @@ export default function NorthernWaterSystemApp() {
                           setFormData(customer);
                           setShowModal(true);
                         }}
-                        className="p-2 hover:bg-blue-500/30 rounded-lg transition"
+                        className="p-2 hover:bg-slate-100 rounded-lg transition"
                       >
-                        <Edit2 className="w-4 h-4 text-blue-300" />
+                        <Edit2 className="w-4 h-4 text-slate-500" />
                       </button>
                       <button
                         onClick={() => handleDeleteCustomer(customer.id)}
                         className="p-2 hover:bg-red-500/30 rounded-lg transition"
                       >
-                        <Trash2 className="w-4 h-4 text-red-300" />
+                        <Trash2 className="w-4 h-4 text-rose-600" />
                       </button>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between pt-3 border-t border-blue-400/10">
+                  <div className="flex items-center justify-between pt-3 border-t border-slate-100">
                     <div>
-                      <p className="text-slate-400 text-xs md:text-sm">Balance</p>
-                      <p className={`text-lg md:text-xl font-semibold ${customer.balance >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      <p className="text-slate-500 text-xs md:text-sm">Balance</p>
+                      <p className={`text-lg md:text-xl font-semibold ${customer.balance >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                         KES {customer.balance.toLocaleString()}
                       </p>
                     </div>
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${customer.isActive ? 'bg-green-500/30 text-green-300' : 'bg-red-500/30 text-red-300'}`}>
+                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${customer.isActive ? 'bg-slate-100 text-emerald-600' : 'bg-red-500/30 text-rose-600'}`}>
                       {customer.isActive ? 'Active' : 'Inactive'}
                     </span>
                   </div>
@@ -3097,16 +3126,16 @@ export default function NorthernWaterSystemApp() {
         {activeTab === 'costsettings' && role === 'admin' && (
           <div className="space-y-4 md:space-y-6">
             <div>
-              <h2 className="text-xl md:text-2xl font-bold text-white">Cost Settings</h2>
-              <p className="text-blue-300 text-sm mt-1">Enter the cost per carton for each product size. Used to value finished goods stock. Raw material values come automatically from your latest purchase prices.</p>
+              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Cost Settings</h2>
+              <p className="text-slate-500 text-sm mt-1">Enter the cost per carton for each product size. Used to value finished goods stock. Raw material values come automatically from your latest purchase prices.</p>
             </div>
 
-            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-              <h3 className="text-white font-semibold mb-4 text-sm md:text-base">Finished Goods — Cost per Carton (KES)</h3>
+            <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-slate-900 font-semibold mb-4 text-sm md:text-base">Finished Goods — Cost per Carton (KES)</h3>
               <div className="space-y-3">
                 {['0.5L', '1.5L', '5L', '18.9L_disposable', '18.9L_refill', 'refill_10L', 'refill_15L', 'refill_20L'].map(size => (
                   <div key={size} className="flex items-center justify-between gap-3">
-                    <label className="text-blue-300 text-sm">
+                    <label className="text-slate-500 text-sm">
                       {size === '18.9L_disposable' ? '18.9L Disposable' : size === '18.9L_refill' ? '18.9L Refill (bottle)' : size === 'refill_10L' ? 'Water Refill 10L' : size === 'refill_15L' ? 'Water Refill 15L' : size === 'refill_20L' ? 'Water Refill 20L' : size}
                     </label>
                     <input
@@ -3114,36 +3143,36 @@ export default function NorthernWaterSystemApp() {
                       value={cartonCosts[size] || ''}
                       onChange={(e) => setCartonCosts({ ...cartonCosts, [size]: parseFloat(e.target.value) || 0 })}
                       placeholder="0"
-                      className="w-32 bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 py-2 text-sm text-right"
+                      className="w-32 bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 py-2 text-sm text-right"
                     />
                   </div>
                 ))}
               </div>
               <button
                 onClick={handleSaveCartonCosts}
-                className="mt-6 w-full md:w-auto bg-cyan-500 hover:bg-cyan-600 text-white px-6 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                className="mt-6 w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-slate-900 px-6 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
                 <Save className="w-4 h-4" /> Save Costs
               </button>
             </div>
 
-            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
-              <h3 className="text-white font-semibold mb-3 text-sm md:text-base">Current Asset Valuation</h3>
+            <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-slate-900 font-semibold mb-3 text-sm md:text-base">Current Asset Valuation</h3>
               <div className="space-y-2 text-sm">
-                <div className="flex justify-between p-2 bg-slate-700/30 rounded">
-                  <span className="text-blue-300">Raw Materials (at latest purchase prices)</span>
-                  <span className="text-white font-semibold">KES {calculateInventoryValue().toLocaleString()}</span>
+                <div className="flex justify-between p-2 bg-slate-50 rounded">
+                  <span className="text-slate-500">Raw Materials (at latest purchase prices)</span>
+                  <span className="text-slate-900 font-semibold">KES {calculateInventoryValue().toLocaleString()}</span>
                 </div>
-                <div className="flex justify-between p-2 bg-slate-700/30 rounded">
-                  <span className="text-blue-300">Finished Goods (at carton cost)</span>
-                  <span className="text-white font-semibold">KES {calculateFinishedGoodsValue().toLocaleString()}</span>
+                <div className="flex justify-between p-2 bg-slate-50 rounded">
+                  <span className="text-slate-500">Finished Goods (at carton cost)</span>
+                  <span className="text-slate-900 font-semibold">KES {calculateFinishedGoodsValue().toLocaleString()}</span>
                 </div>
-                <div className="flex justify-between p-2 bg-slate-700/50 rounded border border-green-400/30">
-                  <span className="text-green-300 font-semibold">Total Assets</span>
-                  <span className="text-green-400 font-bold">KES {(calculateInventoryValue() + calculateFinishedGoodsValue()).toLocaleString()}</span>
+                <div className="flex justify-between p-2 bg-slate-50 rounded border border-emerald-200">
+                  <span className="text-emerald-600 font-semibold">Total Assets</span>
+                  <span className="text-emerald-600 font-bold">KES {(calculateInventoryValue() + calculateFinishedGoodsValue()).toLocaleString()}</span>
                 </div>
               </div>
-              <p className="text-slate-400 text-xs mt-3">Note: Materials with no purchase recorded yet are valued at 0 until you log a purchase for them.</p>
+              <p className="text-slate-500 text-xs mt-3">Note: Materials with no purchase recorded yet are valued at 0 until you log a purchase for them.</p>
             </div>
           </div>
         )}
@@ -3152,17 +3181,17 @@ export default function NorthernWaterSystemApp() {
         {activeTab === 'adjust' && role === 'admin' && (
           <div className="space-y-4 md:space-y-6">
             <div>
-              <h2 className="text-xl md:text-2xl font-bold text-white">Stock Adjustment</h2>
-              <p className="text-blue-300 text-sm mt-1">Set the actual quantity of any stock item after a physical count. Use this to align the system with reality (opening stock, stock-take, breakage). Each change is logged.</p>
+              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Stock Adjustment</h2>
+              <p className="text-slate-500 text-sm mt-1">Set the actual quantity of any stock item after a physical count. Use this to align the system with reality (opening stock, stock-take, breakage). Each change is logged.</p>
             </div>
 
-            <div className="bg-slate-800/30 border border-blue-400/20 rounded-lg md:rounded-xl p-4 md:p-6">
+            <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
               <div className="space-y-3 max-h-[60vh] overflow-y-auto">
                 {getStockItems().map(item => (
-                  <div key={item.id} className="flex items-center justify-between gap-3 p-2 bg-slate-700/30 rounded-lg">
+                  <div key={item.id} className="flex items-center justify-between gap-3 p-2 bg-slate-50 rounded-lg">
                     <div className="min-w-0">
-                      <p className="text-white text-sm truncate">{item.label}</p>
-                      <p className="text-slate-400 text-xs">Current: {item.qty}</p>
+                      <p className="text-slate-900 text-sm truncate">{item.label}</p>
+                      <p className="text-slate-500 text-xs">Current: {item.qty}</p>
                     </div>
                     <button
                       onClick={() => {
@@ -3170,7 +3199,7 @@ export default function NorthernWaterSystemApp() {
                         setFormData({ itemId: item.id, itemLabel: item.label, currentQty: item.qty, newQty: '', reason: '' });
                         setShowModal(true);
                       }}
-                      className="bg-cyan-500/80 hover:bg-cyan-500 text-white px-3 py-1.5 rounded text-xs whitespace-nowrap"
+                      className="bg-sky-500/80 hover:bg-sky-500 text-slate-900 px-3 py-1.5 rounded text-xs whitespace-nowrap"
                     >
                       Adjust
                     </button>
@@ -3184,15 +3213,15 @@ export default function NorthernWaterSystemApp() {
         {/* Dashboard Card Breakdown Modal */}
         {breakdownCard && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setBreakdownCard(null)}>
-            <div className="bg-slate-800 border border-blue-400/30 rounded-xl p-5 md:p-6 max-w-lg w-full max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-white border border-slate-300 rounded-xl p-5 md:p-6 max-w-lg w-full max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-white font-bold text-lg capitalize">
+                <h3 className="text-slate-900 font-bold text-lg capitalize">
                   {breakdownCard === 'customers' && 'All Customers'}
                   {breakdownCard === 'debt' && 'Outstanding Debts'}
                   {breakdownCard === 'sales' && 'All Sales'}
                   {breakdownCard === 'costs' && 'Cost Breakdown'}
                 </h3>
-                <button onClick={() => setBreakdownCard(null)} className="text-blue-300 hover:text-white">
+                <button onClick={() => setBreakdownCard(null)} className="text-slate-500 hover:text-slate-900">
                   <X className="w-5 h-5" />
                 </button>
               </div>
@@ -3201,14 +3230,14 @@ export default function NorthernWaterSystemApp() {
               {breakdownCard === 'customers' && (
                 <div className="space-y-2">
                   {state.customers.length === 0 ? (
-                    <p className="text-blue-300 text-center py-4 text-sm">No customers</p>
+                    <p className="text-slate-500 text-center py-4 text-sm">No customers</p>
                   ) : state.customers.map(c => (
-                    <div key={c.id} className="flex justify-between items-center p-2 bg-slate-700/30 rounded text-sm">
+                    <div key={c.id} className="flex justify-between items-center p-2 bg-slate-50 rounded text-sm">
                       <div>
-                        <p className="text-white">{c.name}</p>
-                        <p className="text-slate-400 text-xs">{c.location} · {c.phone}</p>
+                        <p className="text-slate-900">{c.name}</p>
+                        <p className="text-slate-500 text-xs">{c.location} · {c.phone}</p>
                       </div>
-                      <span className={c.balance < 0 ? 'text-red-300' : 'text-green-300'}>
+                      <span className={c.balance < 0 ? 'text-rose-600' : 'text-emerald-600'}>
                         KES {c.balance.toLocaleString()}
                       </span>
                     </div>
@@ -3220,19 +3249,19 @@ export default function NorthernWaterSystemApp() {
               {breakdownCard === 'debt' && (
                 <div className="space-y-2">
                   {state.customers.filter(c => c.balance < 0).length === 0 ? (
-                    <p className="text-blue-300 text-center py-4 text-sm">No outstanding debts</p>
+                    <p className="text-slate-500 text-center py-4 text-sm">No outstanding debts</p>
                   ) : state.customers.filter(c => c.balance < 0).map(c => (
-                    <div key={c.id} className="flex justify-between items-center p-2 bg-slate-700/30 rounded text-sm">
+                    <div key={c.id} className="flex justify-between items-center p-2 bg-slate-50 rounded text-sm">
                       <div>
-                        <p className="text-white">{c.name}</p>
-                        <p className="text-slate-400 text-xs">{c.location} · {c.phone}</p>
+                        <p className="text-slate-900">{c.name}</p>
+                        <p className="text-slate-500 text-xs">{c.location} · {c.phone}</p>
                       </div>
-                      <span className="text-red-300 font-semibold">KES {Math.abs(c.balance).toLocaleString()}</span>
+                      <span className="text-rose-600 font-semibold">KES {Math.abs(c.balance).toLocaleString()}</span>
                     </div>
                   ))}
-                  <div className="flex justify-between p-2 bg-red-500/20 rounded border border-red-400/30 mt-2 text-sm">
-                    <span className="text-red-300 font-semibold">Total Debt</span>
-                    <span className="text-red-300 font-bold">KES {state.customers.reduce((s, c) => s + Math.max(0, -c.balance), 0).toLocaleString()}</span>
+                  <div className="flex justify-between p-2 bg-rose-50 rounded border border-rose-200 mt-2 text-sm">
+                    <span className="text-rose-600 font-semibold">Total Debt</span>
+                    <span className="text-rose-600 font-bold">KES {state.customers.reduce((s, c) => s + Math.max(0, -c.balance), 0).toLocaleString()}</span>
                   </div>
                 </div>
               )}
@@ -3241,22 +3270,22 @@ export default function NorthernWaterSystemApp() {
               {breakdownCard === 'sales' && (
                 <div className="space-y-2">
                   {state.sales.length === 0 ? (
-                    <p className="text-blue-300 text-center py-4 text-sm">No sales</p>
+                    <p className="text-slate-500 text-center py-4 text-sm">No sales</p>
                   ) : state.sales.slice().reverse().map(s => {
                     const cust = state.customers.find(c => c.id === s.customerId);
                     return (
-                      <div key={s.id} className="flex justify-between items-center p-2 bg-slate-700/30 rounded text-sm">
+                      <div key={s.id} className="flex justify-between items-center p-2 bg-slate-50 rounded text-sm">
                         <div>
-                          <p className="text-white">{s.invoiceNumber} · {cust?.name || 'Unknown'}</p>
-                          <p className="text-slate-400 text-xs">{s.date} · {s.status}</p>
+                          <p className="text-slate-900">{s.invoiceNumber} · {cust?.name || 'Unknown'}</p>
+                          <p className="text-slate-500 text-xs">{s.date} · {s.status}</p>
                         </div>
-                        <span className="text-green-300">KES {s.total.toLocaleString()}</span>
+                        <span className="text-emerald-600">KES {s.total.toLocaleString()}</span>
                       </div>
                     );
                   })}
-                  <div className="flex justify-between p-2 bg-green-500/20 rounded border border-green-400/30 mt-2 text-sm">
-                    <span className="text-green-300 font-semibold">Total Sales</span>
-                    <span className="text-green-300 font-bold">KES {state.sales.reduce((sum, s) => sum + s.total, 0).toLocaleString()}</span>
+                  <div className="flex justify-between p-2 bg-emerald-50 rounded border border-emerald-200 mt-2 text-sm">
+                    <span className="text-emerald-600 font-semibold">Total Sales</span>
+                    <span className="text-emerald-600 font-bold">KES {state.sales.reduce((sum, s) => sum + s.total, 0).toLocaleString()}</span>
                   </div>
                 </div>
               )}
@@ -3264,24 +3293,24 @@ export default function NorthernWaterSystemApp() {
               {/* Costs breakdown */}
               {breakdownCard === 'costs' && (
                 <div className="space-y-2">
-                  <div className="flex justify-between p-2 bg-slate-700/30 rounded text-sm">
-                    <span className="text-blue-300">Total Expenses</span>
-                    <span className="text-white font-semibold">KES {getTotalExpenses().toLocaleString()}</span>
+                  <div className="flex justify-between p-2 bg-slate-50 rounded text-sm">
+                    <span className="text-slate-500">Total Expenses</span>
+                    <span className="text-slate-900 font-semibold">KES {getTotalExpenses().toLocaleString()}</span>
                   </div>
-                  <div className="flex justify-between p-2 bg-slate-700/30 rounded text-sm">
-                    <span className="text-blue-300">Total Purchases</span>
-                    <span className="text-white font-semibold">KES {getTotalPurchases().toLocaleString()}</span>
+                  <div className="flex justify-between p-2 bg-slate-50 rounded text-sm">
+                    <span className="text-slate-500">Total Purchases</span>
+                    <span className="text-slate-900 font-semibold">KES {getTotalPurchases().toLocaleString()}</span>
                   </div>
-                  <p className="text-blue-300 text-xs font-semibold mt-3 mb-1">Expenses by Category</p>
+                  <p className="text-slate-500 text-xs font-semibold mt-3 mb-1">Expenses by Category</p>
                   {Object.entries(getTotalExpensesByCategory()).map(([cat, amt]) => (
-                    <div key={cat} className="flex justify-between p-2 bg-slate-700/20 rounded text-xs">
-                      <span className="text-slate-300">{cat}</span>
-                      <span className="text-white">KES {amt.toLocaleString()}</span>
+                    <div key={cat} className="flex justify-between p-2 bg-slate-100/20 rounded text-xs">
+                      <span className="text-slate-600">{cat}</span>
+                      <span className="text-slate-900">KES {amt.toLocaleString()}</span>
                     </div>
                   ))}
-                  <div className="flex justify-between p-2 bg-purple-500/20 rounded border border-purple-400/30 mt-2 text-sm">
-                    <span className="text-purple-300 font-semibold">Total Costs</span>
-                    <span className="text-purple-300 font-bold">KES {(getTotalExpenses() + getTotalPurchases()).toLocaleString()}</span>
+                  <div className="flex justify-between p-2 bg-purple-50 rounded border border-purple-200 mt-2 text-sm">
+                    <span className="text-purple-600 font-semibold">Total Costs</span>
+                    <span className="text-purple-600 font-bold">KES {(getTotalExpenses() + getTotalPurchases()).toLocaleString()}</span>
                   </div>
                 </div>
               )}
@@ -3293,9 +3322,9 @@ export default function NorthernWaterSystemApp() {
       {/* Modals */}
       {showModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-800 border border-blue-400/20 rounded-lg md:rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center p-4 md:p-6 border-b border-blue-400/10 sticky top-0 bg-slate-800">
-              <h3 className="text-white font-semibold text-base md:text-lg">
+          <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center p-4 md:p-6 border-b border-slate-100 sticky top-0 bg-white">
+              <h3 className="text-slate-900 font-semibold text-base md:text-lg">
                 {modalType === 'sale' && 'New Sale'}
                 {modalType === 'payment' && 'Record Payment'}
                 {modalType === 'production' && 'Production Log'}
@@ -3304,7 +3333,7 @@ export default function NorthernWaterSystemApp() {
                 {modalType === 'customer' && (editingCustomer ? 'Edit' : 'New Customer')}
                 {modalType === 'adjust' && 'Adjust Stock'}
               </h3>
-              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setShowModal(false)} className="text-slate-500 hover:text-slate-900">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -3314,33 +3343,33 @@ export default function NorthernWaterSystemApp() {
               {modalType === 'purchase' && (
                 <>
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Supplier Name</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Supplier Name</label>
                     <input
                       type="text"
                       value={formData.supplier || ''}
                       onChange={(e) => setFormData({ ...formData, supplier: e.target.value })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                       placeholder="e.g., Kenya Bottle Co..."
                     />
                   </div>
 
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Purchase Date</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Purchase Date</label>
                     <input
                       type="date"
                       value={formData.date || ''}
                       onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                     />
                   </div>
 
-                  <div className="bg-slate-700/30 rounded-lg p-3 md:p-4 border border-blue-400/10">
-                    <h4 className="text-white font-semibold mb-3 text-sm">Materials Purchased</h4>
+                  <div className="bg-slate-50 rounded-lg p-3 md:p-4 border border-slate-100">
+                    <h4 className="text-slate-900 font-semibold mb-3 text-sm">Materials Purchased</h4>
                     <div className="space-y-3">
                       {formData.items?.map((item, idx) => (
-                        <div key={idx} className="space-y-2 p-3 bg-slate-600/30 rounded">
+                        <div key={idx} className="space-y-2 p-3 bg-slate-100 rounded">
                           <div>
-                            <label className="text-blue-300 text-xs block mb-1">Material</label>
+                            <label className="text-slate-500 text-xs block mb-1">Material</label>
                             <select
                               value={item.description || ''}
                               onChange={(e) => {
@@ -3350,7 +3379,7 @@ export default function NorthernWaterSystemApp() {
                                 newItems[idx].description = e.target.value;
                                 setFormData({ ...formData, items: newItems });
                               }}
-                              className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded px-2 py-1 text-sm"
+                              className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded px-2 py-1 text-sm"
                             >
                               <option value="">Select material...</option>
                               {Object.keys(state.rawMaterialOptions).map(opt => (
@@ -3358,12 +3387,12 @@ export default function NorthernWaterSystemApp() {
                               ))}
                             </select>
                             {item.description && (
-                              <p className="text-green-300 text-xs mt-1 font-semibold">✓ {item.description}</p>
+                              <p className="text-emerald-600 text-xs mt-1 font-semibold">✓ {item.description}</p>
                             )}
                           </div>
                           <div className="grid grid-cols-3 gap-2">
                             <div>
-                              <label className="text-blue-300 text-xs block mb-1">Qty</label>
+                              <label className="text-slate-500 text-xs block mb-1">Qty</label>
                               <input
                                 type="number"
                                 value={item.quantity || 0}
@@ -3373,11 +3402,11 @@ export default function NorthernWaterSystemApp() {
                                   newItems[idx].total = newItems[idx].quantity * newItems[idx].unitPrice;
                                   setFormData({ ...formData, items: newItems });
                                 }}
-                                className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded px-2 py-1 text-sm"
+                                className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded px-2 py-1 text-sm"
                               />
                             </div>
                             <div>
-                              <label className="text-blue-300 text-xs block mb-1">Unit Price</label>
+                              <label className="text-slate-500 text-xs block mb-1">Unit Price</label>
                               <input
                                 type="number"
                                 step="0.01"
@@ -3388,12 +3417,12 @@ export default function NorthernWaterSystemApp() {
                                   newItems[idx].total = newItems[idx].quantity * newItems[idx].unitPrice;
                                   setFormData({ ...formData, items: newItems });
                                 }}
-                                className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded px-2 py-1 text-sm"
+                                className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded px-2 py-1 text-sm"
                               />
                             </div>
                             <div>
-                              <p className="text-blue-300 text-xs mb-1">Total</p>
-                              <p className="text-white font-semibold">KES {(item.total || 0).toLocaleString()}</p>
+                              <p className="text-slate-500 text-xs mb-1">Total</p>
+                              <p className="text-slate-900 font-semibold">KES {(item.total || 0).toLocaleString()}</p>
                             </div>
                           </div>
                         </div>
@@ -3404,15 +3433,15 @@ export default function NorthernWaterSystemApp() {
                         ...formData,
                         items: [...(formData.items || []), { material: '', description: '', quantity: 0, unitPrice: 0, total: 0 }]
                       })}
-                      className="mt-3 text-cyan-300 text-sm"
+                      className="mt-3 text-sky-600 text-sm"
                     >
                       + Add Item
                     </button>
                   </div>
 
-                  <div className="bg-indigo-500/20 border border-indigo-500/50 rounded-lg p-3 md:p-4">
-                    <p className="text-indigo-300 text-xs">Total Purchase Amount</p>
-                    <p className="text-white text-lg md:text-xl font-bold">
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 md:p-4">
+                    <p className="text-sky-600 text-xs">Total Purchase Amount</p>
+                    <p className="text-slate-900 text-lg md:text-xl font-bold">
                       KES {(formData.items?.reduce((sum, i) => sum + (i.total || 0), 0) || 0).toLocaleString()}
                     </p>
                   </div>
@@ -3423,15 +3452,15 @@ export default function NorthernWaterSystemApp() {
               {modalType === 'sale' && (
                 <>
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Customer</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Customer</label>
                     <input
                       type="text"
                       value={saleCustomerSearch}
                       onChange={(e) => setSaleCustomerSearch(e.target.value)}
                       placeholder="Search customer by name, location, or phone..."
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm placeholder-slate-400 mb-2"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm placeholder-slate-400 mb-2"
                     />
-                    <div className="max-h-48 overflow-y-auto border border-blue-400/30 rounded-lg divide-y divide-blue-400/10">
+                    <div className="max-h-48 overflow-y-auto border border-slate-300 rounded-lg divide-y divide-blue-400/10">
                       {state.customers
                         .filter(c => {
                           const q = saleCustomerSearch.toLowerCase();
@@ -3449,12 +3478,12 @@ export default function NorthernWaterSystemApp() {
                               onClick={() => setFormData({ ...formData, customerId: c.id })}
                               className={`w-full text-left px-3 py-2 text-sm transition flex justify-between items-center ${
                                 selected
-                                  ? 'bg-cyan-500/30 text-white'
-                                  : 'bg-slate-700/30 text-blue-200 hover:bg-slate-700/60'
+                                  ? 'bg-sky-500/30 text-slate-900'
+                                  : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
                               }`}
                             >
                               <span>{c.name}</span>
-                              <span className="text-xs text-slate-400">{c.location}</span>
+                              <span className="text-xs text-slate-500">{c.location}</span>
                             </button>
                           );
                         })}
@@ -3465,36 +3494,36 @@ export default function NorthernWaterSystemApp() {
                           (c.location || '').toLowerCase().includes(q) ||
                           (c.phone || '').includes(q);
                       }).length === 0 && (
-                        <p className="text-slate-400 text-sm text-center py-3">No matching customers</p>
+                        <p className="text-slate-500 text-sm text-center py-3">No matching customers</p>
                       )}
                     </div>
                     {formData.customerId && (
-                      <p className="text-green-300 text-xs mt-2">
+                      <p className="text-emerald-600 text-xs mt-2">
                         ✓ Selected: {state.customers.find(c => c.id === parseInt(formData.customerId))?.name}
                       </p>
                     )}
                   </div>
 
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Date</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Date</label>
                     <input
                       type="date"
                       value={formData.date || ''}
                       onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Payment Status</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Payment Status</label>
                     <div className="flex gap-2">
                       <button
                         type="button"
                         onClick={() => setFormData({ ...formData, paymentStatus: 'unpaid' })}
                         className={`flex-1 py-2 px-3 rounded-lg transition font-semibold text-sm ${
                           formData.paymentStatus === 'unpaid'
-                            ? 'bg-red-500 text-white'
-                            : 'bg-slate-700/50 text-slate-400 border border-blue-400/30 hover:border-red-400/50'
+                            ? 'bg-red-500 text-slate-900'
+                            : 'bg-slate-50 text-slate-500 border border-slate-300 hover:border-red-400/50'
                         }`}
                       >
                         ✗ UNPAID (Debt)
@@ -3504,8 +3533,8 @@ export default function NorthernWaterSystemApp() {
                         onClick={() => setFormData({ ...formData, paymentStatus: 'paid' })}
                         className={`flex-1 py-2 px-3 rounded-lg transition font-semibold text-sm ${
                           formData.paymentStatus === 'paid'
-                            ? 'bg-green-500 text-white'
-                            : 'bg-slate-700/50 text-slate-400 border border-blue-400/30 hover:border-green-400/50'
+                            ? 'bg-green-500 text-slate-900'
+                            : 'bg-slate-50 text-slate-500 border border-slate-300 hover:border-green-400/50'
                         }`}
                       >
                         ✓ PAID
@@ -3513,13 +3542,13 @@ export default function NorthernWaterSystemApp() {
                     </div>
                   </div>
 
-                  <div className="bg-slate-700/30 rounded-lg p-3 md:p-4 border border-blue-400/10">
-                    <h4 className="text-white font-semibold mb-3 text-sm">Items</h4>
+                  <div className="bg-slate-50 rounded-lg p-3 md:p-4 border border-slate-100">
+                    <h4 className="text-slate-900 font-semibold mb-3 text-sm">Items</h4>
                     <div className="space-y-3">
                       {formData.items?.map((item, idx) => (
                         <div key={idx} className="grid grid-cols-4 gap-2 items-end text-xs md:text-sm">
                           <div>
-                            <label className="text-blue-300 text-xs block mb-1">Size</label>
+                            <label className="text-slate-500 text-xs block mb-1">Size</label>
                             <select
                               value={item.size || ''}
                               onChange={(e) => {
@@ -3528,7 +3557,7 @@ export default function NorthernWaterSystemApp() {
                                 newItems[idx].price = BOTTLE_PRICES[e.target.value] || 0;
                                 setFormData({ ...formData, items: newItems });
                               }}
-                              className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded px-2 py-1"
+                              className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded px-2 py-1"
                             >
                               {Object.keys(BOTTLE_PRICES).map(s => (
                                 <option key={s} value={s}>{SIZE_LABELS[s] || s}</option>
@@ -3536,7 +3565,7 @@ export default function NorthernWaterSystemApp() {
                             </select>
                           </div>
                           <div>
-                            <label className="text-blue-300 text-xs block mb-1">Qty</label>
+                            <label className="text-slate-500 text-xs block mb-1">Qty</label>
                             <input
                               type="number"
                               value={item.quantity || 0}
@@ -3546,11 +3575,11 @@ export default function NorthernWaterSystemApp() {
                                 newItems[idx].subtotal = newItems[idx].quantity * newItems[idx].price;
                                 setFormData({ ...formData, items: newItems });
                               }}
-                              className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded px-2 py-1"
+                              className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded px-2 py-1"
                             />
                           </div>
                           <div>
-                            <label className="text-blue-300 text-xs block mb-1">Price</label>
+                            <label className="text-slate-500 text-xs block mb-1">Price</label>
                             <input
                               type="number"
                               value={item.price || 0}
@@ -3560,12 +3589,12 @@ export default function NorthernWaterSystemApp() {
                                 newItems[idx].subtotal = newItems[idx].quantity * newItems[idx].price;
                                 setFormData({ ...formData, items: newItems });
                               }}
-                              className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded px-2 py-1"
+                              className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded px-2 py-1"
                             />
                           </div>
                           <div>
-                            <p className="text-blue-300 text-xs mb-1">Sub</p>
-                            <p className="text-white font-semibold">KES {(item.subtotal || 0).toLocaleString()}</p>
+                            <p className="text-slate-500 text-xs mb-1">Sub</p>
+                            <p className="text-slate-900 font-semibold">KES {(item.subtotal || 0).toLocaleString()}</p>
                           </div>
                         </div>
                       ))}
@@ -3575,15 +3604,15 @@ export default function NorthernWaterSystemApp() {
                         ...formData,
                         items: [...(formData.items || []), { size: '0.5L', quantity: 0, price: 100, subtotal: 0 }]
                       })}
-                      className="mt-3 text-cyan-300 text-xs"
+                      className="mt-3 text-sky-600 text-xs"
                     >
                       + Add
                     </button>
                   </div>
 
-                  <div className="bg-green-500/20 border border-green-500/50 rounded-lg p-3 md:p-4">
-                    <p className="text-green-300 text-xs">Total</p>
-                    <p className="text-white text-lg md:text-xl font-bold">
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 md:p-4">
+                    <p className="text-emerald-600 text-xs">Total</p>
+                    <p className="text-slate-900 text-lg md:text-xl font-bold">
                       KES {(formData.items?.reduce((sum, i) => sum + (i.subtotal || 0), 0) || 0).toLocaleString()}
                     </p>
                   </div>
@@ -3594,7 +3623,7 @@ export default function NorthernWaterSystemApp() {
               {modalType === 'payment' && (
                 <>
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Sale</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Sale</label>
                     <select
                       value={formData.saleId || ''}
                       onChange={(e) => {
@@ -3605,7 +3634,7 @@ export default function NorthernWaterSystemApp() {
                           amount: sale ? sale.total - sale.paid : 0
                         });
                       }}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                     >
                       <option value="">Select...</option>
                       {state.sales.filter(s => s.paid < s.total).map(s => {
@@ -3622,29 +3651,29 @@ export default function NorthernWaterSystemApp() {
 
                   {formData.saleId && (
                     <>
-                      <div className="bg-slate-700/30 rounded-lg p-3 md:p-4 border border-blue-400/10">
-                        <p className="text-blue-300 text-xs">Balance</p>
-                        <p className="text-white text-lg font-bold">
+                      <div className="bg-slate-50 rounded-lg p-3 md:p-4 border border-slate-100">
+                        <p className="text-slate-500 text-xs">Balance</p>
+                        <p className="text-slate-900 text-lg font-bold">
                           KES {(state.sales.find(s => s.id === parseInt(formData.saleId))?.total - state.sales.find(s => s.id === parseInt(formData.saleId))?.paid || 0).toLocaleString()}
                         </p>
                       </div>
 
                       <div>
-                        <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Amount</label>
+                        <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Amount</label>
                         <input
                           type="number"
                           value={formData.amount || 0}
                           onChange={(e) => setFormData({ ...formData, amount: parseInt(e.target.value) || 0 })}
-                          className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                          className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                         />
                       </div>
 
                       <div>
-                        <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Method</label>
+                        <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Method</label>
                         <select
                           value={formData.method || 'cash'}
                           onChange={(e) => setFormData({ ...formData, method: e.target.value })}
-                          className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                          className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                         >
                           <option value="cash">Cash</option>
                           <option value="bank_transfer">Bank Transfer</option>
@@ -3654,23 +3683,23 @@ export default function NorthernWaterSystemApp() {
                       </div>
 
                       <div>
-                        <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Reference</label>
+                        <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Reference</label>
                         <input
                           type="text"
                           value={formData.reference || ''}
                           onChange={(e) => setFormData({ ...formData, reference: e.target.value })}
-                          className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                          className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                           placeholder="TRF-123"
                         />
                       </div>
 
                       <div>
-                        <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Date</label>
+                        <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Date</label>
                         <input
                           type="date"
                           value={formData.date || ''}
                           onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                          className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                          className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                         />
                       </div>
                     </>
@@ -3682,29 +3711,29 @@ export default function NorthernWaterSystemApp() {
               {modalType === 'production' && (
                 <>
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Date</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Date</label>
                     <input
                       type="date"
                       value={formData.date || ''}
                       onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                     />
                   </div>
 
-                  <div className="bg-green-900/30 border border-green-400/30 rounded-lg p-3 md:p-4">
-                    <p className="text-green-300 text-xs md:text-sm font-semibold">📦 All production measured in CARTONS</p>
-                    <p className="text-green-300 text-xs mt-1">Raw materials automatically deducted in bottles</p>
+                  <div className="bg-green-900/30 border border-emerald-200 rounded-lg p-3 md:p-4">
+                    <p className="text-emerald-600 text-xs md:text-sm font-semibold">📦 All production measured in CARTONS</p>
+                    <p className="text-emerald-600 text-xs mt-1">Raw materials automatically deducted in bottles</p>
                   </div>
 
-                  <div className="bg-slate-700/30 rounded-lg p-3 md:p-4 border border-blue-400/10">
-                    <h4 className="text-white font-semibold mb-3 text-sm">Production Items (in CARTONS)</h4>
+                  <div className="bg-slate-50 rounded-lg p-3 md:p-4 border border-slate-100">
+                    <h4 className="text-slate-900 font-semibold mb-3 text-sm">Production Items (in CARTONS)</h4>
                     <div className="space-y-3">
                       {['0.5L', '1.5L', '5L', '18.9L_disposable', '18.9L_refill'].map(size => {
                         const bottlesPerCarton = BOTTLES_PER_CARTON[size];
                         const unitLabel = (size.includes('18.9L')) ? 'units' : 'cartons';
                         return (
-                          <div key={size} className="flex items-center gap-2 text-xs md:text-sm bg-slate-700/50 p-2 rounded">
-                            <label className="text-blue-300 w-32">{size}</label>
+                          <div key={size} className="flex items-center gap-2 text-xs md:text-sm bg-slate-50 p-2 rounded">
+                            <label className="text-slate-500 w-32">{size}</label>
                             <input
                               type="number"
                               min="0"
@@ -3713,10 +3742,10 @@ export default function NorthernWaterSystemApp() {
                                 ...formData,
                                 items: { ...formData.items, [size]: parseInt(e.target.value) || 0 }
                               })}
-                              className="flex-1 bg-slate-700 border border-blue-400/30 text-white rounded px-2 py-1"
+                              className="flex-1 bg-slate-100 border border-slate-300 text-slate-900 rounded px-2 py-1"
                             />
-                            <span className="text-green-400 text-xs font-semibold w-16 text-right">{unitLabel}</span>
-                            <span className="text-slate-400 text-xs w-32">({bottlesPerCarton} bottles/carton)</span>
+                            <span className="text-emerald-600 text-xs font-semibold w-16 text-right">{unitLabel}</span>
+                            <span className="text-slate-500 text-xs w-32">({bottlesPerCarton} bottles/carton)</span>
                           </div>
                         );
                       })}
@@ -3724,11 +3753,11 @@ export default function NorthernWaterSystemApp() {
                   </div>
 
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Notes</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Notes</label>
                     <textarea
                       value={formData.notes || ''}
                       onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                       rows="2"
                       placeholder="Notes..."
                     />
@@ -3740,17 +3769,17 @@ export default function NorthernWaterSystemApp() {
               {modalType === 'expense' && (
                 <>
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Date</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Date</label>
                     <input
                       type="date"
                       value={formData.date || ''}
                       onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Category</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Category</label>
                     <select
                       value={formData.category || 'Raw Materials'}
                       onChange={(e) => {
@@ -3761,7 +3790,7 @@ export default function NorthernWaterSystemApp() {
                           subcategory: state.expenseCategories[category]?.[0] || ''
                         });
                       }}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                     >
                       {Object.keys(state.expenseCategories).map(cat => (
                         <option key={cat} value={cat}>{cat}</option>
@@ -3770,11 +3799,11 @@ export default function NorthernWaterSystemApp() {
                   </div>
 
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Sub-Category</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Sub-Category</label>
                     <select
                       value={formData.subcategory || ''}
                       onChange={(e) => setFormData({ ...formData, subcategory: e.target.value })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                     >
                       <option value="">Select...</option>
                       {state.expenseCategories[formData.category]?.map(sub => (
@@ -3784,23 +3813,23 @@ export default function NorthernWaterSystemApp() {
                   </div>
 
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Description</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Description</label>
                     <input
                       type="text"
                       value={formData.description || ''}
                       onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                       placeholder="e.g., Salary payment for staff..."
                     />
                   </div>
 
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Amount (KES)</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Amount (KES)</label>
                     <input
                       type="number"
                       value={formData.amount || 0}
                       onChange={(e) => setFormData({ ...formData, amount: parseInt(e.target.value) || 0 })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                       placeholder="0"
                     />
                   </div>
@@ -3811,21 +3840,21 @@ export default function NorthernWaterSystemApp() {
               {modalType === 'customer' && (
                 <>
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Name</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Name</label>
                     <input
                       type="text"
                       value={formData.name || ''}
                       onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                       placeholder="Name..."
                     />
                   </div>
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Location</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Location</label>
                     <select
                       value={formData.location || ''}
                       onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                     >
                       <option value="">Select...</option>
                       {state.locations.map(loc => (
@@ -3834,12 +3863,12 @@ export default function NorthernWaterSystemApp() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Phone</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Phone</label>
                     <input
                       type="tel"
                       value={formData.phone || ''}
                       onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                       placeholder="0712345678"
                     />
                   </div>
@@ -3848,27 +3877,27 @@ export default function NorthernWaterSystemApp() {
 
               {modalType === 'adjust' && (
                 <>
-                  <div className="bg-slate-700/30 rounded-lg p-3">
-                    <p className="text-white text-sm font-semibold">{formData.itemLabel}</p>
-                    <p className="text-slate-400 text-xs mt-1">Current quantity: {formData.currentQty}</p>
+                  <div className="bg-slate-50 rounded-lg p-3">
+                    <p className="text-slate-900 text-sm font-semibold">{formData.itemLabel}</p>
+                    <p className="text-slate-500 text-xs mt-1">Current quantity: {formData.currentQty}</p>
                   </div>
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">New Actual Quantity</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">New Actual Quantity</label>
                     <input
                       type="number"
                       step="0.01"
                       value={formData.newQty}
                       onChange={(e) => setFormData({ ...formData, newQty: e.target.value })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                       placeholder="Enter counted quantity"
                     />
                   </div>
                   <div>
-                    <label className="block text-blue-300 text-xs md:text-sm font-medium mb-2">Reason</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Reason</label>
                     <select
                       value={formData.reason || ''}
                       onChange={(e) => setFormData({ ...formData, reason: e.target.value })}
-                      className="w-full bg-slate-700/50 border border-blue-400/30 text-white rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                     >
                       <option value="">Select reason...</option>
                       <option value="Opening stock">Opening stock</option>
@@ -3882,10 +3911,10 @@ export default function NorthernWaterSystemApp() {
               )}
             </div>
 
-            <div className="flex gap-2 md:gap-3 p-4 md:p-6 border-t border-blue-400/10 bg-slate-800/50 sticky bottom-0">
+            <div className="flex gap-2 md:gap-3 p-4 md:p-6 border-t border-slate-100 bg-white sticky bottom-0">
               <button
                 onClick={() => setShowModal(false)}
-                className="flex-1 px-3 md:px-4 py-2 border border-blue-400/30 text-blue-300 rounded-lg hover:bg-slate-700/50 transition text-sm"
+                className="flex-1 px-3 md:px-4 py-2 border border-slate-300 text-slate-500 rounded-lg hover:bg-slate-50 transition text-sm"
               >
                 Cancel
               </button>
@@ -3899,7 +3928,7 @@ export default function NorthernWaterSystemApp() {
                   else if (modalType === 'customer') handleSaveCustomer();
                   else if (modalType === 'adjust') handleStockAdjustment();
                 }}
-                className="flex-1 px-3 md:px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                className="flex-1 px-3 md:px-4 py-2 bg-sky-500 hover:bg-sky-600 text-slate-900 rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
                 <Save className="w-4 h-4" /> Save
               </button>
