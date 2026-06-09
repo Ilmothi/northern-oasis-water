@@ -2189,7 +2189,7 @@ export default function NorthernWaterSystemApp() {
           <div className="bg-white border-b border-slate-100 sticky top-16 z-30">
             {/* Top pillar row */}
             <div className="overflow-x-auto">
-              <div className="flex gap-2 md:gap-8 px-4 md:px-6 min-w-max md:min-w-0">
+              <div className="flex justify-between sm:justify-start sm:gap-8 px-2 sm:px-6 sm:min-w-0">
                 {visiblePillars.map(p => {
                   const Icon = p.icon;
                   const isActive = currentPillar && currentPillar.id === p.id;
@@ -2197,12 +2197,12 @@ export default function NorthernWaterSystemApp() {
                     <button
                       key={p.id}
                       onClick={() => setActiveTab(p.tabs[0].id)}
-                      className={`flex items-center gap-1 md:gap-2 px-2 md:px-4 py-3 md:py-4 border-b-2 transition-all whitespace-nowrap text-sm md:text-base ${
+                      className={`flex flex-col sm:flex-row items-center gap-0.5 sm:gap-2 px-1 sm:px-4 py-2 sm:py-4 border-b-2 transition-all whitespace-nowrap flex-1 sm:flex-none ${
                         isActive ? 'border-sky-500 text-sky-600' : 'border-transparent text-slate-500 hover:text-slate-900'
                       }`}
                     >
-                      <Icon className="w-4 h-4" />
-                      <span className="hidden sm:inline">{p.label}</span>
+                      <Icon className="w-5 h-5 sm:w-4 sm:h-4" />
+                      <span className="text-[10px] sm:text-base leading-tight">{p.label}</span>
                     </button>
                   );
                 })}
