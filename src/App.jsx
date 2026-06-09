@@ -157,6 +157,12 @@ export default function NorthernWaterSystemApp() {
   const [saleCustomerSearch, setSaleCustomerSearch] = useState('');
   const [breakdownCard, setBreakdownCard] = useState(null);
   const [cartonCosts, setCartonCosts] = useState({});
+  const [employees, setEmployees] = useState([]);
+  const [editingEmployee, setEditingEmployee] = useState(null);
+  const [hrView, setHrView] = useState('registry');
+  const [hrMonth, setHrMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [casualRange, setCasualRange] = useState({ start: '', end: '' });
+  const [casualRate, setCasualRate] = useState(0);
 
   // ===== AUTH STATE =====
   const [session, setSession] = useState(null);
@@ -239,17 +245,44 @@ export default function NorthernWaterSystemApp() {
 
   const role = userProfile?.role || 'sales';
 
-  // Role-based record filtering: Sales sees only their own; Admin/Manager see all
+  // Sales visibility:
+  //  - Admin/Manager: see everything
+  //  - Sales WITH a location set: see records whose customer is in their location
+  //    (regardless of who entered them)
+  //  - Sales WITHOUT a location: fall back to only their own records
   const myUserId = session?.user?.id;
-  const visibleSales = role === 'sales'
-    ? state.sales.filter(s => s.created_by === myUserId)
-    : state.sales;
-  const visiblePayments = role === 'sales'
-    ? state.payments.filter(p => p.created_by === myUserId)
-    : state.payments;
+  const myLocation = userProfile?.location || null;
+
+  // Helper: does a record's customer belong to my location?
+  const customerInMyLocation = (customerId) => {
+    const cust = state.customers.find(c => c.id === customerId);
+    return cust && myLocation && cust.location === myLocation;
+  };
+
+  const visibleSales = role !== 'sales'
+    ? state.sales
+    : myLocation
+      ? state.sales.filter(s => customerInMyLocation(s.customerId))
+      : state.sales.filter(s => s.created_by === myUserId);
+
+  const visiblePayments = role !== 'sales'
+    ? state.payments
+    : myLocation
+      ? state.payments.filter(p => customerInMyLocation(p.customerId))
+      : state.payments.filter(p => p.created_by === myUserId);
+
+  // Expenses aren't tied to a customer/location, so keep them as own-records for sales
   const visibleExpenses = role === 'sales'
     ? state.expenses.filter(e => e.created_by === myUserId)
     : state.expenses;
+
+  // Customers visible to a sales user (for the debts list): their location only,
+  // or all of their own debtors if no location set. Admin/manager see all.
+  const visibleCustomers = role !== 'sales'
+    ? state.customers
+    : myLocation
+      ? state.customers.filter(c => c.location === myLocation)
+      : state.customers;
 
   // Load data from Supabase on app start — ONCE per login.
   // Using a guard so silent session/token refreshes don't reload data
@@ -348,6 +381,7 @@ export default function NorthernWaterSystemApp() {
           .single();
         if (costData && costData.costs) {
           setCartonCosts(costData.costs);
+          if (costData.costs.casual_rate != null) setCasualRate(Number(costData.costs.casual_rate) || 0);
         }
       } catch (e) {
         console.log('No cost settings yet');
@@ -369,6 +403,14 @@ export default function NorthernWaterSystemApp() {
         }
       } catch (e) {
         console.log('No saved inventory yet');
+      }
+
+      // Load employees (HR)
+      try {
+        const { data: empData } = await supabase.from('employees').select('*');
+        if (empData) setEmployees(empData);
+      } catch (e) {
+        console.log('No employees yet');
       }
 
       console.log('✅ Data loaded from Supabase successfully');
@@ -462,6 +504,107 @@ export default function NorthernWaterSystemApp() {
   };
 
   // Save finished-goods carton costs to Supabase (admin only)
+  // ===== HR: Payroll calculations =====
+  // Permanent: net = monthly salary - advances (expenses tagged to them) in the month
+  const getAdvancesForEmployee = (empId, month) => {
+    return state.expenses
+      .filter(e => e.advance_employee_id === empId && (e.date || '').slice(0, 7) === month)
+      .reduce((sum, e) => sum + (e.amount || 0), 0);
+  };
+
+  // Casual pay over a date range: for each production log in range, split
+  // (total cartons in that run) equally among the casuals on duty, × shared rate.
+  const getCasualPay = (range) => {
+    const sharedRate = Number(casualRate) || 0;
+    const result = {}; // empId -> { days, cartons, pay }
+    state.productionLogs.forEach(log => {
+      const d = log.date || '';
+      if (range.start && range.end && (d < range.start || d > range.end)) return;
+      const casuals = log.casuals || [];
+      if (casuals.length === 0) return;
+      const totalCartons = Object.values(log.items || {}).reduce((s, q) => s + (q || 0), 0);
+      if (totalCartons === 0) return;
+      const sharePerCasual = totalCartons / casuals.length;
+      casuals.forEach(empId => {
+        if (!result[empId]) result[empId] = { days: 0, cartons: 0, pay: 0 };
+        result[empId].days += 1;
+        result[empId].cartons += sharePerCasual;
+        result[empId].pay += sharePerCasual * sharedRate;
+      });
+    });
+    return result;
+  };
+
+  // ===== HR: Employee management (admin only) =====
+  const handleAddEmployee = (category) => {
+    setEditingEmployee(null);
+    setModalType('employee');
+    setFormData({ name: '', category: category || 'permanent', rate: '', phone: '', active: true });
+    setShowModal(true);
+  };
+
+  const handleEditEmployee = (emp) => {
+    setEditingEmployee(emp);
+    setModalType('employee');
+    setFormData({ name: emp.name, category: emp.category, rate: emp.rate, phone: emp.phone || '', active: emp.active });
+    setShowModal(true);
+  };
+
+  const handleSaveEmployee = async () => {
+    if (!formData.name || !formData.category) {
+      alert('Please enter a name and category');
+      return;
+    }
+    const payload = {
+      name: formData.name,
+      category: formData.category,
+      rate: parseFloat(formData.rate) || 0,
+      phone: formData.phone || '',
+      active: formData.active !== false,
+    };
+    try {
+      if (editingEmployee) {
+        await supabase.from('employees').update(payload).eq('id', editingEmployee.id);
+        setEmployees(employees.map(e => e.id === editingEmployee.id ? { ...e, ...payload } : e));
+      } else {
+        const { data } = await supabase.from('employees').insert([payload]).select();
+        if (data && data[0]) setEmployees([...employees, data[0]]);
+      }
+      setShowModal(false);
+      setEditingEmployee(null);
+    } catch (err) {
+      console.error('❌ Error saving employee:', err);
+      alert('Error saving employee. Please try again.');
+    }
+  };
+
+  const handleDeleteEmployee = (id) => {
+    if (!confirm('Remove this employee?')) return;
+    setEmployees(employees.filter(e => e.id !== id));
+    (async () => {
+      try {
+        await supabase.from('employees').delete().eq('id', id);
+      } catch (err) {
+        console.error('❌ Error deleting employee:', err);
+      }
+    })();
+  };
+
+  const handleSaveCasualRate = async () => {
+    try {
+      const merged = { ...cartonCosts, casual_rate: casualRate };
+      await supabase.from('cost_settings').update({
+        costs: merged,
+        updated_at: new Date().toISOString()
+      }).eq('id', 1);
+      setCartonCosts(merged);
+      alert('Casual rate saved');
+    } catch (error) {
+      console.error('❌ Error saving casual rate:', error);
+      alert('Error saving casual rate.');
+    }
+  };
+
   const handleSaveCartonCosts = async () => {
     try {
       await supabase.from('cost_settings').update({
@@ -739,10 +882,20 @@ export default function NorthernWaterSystemApp() {
       };
     }).sort((a, b) => b.debt - a.debt);
 
+    // Group debts by location, with a per-location total
+    const byLocation = {};
+    debtors.forEach(d => {
+      const loc = d.location || 'Unspecified';
+      if (!byLocation[loc]) byLocation[loc] = { debtors: [], total: 0 };
+      byLocation[loc].debtors.push(d);
+      byLocation[loc].total += d.debt;
+    });
+
     return {
       title: 'Aging Debtors Report',
       date: new Date().toLocaleDateString(),
       data: debtors,
+      byLocation,
       total: debtors.reduce((sum, d) => sum + d.debt, 0)
     };
   };
@@ -753,23 +906,34 @@ export default function NorthernWaterSystemApp() {
       filteredSales = state.sales.filter(s => s.date >= dateRange.start && s.date <= dateRange.end);
     }
 
+    const REFILL_KEYS = ['refill_10L', 'refill_15L', 'refill_20L'];
+
     const salesByLocation = {};
     const salesBySize = {};
     const bottlesByLocationAndSize = {};
-    
+    const refillsBySize = {};   // refill_10L/15L/20L -> bottle (unit) count
+    let refillRevenue = 0;
+
     filteredSales.forEach(sale => {
       const customer = state.customers.find(c => c.id === sale.customerId);
       const location = customer?.location || 'Unknown';
-      
+
       salesByLocation[location] = (salesByLocation[location] || 0) + sale.total;
-      
+
       if (!bottlesByLocationAndSize[location]) {
         bottlesByLocationAndSize[location] = {};
       }
-      
+
       sale.items.forEach(item => {
-        salesBySize[item.size] = (salesBySize[item.size] || 0) + item.quantity;
-        bottlesByLocationAndSize[location][item.size] = (bottlesByLocationAndSize[location][item.size] || 0) + item.quantity;
+        if (REFILL_KEYS.includes(item.size)) {
+          // Refills: separate section, counted as bottles (= quantity), not by location
+          refillsBySize[item.size] = (refillsBySize[item.size] || 0) + item.quantity;
+          refillRevenue += (item.quantity * (item.price || 0));
+        } else {
+          // Bottled products: by location + size, in cartons (as before)
+          salesBySize[item.size] = (salesBySize[item.size] || 0) + item.quantity;
+          bottlesByLocationAndSize[location][item.size] = (bottlesByLocationAndSize[location][item.size] || 0) + item.quantity;
+        }
       });
     });
 
@@ -782,6 +946,8 @@ export default function NorthernWaterSystemApp() {
       salesByLocation,
       salesBySize,
       bottlesByLocationAndSize,
+      refillsBySize,
+      refillRevenue,
       data: filteredSales
     };
   };
@@ -1019,37 +1185,37 @@ export default function NorthernWaterSystemApp() {
 
     // Add report-specific content
     if (reportType === 'aging') {
-      htmlContent += `
-        <div class="section">
-          <div class="summary">
-            Total Outstanding Debt: KES ${reportData.total.toLocaleString()}
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>Customer Name</th>
-                <th>Location</th>
-                <th>Outstanding</th>
-                <th>Days Overdue</th>
-                <th>Phone</th>
-              </tr>
-            </thead>
-            <tbody>
-      `;
-      reportData.data.forEach(d => {
-        htmlContent += `
+      htmlContent += `<div class="section">`;
+      Object.entries(reportData.byLocation)
+        .sort((a, b) => b[1].total - a[1].total)
+        .forEach(([location, group]) => {
+          htmlContent += `
+            <h2>${location} — KES ${group.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>Customer Name</th>
+                  <th>Outstanding</th>
+                  <th>Days Overdue</th>
+                  <th>Phone</th>
+                </tr>
+              </thead>
+              <tbody>
+          `;
+          group.debtors.forEach(d => {
+            htmlContent += `
               <tr>
                 <td>${d.name}</td>
-                <td>${d.location}</td>
-                <td>KES ${d.debt.toLocaleString()}</td>
+                <td>KES ${d.debt.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                 <td>${d.daysOverdue}</td>
-                <td>${d.phone}</td>
+                <td>${d.phone || '-'}</td>
               </tr>
-        `;
-      });
+            `;
+          });
+          htmlContent += `</tbody></table>`;
+        });
       htmlContent += `
-            </tbody>
-          </table>
+          <div class="summary"><strong>Total Outstanding Debt: KES ${reportData.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong></div>
         </div>
       `;
     } else if (reportType === 'sales') {
@@ -1102,6 +1268,25 @@ export default function NorthernWaterSystemApp() {
       htmlContent += `
             </tbody>
           </table>
+      `;
+      // Water refills — separate, in bottles
+      if (reportData.refillsBySize && Object.keys(reportData.refillsBySize).length > 0) {
+        htmlContent += `
+          <h2>Water Refills (bottles)</h2>
+          <table>
+            <thead><tr><th>Refill</th><th>Bottles</th></tr></thead>
+            <tbody>
+        `;
+        ['refill_10L', 'refill_15L', 'refill_20L'].filter(k => reportData.refillsBySize[k]).forEach(k => {
+          htmlContent += `<tr><td>${SIZE_LABELS[k] || k}</td><td>${reportData.refillsBySize[k]} bottles</td></tr>`;
+        });
+        htmlContent += `
+            </tbody>
+          </table>
+          <div class="summary">Refill Revenue: KES ${reportData.refillRevenue.toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+        `;
+      }
+      htmlContent += `
         </div>
       `;
     } else if (reportType === 'cash') {
@@ -1261,18 +1446,27 @@ export default function NorthernWaterSystemApp() {
       return;
     }
 
+    const advanceId = formData.advanceEmployeeId ? parseInt(formData.advanceEmployeeId) : null;
+
     if (editingExpense) {
+      const updated = { ...editingExpense, ...formData, amount: parseFloat(formData.amount), advance_employee_id: advanceId };
       const updatedExpenses = state.expenses.map(e =>
-        e.id === editingExpense.id ? { ...e, ...formData, amount: parseInt(formData.amount) } : e
+        e.id === editingExpense.id ? updated : e
       );
       setState({ ...state, expenses: updatedExpenses });
 
-      // Save to Supabase
       const saveToSupabase = async () => {
         try {
           await supabase
             .from('expenses')
-            .update({ ...formData, amount: parseInt(formData.amount) })
+            .update({
+              date: formData.date,
+              category: formData.category,
+              subcategory: formData.subcategory,
+              description: formData.description || '',
+              amount: parseFloat(formData.amount),
+              advance_employee_id: advanceId
+            })
             .eq('id', editingExpense.id);
           console.log('✅ Expense updated in Supabase');
         } catch (error) {
@@ -1283,13 +1477,16 @@ export default function NorthernWaterSystemApp() {
     } else {
       const newExpense = {
         id: Math.max(...state.expenses.map(e => e.id), 0) + 1,
-        ...formData,
-        amount: parseInt(formData.amount),
+        date: formData.date,
+        category: formData.category,
+        subcategory: formData.subcategory,
+        description: formData.description || '',
+        amount: parseFloat(formData.amount),
+        advance_employee_id: advanceId,
         created_by: session?.user?.id || null
       };
       setState({ ...state, expenses: [...state.expenses, newExpense] });
 
-      // Save to Supabase
       const saveToSupabase = async () => {
         try {
           await supabase.from('expenses').insert([newExpense]);
@@ -1638,7 +1835,7 @@ export default function NorthernWaterSystemApp() {
   // Production
   const handleAddProduction = () => {
     setModalType('production');
-    setFormData({ items: {}, date: new Date().toISOString().split('T')[0], notes: '', unit: 'cartons' });
+    setFormData({ items: {}, date: new Date().toISOString().split('T')[0], notes: '', unit: 'cartons', casuals: [] });
     setShowModal(true);
   };
 
@@ -1654,7 +1851,8 @@ export default function NorthernWaterSystemApp() {
       date: formData.date,
       items: formData.items, // Cartons produced
       unit: 'cartons', // Always cartons
-      notes: formData.notes
+      notes: formData.notes,
+      casuals: formData.casuals || []
     };
 
     const updatedRawMaterials = { ...state.rawMaterials };
@@ -1733,6 +1931,16 @@ export default function NorthernWaterSystemApp() {
       rawMaterials: updatedRawMaterials,
       finishedGoods: updatedFinishedGoods
     });
+
+    // Persist the production log to Supabase
+    (async () => {
+      try {
+        await supabase.from('production_logs').insert([newProduction]);
+        console.log('✅ Production log saved to Supabase');
+      } catch (error) {
+        console.error('❌ Error saving production log:', error);
+      }
+    })();
 
     setShowModal(false);
   };
@@ -1964,6 +2172,7 @@ export default function NorthernWaterSystemApp() {
           ]},
           { id: 'expenses', label: 'Expenses', icon: DollarSign, tabs: [{ id: 'expenses', roles: ['admin', 'manager', 'sales'] }] },
           { id: 'customers', label: 'Customers', icon: Users, tabs: [{ id: 'customers', roles: ['admin', 'manager', 'sales'] }] },
+          { id: 'hr', label: 'HR', icon: Users, tabs: [{ id: 'hr', roles: ['admin'] }] },
           { id: 'reports', label: 'Reports', icon: TrendingUp, tabs: [{ id: 'reports', roles: ['admin', 'manager'] }] },
         ];
 
@@ -2380,31 +2589,43 @@ export default function NorthernWaterSystemApp() {
 
                 {/* Aging Debtors Report */}
                 {reportType === 'aging' && (
-                  <div className="space-y-3">
-                    <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 md:p-4 mb-4">
-                      <p className="text-rose-600 text-xs md:text-sm">Total Outstanding Debt</p>
-                      <p className="text-slate-900 text-2xl md:text-3xl font-bold">KES {reportData.total.toLocaleString()}</p>
-                    </div>
+                  <div className="space-y-4">
                     {reportData.data.length === 0 ? (
                       <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No debtors</p>
                     ) : (
-                      <div className="space-y-2 md:space-y-3">
-                        {reportData.data.map((debtor, i) => (
-                          <div key={i} className="p-3 md:p-4 bg-slate-50 rounded-lg border-l-4 border-red-500 text-xs md:text-sm">
-                            <div className="flex justify-between items-start gap-2 mb-2">
-                              <div>
-                                <p className="text-slate-900 font-semibold">{debtor.name}</p>
-                                <p className="text-slate-500 text-xs">{debtor.location}</p>
-                              </div>
-                              <p className="text-rose-600 font-semibold">KES {debtor.debt.toLocaleString()}</p>
+                      <>
+                        {Object.entries(reportData.byLocation)
+                          .sort((a, b) => b[1].total - a[1].total)
+                          .map(([location, group]) => (
+                          <div key={location} className="bg-white border border-slate-200 rounded-xl shadow-sm p-3 md:p-4">
+                            <div className="flex justify-between items-center mb-3 pb-2 border-b border-slate-100">
+                              <h4 className="text-slate-900 font-semibold text-sm">{location}</h4>
+                              <p className="text-rose-600 font-bold text-sm">KES {group.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
                             </div>
-                            <div className="flex justify-between text-xs text-slate-500">
-                              <span>Ph: {debtor.phone}</span>
-                              <span>{debtor.daysOverdue}d overdue</span>
+                            <div className="space-y-2">
+                              {group.debtors.map((debtor, i) => (
+                                <div key={i} className="p-2 md:p-3 bg-slate-50 rounded-lg border-l-4 border-rose-400 text-xs md:text-sm">
+                                  <div className="flex justify-between items-start gap-2">
+                                    <div>
+                                      <p className="text-slate-900 font-semibold">{debtor.name}</p>
+                                      <p className="text-slate-400 text-xs">Ph: {debtor.phone || '—'} · {debtor.daysOverdue}d overdue</p>
+                                    </div>
+                                    <p className="text-rose-600 font-semibold">KES {debtor.debt.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                                  </div>
+                                </div>
+                              ))}
                             </div>
                           </div>
                         ))}
-                      </div>
+
+                        {/* Grand total */}
+                        <div className="bg-rose-50 border-2 border-rose-200 rounded-xl p-4">
+                          <div className="flex justify-between items-center">
+                            <p className="text-rose-700 font-semibold text-sm">Total Outstanding Debt</p>
+                            <p className="text-rose-700 text-xl md:text-2xl font-bold">KES {reportData.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                          </div>
+                        </div>
+                      </>
                     )}
                   </div>
                 )}
@@ -2468,6 +2689,26 @@ export default function NorthernWaterSystemApp() {
                         ))}
                       </div>
                     </div>
+
+                    {/* Water Refills — separate, shown as bottles, not by location */}
+                    {reportData.refillsBySize && Object.keys(reportData.refillsBySize).length > 0 && (
+                      <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-6">
+                        <h4 className="text-slate-900 font-semibold mb-1 text-base">💧 Water Refills</h4>
+                        <p className="text-slate-400 text-xs mb-3">Service refills, counted in bottles (units)</p>
+                        <div className="grid grid-cols-3 gap-2">
+                          {['refill_10L', 'refill_15L', 'refill_20L'].filter(k => reportData.refillsBySize[k]).map(k => (
+                            <div key={k} className="bg-slate-50 p-3 rounded text-center">
+                              <p className="text-slate-500 text-xs font-semibold">{SIZE_LABELS[k] || k}</p>
+                              <p className="text-slate-900 font-bold">{reportData.refillsBySize[k]} bottles</p>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex justify-between items-center mt-3 pt-3 border-t border-slate-100">
+                          <span className="text-slate-500 text-sm">Refill Revenue</span>
+                          <span className="text-slate-900 font-bold">KES {reportData.refillRevenue.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -2733,7 +2974,7 @@ export default function NorthernWaterSystemApp() {
               <h2 className="text-xl md:text-2xl font-bold text-slate-900">Payments & Debts</h2>
               <button
                 onClick={handleAddPayment}
-                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-slate-900 px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-white px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
                 <Plus className="w-4 h-4" /> Record Payment
               </button>
@@ -2742,7 +2983,7 @@ export default function NorthernWaterSystemApp() {
             {/* Summary Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-6">
               {[
-                { label: 'Total Debt', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-rose-500', tab: 'debts' },
+                { label: 'Total Debt', value: `KES ${visibleCustomers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-rose-500', tab: 'debts' },
                 { label: 'Total Credits', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, c.balance), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-emerald-500' },
                 { label: 'Total Received', value: `KES ${state.payments.reduce((sum, p) => sum + p.amount, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-sky-500' },
               ].map((card, i) => (
@@ -2799,13 +3040,13 @@ export default function NorthernWaterSystemApp() {
               <div className="bg-white border border-slate-200 rounded-b-lg rounded-tr-lg p-4 md:p-6">
                 <h3 className="text-slate-900 font-semibold mb-4 text-base">Customers with Outstanding Debts</h3>
                 <div className="space-y-3">
-                  {state.customers.filter(c => c.balance < 0).length === 0 ? (
+                  {visibleCustomers.filter(c => c.balance < 0).length === 0 ? (
                     <div className="text-center py-8">
                       <p className="text-emerald-600 text-lg font-semibold">✓ No Outstanding Debts!</p>
                       <p className="text-slate-500 text-sm mt-2">All customers are up to date</p>
                     </div>
                   ) : (
-                    state.customers
+                    visibleCustomers
                       .filter(c => c.balance < 0)
                       .sort((a, b) => a.balance - b.balance)
                       .map((customer) => {
@@ -2814,7 +3055,7 @@ export default function NorthernWaterSystemApp() {
                         const lastSale = sales.length > 0 ? sales[sales.length - 1] : null;
                         
                         return (
-                          <div key={customer.id} className="p-4 bg-red-900/20 border-2 border-rose-200 rounded-lg">
+                          <div key={customer.id} className="p-4 bg-rose-50 border-2 border-rose-200 rounded-lg">
                             {/* Customer Header */}
                             <div className="flex justify-between items-start mb-3">
                               <div className="flex-1">
@@ -3210,6 +3451,244 @@ export default function NorthernWaterSystemApp() {
           </div>
         )}
 
+        {/* HR Tab (admin only) — Stage A: Employee Registry */}
+        {activeTab === 'hr' && role === 'admin' && (
+          <div className="space-y-4 md:space-y-6">
+            <div>
+              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Human Resources</h2>
+              <p className="text-slate-500 text-sm mt-1">Manage employees and their pay rates. Permanent staff have a fixed monthly salary; casuals are paid per carton produced.</p>
+            </div>
+
+            {/* HR sub-navigation */}
+            <div className="flex gap-1 bg-slate-100 border border-slate-200 rounded-lg p-1 overflow-x-auto">
+              {[
+                { id: 'registry', label: 'Employees' },
+                { id: 'permanent', label: 'Permanent Payroll' },
+                { id: 'casual', label: 'Casual Pay' },
+              ].map(v => (
+                <button
+                  key={v.id}
+                  onClick={() => setHrView(v.id)}
+                  className={`px-3 py-1.5 rounded-md text-xs md:text-sm font-medium whitespace-nowrap transition ${
+                    hrView === v.id ? 'bg-sky-500 text-white' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Casual shared rate setting */}
+            {hrView === 'registry' && (
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-6">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-slate-700 font-semibold text-sm">Casual Rate per Carton (shared)</h3>
+                  <p className="text-slate-400 text-xs mt-0.5">One rate applied to all casuals' carton shares.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400 text-xs">KES</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={casualRate || ''}
+                    onChange={(e) => setCasualRate(parseFloat(e.target.value) || 0)}
+                    className="w-28 bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 py-1.5 text-sm text-right"
+                  />
+                  <button onClick={handleSaveCasualRate} className="bg-sky-500 hover:bg-sky-600 text-white text-xs rounded-lg px-3 py-1.5">Save</button>
+                </div>
+              </div>
+            </div>
+            )}
+
+            {hrView === 'registry' && (<>
+            {/* Permanent employees */}
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-slate-700 font-semibold text-sm">Permanent Employees</h3>
+                <button onClick={() => handleAddEmployee('permanent')} className="bg-sky-500 hover:bg-sky-600 text-white text-xs rounded-lg px-3 py-1.5 flex items-center gap-1">
+                  <Plus className="w-3.5 h-3.5" /> Add
+                </button>
+              </div>
+              {employees.filter(e => e.category === 'permanent').length === 0 ? (
+                <p className="text-slate-400 text-sm text-center py-4">No permanent employees yet</p>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {employees.filter(e => e.category === 'permanent').map(emp => (
+                    <div key={emp.id} className="flex items-center justify-between py-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="text-slate-900 text-sm font-medium">{emp.name}</p>
+                          <span className={`text-[10px] rounded px-1.5 py-0.5 border ${emp.active ? 'text-emerald-700 border-emerald-200 bg-emerald-50' : 'text-slate-400 border-slate-200 bg-slate-50'}`}>
+                            {emp.active ? 'active' : 'inactive'}
+                          </span>
+                        </div>
+                        <p className="text-slate-400 text-xs mt-0.5">{emp.phone || 'No phone'}</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <p className="text-slate-900 text-sm font-semibold">KES {Number(emp.rate).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                          <p className="text-slate-400 text-[10px]">per month</p>
+                        </div>
+                        <div className="flex gap-1">
+                          <button onClick={() => handleEditEmployee(emp)} className="text-slate-400 hover:text-sky-600"><Edit2 className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => handleDeleteEmployee(emp.id)} className="text-slate-400 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Casual employees */}
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-slate-700 font-semibold text-sm">Casual Employees</h3>
+                <button onClick={() => handleAddEmployee('casual')} className="bg-sky-500 hover:bg-sky-600 text-white text-xs rounded-lg px-3 py-1.5 flex items-center gap-1">
+                  <Plus className="w-3.5 h-3.5" /> Add
+                </button>
+              </div>
+              {employees.filter(e => e.category === 'casual').length === 0 ? (
+                <p className="text-slate-400 text-sm text-center py-4">No casual employees yet</p>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {employees.filter(e => e.category === 'casual').map(emp => (
+                    <div key={emp.id} className="flex items-center justify-between py-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="text-slate-900 text-sm font-medium">{emp.name}</p>
+                          <span className={`text-[10px] rounded px-1.5 py-0.5 border ${emp.active ? 'text-emerald-700 border-emerald-200 bg-emerald-50' : 'text-slate-400 border-slate-200 bg-slate-50'}`}>
+                            {emp.active ? 'active' : 'inactive'}
+                          </span>
+                        </div>
+                        <p className="text-slate-400 text-xs mt-0.5">{emp.phone || 'No phone'}</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <p className="text-slate-900 text-sm font-semibold">KES {Number(emp.rate).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                          <p className="text-slate-400 text-[10px]">per carton</p>
+                        </div>
+                        <div className="flex gap-1">
+                          <button onClick={() => handleEditEmployee(emp)} className="text-slate-400 hover:text-sky-600"><Edit2 className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => handleDeleteEmployee(emp.id)} className="text-slate-400 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            </>)}
+
+            {/* Permanent Payroll view */}
+            {hrView === 'permanent' && (
+              <div className="space-y-4">
+                <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4">
+                  <label className="text-slate-500 text-xs block mb-2">Month</label>
+                  <input
+                    type="month"
+                    value={hrMonth}
+                    onChange={(e) => setHrMonth(e.target.value)}
+                    className="bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-6">
+                  <h3 className="text-slate-700 font-semibold text-sm mb-3">Net Payable — {hrMonth}</h3>
+                  {employees.filter(e => e.category === 'permanent' && e.active).length === 0 ? (
+                    <p className="text-slate-400 text-sm text-center py-4">No active permanent employees</p>
+                  ) : (
+                    <div className="divide-y divide-slate-100">
+                      {employees.filter(e => e.category === 'permanent' && e.active).map(emp => {
+                        const advances = getAdvancesForEmployee(emp.id, hrMonth);
+                        const net = Number(emp.rate) - advances;
+                        return (
+                          <div key={emp.id} className="py-3">
+                            <div className="flex items-center justify-between">
+                              <p className="text-slate-900 text-sm font-medium">{emp.name}</p>
+                              <p className="text-slate-900 text-sm font-bold">KES {net.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                            </div>
+                            <div className="flex items-center justify-between text-xs text-slate-400 mt-1">
+                              <span>Salary KES {Number(emp.rate).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                              <span className={advances > 0 ? 'text-rose-500' : ''}>− advances KES {advances.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <p className="text-slate-400 text-xs mt-3">Advances are expenses tagged to an employee in the selected month. This view is for reference only and does not post anywhere.</p>
+                </div>
+              </div>
+            )}
+
+            {/* Casual Pay view */}
+            {hrView === 'casual' && (
+              <div className="space-y-4">
+                <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-slate-500 text-xs block mb-1">Start Date</label>
+                      <input type="date" value={casualRange.start} onChange={(e) => setCasualRange({ ...casualRange, start: e.target.value })} className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                      <label className="text-slate-500 text-xs block mb-1">End Date</label>
+                      <input type="date" value={casualRange.end} onChange={(e) => setCasualRange({ ...casualRange, end: e.target.value })} className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="text-slate-500 text-xs">Casual rate per carton (KES):</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={casualRate || ''}
+                      onChange={(e) => setCasualRate(parseFloat(e.target.value) || 0)}
+                      className="w-24 bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-2 py-1 text-sm text-right"
+                      placeholder="0"
+                    />
+                    <button onClick={handleSaveCasualRate} className="bg-sky-500 hover:bg-sky-600 text-white text-xs rounded-lg px-3 py-1">Save</button>
+                  </div>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-6">
+                  <h3 className="text-slate-700 font-semibold text-sm mb-3">Casual Pay Due</h3>
+                  {(() => {
+                    const pay = getCasualPay(casualRange);
+                    const rows = employees.filter(e => e.category === 'casual' && pay[e.id]);
+                    if (rows.length === 0) {
+                      return <p className="text-slate-400 text-sm text-center py-4">No casual work recorded in this range</p>;
+                    }
+                    let grand = 0;
+                    return (
+                      <>
+                        <div className="divide-y divide-slate-100">
+                          {rows.map(emp => {
+                            const r = pay[emp.id];
+                            grand += r.pay;
+                            return (
+                              <div key={emp.id} className="py-3">
+                                <div className="flex items-center justify-between">
+                                  <p className="text-slate-900 text-sm font-medium">{emp.name}</p>
+                                  <p className="text-slate-900 text-sm font-bold">KES {r.pay.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                                </div>
+                                <p className="text-slate-400 text-xs mt-1">{r.days} day(s) · {r.cartons.toFixed(1)} cartons credited</p>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-200">
+                          <span className="text-slate-700 font-semibold text-sm">Total Casual Pay</span>
+                          <span className="text-slate-900 font-bold">KES {grand.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      </>
+                    );
+                  })()}
+                  <p className="text-slate-400 text-xs mt-3">Calculated from production runs: each run's total cartons split equally among the casuals on duty, × shared rate. Reference only — not posted to expenses (already in carton costs).</p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Dashboard Card Breakdown Modal */}
         {breakdownCard && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setBreakdownCard(null)}>
@@ -3332,6 +3811,7 @@ export default function NorthernWaterSystemApp() {
                 {modalType === 'expense' && (editingExpense ? 'Edit Expense' : 'New Expense')}
                 {modalType === 'customer' && (editingCustomer ? 'Edit' : 'New Customer')}
                 {modalType === 'adjust' && 'Adjust Stock'}
+                {modalType === 'employee' && (editingEmployee ? 'Edit Employee' : 'New Employee')}
               </h3>
               <button onClick={() => setShowModal(false)} className="text-slate-500 hover:text-slate-900">
                 <X className="w-5 h-5" />
@@ -3720,7 +4200,7 @@ export default function NorthernWaterSystemApp() {
                     />
                   </div>
 
-                  <div className="bg-green-900/30 border border-emerald-200 rounded-lg p-3 md:p-4">
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 md:p-4">
                     <p className="text-emerald-600 text-xs md:text-sm font-semibold">📦 All production measured in CARTONS</p>
                     <p className="text-emerald-600 text-xs mt-1">Raw materials automatically deducted in bottles</p>
                   </div>
@@ -3733,7 +4213,7 @@ export default function NorthernWaterSystemApp() {
                         const unitLabel = (size.includes('18.9L')) ? 'units' : 'cartons';
                         return (
                           <div key={size} className="flex items-center gap-2 text-xs md:text-sm bg-slate-50 p-2 rounded">
-                            <label className="text-slate-500 w-32">{size}</label>
+                            <label className="text-slate-500 w-32">{SIZE_LABELS[size] || size}</label>
                             <input
                               type="number"
                               min="0"
@@ -3750,6 +4230,40 @@ export default function NorthernWaterSystemApp() {
                         );
                       })}
                     </div>
+                  </div>
+
+                  {/* Casuals on duty (Stage C) */}
+                  <div className="bg-slate-50 rounded-lg p-3 md:p-4 border border-slate-100">
+                    <h4 className="text-slate-900 font-semibold mb-1 text-sm">Casuals on Duty</h4>
+                    <p className="text-slate-400 text-xs mb-3">Select casuals who worked this run. Total cartons are split equally among them for pay.</p>
+                    {employees.filter(e => e.category === 'casual' && e.active).length === 0 ? (
+                      <p className="text-slate-400 text-xs">No active casual employees. Add them in the HR tab.</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {employees.filter(e => e.category === 'casual' && e.active).map(emp => {
+                          const selected = (formData.casuals || []).includes(emp.id);
+                          return (
+                            <label key={emp.id} className="flex items-center gap-2 text-sm py-1 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                onChange={(e) => {
+                                  const current = formData.casuals || [];
+                                  setFormData({
+                                    ...formData,
+                                    casuals: e.target.checked
+                                      ? [...current, emp.id]
+                                      : current.filter(id => id !== emp.id)
+                                  });
+                                }}
+                                className="w-4 h-4"
+                              />
+                              <span className="text-slate-700">{emp.name}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   <div>
@@ -3827,11 +4341,27 @@ export default function NorthernWaterSystemApp() {
                     <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Amount (KES)</label>
                     <input
                       type="number"
-                      value={formData.amount || 0}
-                      onChange={(e) => setFormData({ ...formData, amount: parseInt(e.target.value) || 0 })}
+                      step="0.01"
+                      value={formData.amount || ''}
+                      onChange={(e) => setFormData({ ...formData, amount: parseFloat(e.target.value) || 0 })}
                       className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                       placeholder="0"
                     />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Salary advance to (optional)</label>
+                    <select
+                      value={formData.advanceEmployeeId || ''}
+                      onChange={(e) => setFormData({ ...formData, advanceEmployeeId: e.target.value })}
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                    >
+                      <option value="">Not an advance</option>
+                      {employees.filter(emp => emp.category === 'permanent' && emp.active).map(emp => (
+                        <option key={emp.id} value={emp.id}>{emp.name}</option>
+                      ))}
+                    </select>
+                    <p className="text-slate-400 text-xs mt-1">If this expense is a salary advance, select the employee. It will be deducted from their monthly net pay in HR.</p>
                   </div>
                 </>
               )}
@@ -3909,6 +4439,65 @@ export default function NorthernWaterSystemApp() {
                   </div>
                 </>
               )}
+
+              {modalType === 'employee' && (
+                <>
+                  <div>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Name</label>
+                    <input
+                      type="text"
+                      value={formData.name || ''}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                      placeholder="Employee name"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Category</label>
+                    <select
+                      value={formData.category || 'permanent'}
+                      onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                    >
+                      <option value="permanent">Permanent</option>
+                      <option value="casual">Casual</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">
+                      {formData.category === 'casual' ? 'Rate per Carton (KES)' : 'Monthly Salary (KES)'}
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={formData.rate || ''}
+                      onChange={(e) => setFormData({ ...formData, rate: e.target.value })}
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Phone (optional)</label>
+                    <input
+                      type="text"
+                      value={formData.phone || ''}
+                      onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                      placeholder="07..."
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="emp-active"
+                      checked={formData.active !== false}
+                      onChange={(e) => setFormData({ ...formData, active: e.target.checked })}
+                      className="w-4 h-4"
+                    />
+                    <label htmlFor="emp-active" className="text-slate-600 text-sm">Active</label>
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="flex gap-2 md:gap-3 p-4 md:p-6 border-t border-slate-100 bg-white sticky bottom-0">
@@ -3927,6 +4516,7 @@ export default function NorthernWaterSystemApp() {
                   else if (modalType === 'expense') handleSaveExpense();
                   else if (modalType === 'customer') handleSaveCustomer();
                   else if (modalType === 'adjust') handleStockAdjustment();
+                  else if (modalType === 'employee') handleSaveEmployee();
                 }}
                 className="flex-1 px-3 md:px-4 py-2 bg-sky-500 hover:bg-sky-600 text-slate-900 rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
