@@ -168,7 +168,7 @@ const EXPENSE_TYPES = [
   { name: 'Excise Duty', treatment: 'cogs' },
   { name: 'Seals Expenses', treatment: 'cogs' },
   // Excluded from P&L — cash tracking only
-  { name: 'Casual Labour', treatment: 'excluded' },
+  { name: 'Casual Labour', treatment: 'operating' },
   { name: 'Empty Bottles Transport', treatment: 'excluded' },
   { name: 'Loan Principal', treatment: 'excluded' },
 ];
@@ -207,6 +207,7 @@ export default function NorthernWaterSystemApp() {
   const [hrMonth, setHrMonth] = useState(new Date().toISOString().slice(0, 7));
   const [casualRange, setCasualRange] = useState({ start: '', end: '' });
   const [casualRate, setCasualRate] = useState(0);
+  const [payrollPayments, setPayrollPayments] = useState([]);
 
   // ===== AUTH STATE =====
   const [session, setSession] = useState(null);
@@ -457,6 +458,14 @@ export default function NorthernWaterSystemApp() {
         console.log('No employees yet');
       }
 
+      // Load payroll payments
+      try {
+        const { data: payData } = await supabase.from('payroll_payments').select('*');
+        if (payData) setPayrollPayments(payData);
+      } catch (e) {
+        console.log('No payroll payments yet');
+      }
+
       console.log('✅ Data loaded from Supabase successfully');
     } catch (error) {
       console.error('❌ Error loading data from Supabase:', error);
@@ -577,6 +586,94 @@ export default function NorthernWaterSystemApp() {
       });
     });
     return result;
+  };
+
+  // Has a salary already been paid for this employee+month?
+  const isSalaryPaid = (empId, month) =>
+    payrollPayments.some(p => p.type === 'salary' && p.employee_id === empId && p.period_label === month);
+
+  // Does a casual date range overlap any already-paid casual period?
+  const casualRangeOverlaps = (range) => {
+    if (!range.start || !range.end) return false;
+    return payrollPayments.some(p =>
+      p.type === 'casual' && p.period_start && p.period_end &&
+      !(range.end < p.period_start || range.start > p.period_end)
+    );
+  };
+
+  // Record a permanent salary payment: logs it AND creates a Salary expense.
+  const recordSalaryPayment = async (emp, month, netAmount) => {
+    if (netAmount <= 0) { alert('Nothing to pay for this month.'); return; }
+    if (isSalaryPaid(emp.id, month)) { alert('Salary already recorded for this employee this month.'); return; }
+    if (!confirm(`Record salary payment of KES ${netAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} for ${emp.name} (${month})? This also creates a Salary expense.`)) return;
+
+    const datePaid = new Date().toISOString().split('T')[0];
+    const newExpense = {
+      id: Math.max(...state.expenses.map(e => e.id), 0) + 1,
+      date: datePaid,
+      category: 'operating',
+      subcategory: 'Salary',
+      description: `Salary - ${emp.name} (${month})`,
+      amount: netAmount,
+      advance_employee_id: null,
+      created_by: session?.user?.id || null
+    };
+    const payment = {
+      type: 'salary', employee_id: emp.id, employee_name: emp.name,
+      period_label: month, period_start: `${month}-01`, period_end: `${month}-28`,
+      amount: netAmount, date_paid: datePaid
+    };
+    setState({ ...state, expenses: [...state.expenses, newExpense] });
+    try {
+      await supabase.from('expenses').insert([newExpense]);
+      const { data } = await supabase.from('payroll_payments').insert([{ ...payment, expense_id: newExpense.id }]).select();
+      if (data && data[0]) setPayrollPayments([...payrollPayments, data[0]]);
+      alert('Salary payment recorded.');
+    } catch (err) {
+      console.error('❌ Error recording salary payment:', err);
+      alert('Error recording payment.');
+    }
+  };
+
+  // Record a casual payout for a date range: logs each casual's payment AND
+  // creates ONE Casual Labour expense for the total (casual labour is now a P&L cost).
+  const recordCasualPayment = async (range) => {
+    if (!range.start || !range.end) { alert('Pick a start and end date first.'); return; }
+    const pay = getCasualPay(range);
+    const rows = employees.filter(e => e.category === 'casual' && pay[e.id]);
+    const total = rows.reduce((s, e) => s + pay[e.id].pay, 0);
+    if (total <= 0) { alert('No casual pay to record for this range.'); return; }
+    if (casualRangeOverlaps(range) && !confirm('Part of this date range was already paid. Record anyway?')) return;
+    if (!confirm(`Record casual payout of KES ${total.toLocaleString('en-US', { minimumFractionDigits: 2 })} for ${range.start} to ${range.end}? This also creates a Casual Labour expense.`)) return;
+
+    const datePaid = new Date().toISOString().split('T')[0];
+    const rangeLabel = `${range.start} to ${range.end}`;
+    const newExpense = {
+      id: Math.max(...state.expenses.map(e => e.id), 0) + 1,
+      date: datePaid,
+      category: 'operating',
+      subcategory: 'Casual Labour',
+      description: `Casual labour (${rangeLabel})`,
+      amount: total,
+      advance_employee_id: null,
+      created_by: session?.user?.id || null
+    };
+    setState({ ...state, expenses: [...state.expenses, newExpense] });
+
+    const paymentRows = rows.map(e => ({
+      type: 'casual', employee_id: e.id, employee_name: e.name,
+      period_label: rangeLabel, period_start: range.start, period_end: range.end,
+      amount: pay[e.id].pay, date_paid: datePaid, expense_id: newExpense.id
+    }));
+    try {
+      await supabase.from('expenses').insert([newExpense]);
+      const { data } = await supabase.from('payroll_payments').insert(paymentRows).select();
+      if (data) setPayrollPayments([...payrollPayments, ...data]);
+      alert('Casual payout recorded.');
+    } catch (err) {
+      console.error('❌ Error recording casual payment:', err);
+      alert('Error recording payout.');
+    }
   };
 
   // ===== HR: Employee management (admin only) =====
@@ -1569,6 +1666,12 @@ export default function NorthernWaterSystemApp() {
 
   const handleDeleteExpense = (id) => {
     if (confirm('Delete this expense?')) {
+      // If this expense was created by a payroll payment, remove those payment
+      // records too, so salary "Paid" status and casual history stay accurate.
+      const linkedPayments = payrollPayments.filter(p => p.expense_id === id);
+      if (linkedPayments.length > 0) {
+        setPayrollPayments(payrollPayments.filter(p => p.expense_id !== id));
+      }
       setState({
         ...state,
         expenses: state.expenses.filter(e => e.id !== id)
@@ -1577,6 +1680,9 @@ export default function NorthernWaterSystemApp() {
       (async () => {
         try {
           await supabase.from('expenses').delete().eq('id', id);
+          if (linkedPayments.length > 0) {
+            await supabase.from('payroll_payments').delete().eq('expense_id', id);
+          }
           console.log('✅ Expense deleted from Supabase');
         } catch (error) {
           console.error('❌ Error deleting expense:', error);
@@ -3791,6 +3897,7 @@ export default function NorthernWaterSystemApp() {
                       {employees.filter(e => e.category === 'permanent' && e.active).map(emp => {
                         const advances = getAdvancesForEmployee(emp.id, hrMonth);
                         const net = Number(emp.rate) - advances;
+                        const paid = isSalaryPaid(emp.id, hrMonth);
                         return (
                           <div key={emp.id} className="py-3">
                             <div className="flex items-center justify-between">
@@ -3801,12 +3908,21 @@ export default function NorthernWaterSystemApp() {
                               <span>Salary KES {Number(emp.rate).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
                               <span className={advances > 0 ? 'text-rose-500' : ''}>− advances KES {advances.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
                             </div>
+                            <div className="mt-2">
+                              {paid ? (
+                                <span className="text-emerald-600 text-xs font-medium">✓ Paid</span>
+                              ) : (
+                                <button onClick={() => recordSalaryPayment(emp, hrMonth, net)} className="bg-sky-500 hover:bg-sky-600 text-white text-xs rounded-lg px-3 py-1.5">
+                                  Record Payment
+                                </button>
+                              )}
+                            </div>
                           </div>
                         );
                       })}
                     </div>
                   )}
-                  <p className="text-slate-400 text-xs mt-3">Advances are expenses tagged to an employee in the selected month. This view is for reference only and does not post anywhere.</p>
+                  <p className="text-slate-400 text-xs mt-3">Advances are expenses tagged to an employee in the selected month. Recording a payment creates a Salary expense (so it hits the P&L) and marks the month paid — so don't also enter salaries manually.</p>
                 </div>
               </div>
             )}
@@ -3868,10 +3984,33 @@ export default function NorthernWaterSystemApp() {
                           <span className="text-slate-700 font-semibold text-sm">Total Casual Pay</span>
                           <span className="text-slate-900 font-bold">KES {grand.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
                         </div>
+                        <button onClick={() => recordCasualPayment(casualRange)} className="mt-3 w-full bg-sky-500 hover:bg-sky-600 text-white text-sm rounded-lg px-4 py-2">
+                          Record Payout for this Range
+                        </button>
                       </>
                     );
                   })()}
-                  <p className="text-slate-400 text-xs mt-3">Calculated from production runs: each run's total cartons split equally among the casuals on duty, × shared rate. Reference only — not posted to expenses (already in carton costs).</p>
+                  <p className="text-slate-400 text-xs mt-3">Calculated from production runs: each run's total cartons split equally among the casuals on duty, × shared rate. Recording a payout logs each casual's payment and creates one Casual Labour expense (now a P&L cost). Use the date range to control what's been paid.</p>
+
+                  {/* Payment history */}
+                  {payrollPayments.filter(p => p.type === 'casual').length > 0 && (
+                    <div className="mt-4 pt-3 border-t border-slate-100">
+                      <h4 className="text-slate-700 font-semibold text-sm mb-2">Casual Payout History</h4>
+                      <div className="space-y-1">
+                        {Object.values(payrollPayments.filter(p => p.type === 'casual').reduce((acc, p) => {
+                          const key = `${p.period_label}|${p.date_paid}`;
+                          if (!acc[key]) acc[key] = { label: p.period_label, date: p.date_paid, total: 0 };
+                          acc[key].total += Number(p.amount);
+                          return acc;
+                        }, {})).map((g, i) => (
+                          <div key={i} className="flex justify-between text-xs text-slate-500 py-1">
+                            <span>{g.label} <span className="text-slate-400">· paid {g.date}</span></span>
+                            <span className="font-semibold text-slate-700">KES {g.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
