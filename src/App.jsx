@@ -132,6 +132,49 @@ const SIZE_LABELS = {
   'refill_20L': 'Water Refill 20L'
 };
 
+// Expense types, each tagged with its P&L treatment:
+//   'operating'  -> counts in the P&L as an operating expense (below gross profit)
+//   'cogs'       -> a raw-material / purchase cost (already in carton costs); recorded but NOT operating
+//   'excluded'   -> recorded for cash tracking only; NOT in P&L at all
+const EXPENSE_TYPES = [
+  // Operating — affects P&L
+  { name: 'Rent', treatment: 'operating' },
+  { name: 'Raw Water', treatment: 'operating' },
+  { name: 'Statutory Payments', treatment: 'operating' },
+  { name: 'Salary', treatment: 'operating' },
+  { name: 'Chemicals & Filters', treatment: 'operating' },
+  { name: 'Equipment Maintenance & Repair', treatment: 'operating' },
+  { name: 'Staff Welfare', treatment: 'operating' },
+  { name: 'Marketing', treatment: 'operating' },
+  { name: 'Administrative Costs', treatment: 'operating' },
+  { name: 'Heat Gun Purchase & Repair', treatment: 'operating' },
+  { name: 'Security Expenses', treatment: 'operating' },
+  { name: 'Premises Maintenance', treatment: 'operating' },
+  { name: 'Delivery Expenses', treatment: 'operating' },
+  { name: 'Electricity', treatment: 'operating' },
+  { name: 'Generator Expenses', treatment: 'operating' },
+  { name: 'Lorry Expenses', treatment: 'operating' },
+  { name: 'Date Stamp Ink', treatment: 'operating' },
+  { name: 'Transport Expenses', treatment: 'operating' },
+  { name: 'LPG Gas Blow Torch', treatment: 'operating' },
+  { name: 'Directors', treatment: 'operating' },
+  { name: 'Offloading & Onloading', treatment: 'operating' },
+  { name: 'Loan Interest', treatment: 'operating' },
+  // Purchases / COGS — recorded, not operating
+  { name: 'Bottles Costs', treatment: 'cogs' },
+  { name: 'Labels Costs', treatment: 'cogs' },
+  { name: 'KRA Stamp Costs', treatment: 'cogs' },
+  { name: 'Overwraps Costs', treatment: 'cogs' },
+  { name: 'Excise Duty', treatment: 'cogs' },
+  { name: 'Seals Expenses', treatment: 'cogs' },
+  // Excluded from P&L — cash tracking only
+  { name: 'Casual Labour', treatment: 'excluded' },
+  { name: 'Empty Bottles Transport', treatment: 'excluded' },
+  { name: 'Loan Principal', treatment: 'excluded' },
+];
+
+const EXPENSE_TREATMENT = EXPENSE_TYPES.reduce((m, t) => { m[t.name] = t.treatment; return m; }, {});
+
 const BOTTLES_PER_CARTON = {
   '0.5L': 24,
   '1.5L': 12,
@@ -155,6 +198,7 @@ export default function NorthernWaterSystemApp() {
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [customerSearch, setCustomerSearch] = useState('');
   const [saleCustomerSearch, setSaleCustomerSearch] = useState('');
+  const [paymentSaleSearch, setPaymentSaleSearch] = useState('');
   const [breakdownCard, setBreakdownCard] = useState(null);
   const [cartonCosts, setCartonCosts] = useState({});
   const [employees, setEmployees] = useState([]);
@@ -206,9 +250,9 @@ export default function NorthernWaterSystemApp() {
         .single();
       if (data) {
         setUserProfile(data);
-        // Sales users can't see dashboard, so land them on Sales tab
+        // Sales users land on their own Home dashboard
         if (data.role === 'sales') {
-          setActiveTab('sales');
+          setActiveTab('salesdashboard');
         }
       }
     } catch (error) {
@@ -1019,9 +1063,15 @@ export default function NorthernWaterSystemApp() {
     }
 
     const totalExpenses = filtered.reduce((sum, e) => sum + e.amount, 0);
-    const byCategory = {};
+    const byType = {};       // group by the actual expense type (subcategory)
+    let operatingTotal = 0, cogsTotal = 0, excludedTotal = 0;
     filtered.forEach(e => {
-      byCategory[e.category] = (byCategory[e.category] || 0) + e.amount;
+      const type = e.subcategory || 'Other';
+      byType[type] = (byType[type] || 0) + e.amount;
+      const treatment = EXPENSE_TREATMENT[e.subcategory] || e.category || 'operating';
+      if (treatment === 'operating') operatingTotal += e.amount;
+      else if (treatment === 'cogs') cogsTotal += e.amount;
+      else excludedTotal += e.amount;
     });
 
     return {
@@ -1029,7 +1079,10 @@ export default function NorthernWaterSystemApp() {
       date: new Date().toLocaleDateString(),
       period: dateRange.start ? `${dateRange.start} to ${dateRange.end}` : 'All Time',
       totalExpenses,
-      byCategory,
+      byCategory: byType,
+      operatingTotal,
+      cogsTotal,
+      excludedTotal,
       expenses: filtered.slice().sort((a, b) => new Date(b.date) - new Date(a.date))
     };
   };
@@ -1058,17 +1111,24 @@ export default function NorthernWaterSystemApp() {
 
     const grossProfit = totalRevenue - cogs;
 
-    // Operating expenses = Salaries (from Labour) + all Operations.
-    // Exclude Casual Pay, Overtime (in COGS), and Raw Materials (in COGS via carton cost).
+    // Operating expenses = expense types tagged 'operating' (Rent, Electricity,
+    // Salary, Loan Interest, etc.). COGS-tagged and excluded-tagged are NOT operating.
     let operatingExpenses = 0;
+    let cogsExpenses = 0;
+    let excludedExpenses = 0;
     const operatingBreakdown = {};
     periodExpenses.forEach(e => {
-      const isSalary = e.category === 'Labour' && e.subcategory === 'Salaries';
-      const isOperations = e.category === 'Operations';
-      if (isSalary || isOperations) {
+      // Treatment comes from the expense type; fall back to the stored category
+      // (which we now set to the treatment), then default to operating for old records.
+      const treatment = EXPENSE_TREATMENT[e.subcategory] || e.category || 'operating';
+      if (treatment === 'operating') {
         operatingExpenses += e.amount;
-        const key = isSalary ? 'Salaries' : (e.subcategory || 'Operations');
+        const key = e.subcategory || 'Other';
         operatingBreakdown[key] = (operatingBreakdown[key] || 0) + e.amount;
+      } else if (treatment === 'cogs') {
+        cogsExpenses += e.amount;
+      } else {
+        excludedExpenses += e.amount;
       }
     });
 
@@ -1084,6 +1144,8 @@ export default function NorthernWaterSystemApp() {
       grossMargin: totalRevenue > 0 ? ((grossProfit / totalRevenue) * 100).toFixed(1) : 0,
       operatingExpenses,
       operatingBreakdown,
+      cogsExpenses,
+      excludedExpenses,
       netProfit,
       netMargin: totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) : 0
     };
@@ -1333,23 +1395,28 @@ export default function NorthernWaterSystemApp() {
       htmlContent += `
         <div class="section">
           <div class="summary">
-            Total Expenses: KES ${reportData.totalExpenses.toLocaleString()}
+            Total Spent (all cash out): KES ${reportData.totalExpenses.toLocaleString('en-US', { minimumFractionDigits: 2 })}<br/>
+            P&L Operating: KES ${reportData.operatingTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}<br/>
+            Purchases / COGS: KES ${reportData.cogsTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}<br/>
+            Excluded (cash only): KES ${reportData.excludedTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}
           </div>
-          <h2>Expenses by Category</h2>
+          <h2>Expenses by Type</h2>
           <table>
             <thead>
               <tr>
-                <th>Category</th>
+                <th>Type</th>
+                <th>Treatment</th>
                 <th>Amount</th>
               </tr>
             </thead>
             <tbody>
       `;
-      Object.entries(reportData.byCategory).forEach(([category, amount]) => {
+      Object.entries(reportData.byCategory).forEach(([type, amount]) => {
         htmlContent += `
               <tr>
-                <td>${category}</td>
-                <td>KES ${amount.toLocaleString()}</td>
+                <td>${type}</td>
+                <td>${EXPENSE_TREATMENT[type] || 'operating'}</td>
+                <td>KES ${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
               </tr>
         `;
       });
@@ -1759,6 +1826,7 @@ export default function NorthernWaterSystemApp() {
       return;
     }
     setModalType('payment');
+    setPaymentSaleSearch('');
     setFormData({ saleId: '', amount: 0, method: 'cash', reference: '', date: new Date().toISOString().split('T')[0] });
     setShowModal(true);
   };
@@ -2158,7 +2226,10 @@ export default function NorthernWaterSystemApp() {
         // Pillar definitions. Each pillar shows if the user can access at least
         // one of its tabs. Sub-tabs are individually role-gated.
         const PILLARS = [
-          { id: 'home', label: 'Home', icon: BarChart3, tabs: [{ id: 'dashboard', roles: ['admin', 'manager'] }] },
+          { id: 'home', label: 'Home', icon: BarChart3, tabs: [
+            { id: 'dashboard', roles: ['admin', 'manager'] },
+            { id: 'salesdashboard', roles: ['sales'] },
+          ] },
           { id: 'sales', label: 'Sales', icon: DollarSign, tabs: [
             { id: 'sales', label: 'Sales History', roles: ['admin', 'manager', 'sales'] },
             { id: 'payments', label: 'Payments', roles: ['admin', 'manager', 'sales'] },
@@ -2170,7 +2241,7 @@ export default function NorthernWaterSystemApp() {
             { id: 'costsettings', label: 'Cost Settings', roles: ['admin'] },
             { id: 'adjust', label: 'Stock Adjustments', roles: ['admin'] },
           ]},
-          { id: 'expenses', label: 'Expenses', icon: DollarSign, tabs: [{ id: 'expenses', roles: ['admin', 'manager', 'sales'] }] },
+          { id: 'expenses', label: 'Expenses', icon: DollarSign, tabs: [{ id: 'expenses', roles: ['admin', 'manager'] }] },
           { id: 'customers', label: 'Customers', icon: Users, tabs: [{ id: 'customers', roles: ['admin', 'manager', 'sales'] }] },
           { id: 'hr', label: 'HR', icon: Users, tabs: [{ id: 'hr', roles: ['admin'] }] },
           { id: 'reports', label: 'Reports', icon: TrendingUp, tabs: [{ id: 'reports', roles: ['admin', 'manager'] }] },
@@ -2235,6 +2306,109 @@ export default function NorthernWaterSystemApp() {
       <main className="w-full px-4 md:px-6 py-4 md:py-8">
         
         {/* Dashboard */}
+        {/* Sales person's Home dashboard (location-scoped) */}
+        {activeTab === 'salesdashboard' && role === 'sales' && (() => {
+          const REFILL_KEYS = ['refill_10L', 'refill_15L', 'refill_20L'];
+          const now = new Date();
+          const monthPrefix = now.toISOString().slice(0, 7); // YYYY-MM
+          const monthSales = visibleSales.filter(s => (s.date || '').slice(0, 7) === monthPrefix);
+
+          const cartonsBySize = {};
+          const refillsBySize = {};
+          monthSales.forEach(sale => {
+            sale.items.forEach(item => {
+              if (REFILL_KEYS.includes(item.size)) {
+                refillsBySize[item.size] = (refillsBySize[item.size] || 0) + item.quantity;
+              } else {
+                cartonsBySize[item.size] = (cartonsBySize[item.size] || 0) + item.quantity;
+              }
+            });
+          });
+
+          const totalCustomers = visibleCustomers.length;
+          const totalDebt = visibleCustomers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0);
+
+          return (
+            <div className="space-y-4 md:space-y-6">
+              <div className="grid grid-cols-2 gap-3 md:gap-4">
+                <button onClick={() => setActiveTab('customers')} className="relative overflow-hidden bg-white border border-slate-200 rounded-xl shadow-sm p-4 text-left hover:border-sky-300 transition">
+                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-sky-500" />
+                  <p className="text-slate-500 text-xs mb-1 pl-1">Customers</p>
+                  <p className="text-slate-900 text-lg md:text-2xl font-bold pl-1">{totalCustomers.toLocaleString()}</p>
+                  <p className="text-slate-400 text-xs pl-1 mt-1">in your area →</p>
+                </button>
+                <button onClick={() => { setActiveTab('payments'); setPaymentsTab('debts'); }} className="relative overflow-hidden bg-white border border-slate-200 rounded-xl shadow-sm p-4 text-left hover:border-rose-300 transition">
+                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-rose-500" />
+                  <p className="text-slate-500 text-xs mb-1 pl-1">Outstanding Debts</p>
+                  <p className="text-slate-900 text-lg md:text-2xl font-bold pl-1 break-words">KES {totalDebt.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                  <p className="text-slate-400 text-xs pl-1 mt-1">across debtors →</p>
+                </button>
+              </div>
+
+              {/* Monthly cartons by size */}
+              <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-6">
+                <h3 className="text-slate-700 font-semibold mb-1 text-sm">This Month's Sales — Cartons by Size</h3>
+                <p className="text-slate-400 text-xs mb-3">{monthPrefix}</p>
+                {Object.keys(cartonsBySize).length === 0 ? (
+                  <p className="text-slate-400 text-sm py-2">No carton sales this month</p>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                      {Object.entries(cartonsBySize).map(([size, qty]) => (
+                        <div key={size} className="bg-slate-50 p-3 rounded-lg text-center">
+                          <p className="text-slate-500 text-xs font-semibold">{SIZE_LABELS[size] || size}</p>
+                          <p className="text-slate-900 font-bold">{qty} cartons</p>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex justify-between items-center mt-3 pt-3 border-t border-slate-100">
+                      <span className="text-slate-700 font-semibold text-sm">Total Cartons</span>
+                      <span className="text-slate-900 font-bold">{Object.values(cartonsBySize).reduce((s, q) => s + q, 0)} cartons</span>
+                    </div>
+                  </>
+                )}
+
+                {Object.keys(refillsBySize).length > 0 && (
+                  <>
+                    <h4 className="text-slate-700 font-semibold mt-4 mb-2 text-sm">💧 Refills (bottles)</h4>
+                    <div className="grid grid-cols-3 gap-2">
+                      {['refill_10L', 'refill_15L', 'refill_20L'].filter(k => refillsBySize[k]).map(k => (
+                        <div key={k} className="bg-slate-50 p-3 rounded-lg text-center">
+                          <p className="text-slate-500 text-xs font-semibold">{SIZE_LABELS[k] || k}</p>
+                          <p className="text-slate-900 font-bold">{refillsBySize[k]} bottles</p>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Recent sales */}
+              <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-6">
+                <h3 className="text-slate-700 font-semibold mb-3 text-sm">Recent Sales</h3>
+                {visibleSales.length === 0 ? (
+                  <p className="text-slate-400 text-sm py-2">No sales yet</p>
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {visibleSales.slice().reverse().slice(0, 8).map(sale => {
+                      const customer = state.customers.find(c => c.id === sale.customerId);
+                      return (
+                        <div key={sale.id} className="flex items-center justify-between py-3">
+                          <div className="min-w-0">
+                            <p className="text-slate-900 text-sm font-medium truncate">{customer?.name || 'Unknown'}</p>
+                            <p className="text-slate-400 text-xs">{sale.date}</p>
+                          </div>
+                          <p className="text-emerald-600 text-sm font-semibold">KES {sale.total.toLocaleString()}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
         {activeTab === 'dashboard' && (
           <div className="space-y-4 md:space-y-6">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
@@ -2760,15 +2934,30 @@ export default function NorthernWaterSystemApp() {
                 {/* Expense Report */}
                 {reportType === 'expense' && (
                   <div className="space-y-2 md:space-y-3">
-                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 md:p-4 mb-4">
-                      <p className="text-amber-600 text-xs md:text-sm">Total Expenses</p>
-                      <p className="text-slate-900 text-2xl md:text-3xl font-bold">KES {reportData.totalExpenses.toLocaleString()}</p>
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 md:p-4 mb-2">
+                      <p className="text-amber-600 text-xs md:text-sm">Total Spent (all cash out)</p>
+                      <p className="text-slate-900 text-2xl md:text-3xl font-bold">KES {reportData.totalExpenses.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
                     </div>
-                    <h4 className="text-slate-900 font-semibold text-sm">By Category:</h4>
-                    {Object.entries(reportData.byCategory).map(([category, amount]) => (
-                      <div key={category} className="flex justify-between items-center p-3 md:p-4 bg-slate-50 rounded-lg text-xs md:text-sm">
-                        <p className="text-slate-500">{category}</p>
-                        <p className="text-slate-900 font-semibold">KES {amount.toLocaleString()}</p>
+                    {/* Treatment split */}
+                    <div className="grid grid-cols-3 gap-2 mb-3">
+                      <div className="bg-white border border-slate-200 rounded-lg p-3">
+                        <p className="text-slate-400 text-[11px]">P&L Operating</p>
+                        <p className="text-slate-900 font-bold text-sm">KES {reportData.operatingTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                      </div>
+                      <div className="bg-white border border-slate-200 rounded-lg p-3">
+                        <p className="text-slate-400 text-[11px]">Purchases / COGS</p>
+                        <p className="text-slate-900 font-bold text-sm">KES {reportData.cogsTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                      </div>
+                      <div className="bg-white border border-slate-200 rounded-lg p-3">
+                        <p className="text-slate-400 text-[11px]">Excluded (cash only)</p>
+                        <p className="text-slate-900 font-bold text-sm">KES {reportData.excludedTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                      </div>
+                    </div>
+                    <h4 className="text-slate-900 font-semibold text-sm">By Type:</h4>
+                    {Object.entries(reportData.byCategory).map(([type, amount]) => (
+                      <div key={type} className="flex justify-between items-center p-3 md:p-4 bg-slate-50 rounded-lg text-xs md:text-sm">
+                        <p className="text-slate-500">{type} <span className="text-slate-400">· {EXPENSE_TREATMENT[type] || 'operating'}</span></p>
+                        <p className="text-slate-900 font-semibold">KES {amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
                       </div>
                     ))}
                   </div>
@@ -4104,29 +4293,44 @@ export default function NorthernWaterSystemApp() {
                 <>
                   <div>
                     <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Sale</label>
-                    <select
-                      value={formData.saleId || ''}
-                      onChange={(e) => {
-                        const sale = state.sales.find(s => s.id === parseInt(e.target.value));
-                        setFormData({
-                          ...formData,
-                          saleId: e.target.value,
-                          amount: sale ? sale.total - sale.paid : 0
-                        });
-                      }}
-                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
-                    >
-                      <option value="">Select...</option>
-                      {state.sales.filter(s => s.paid < s.total).map(s => {
+                    <input
+                      type="text"
+                      value={paymentSaleSearch}
+                      onChange={(e) => setPaymentSaleSearch(e.target.value)}
+                      placeholder="Search by customer name..."
+                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm placeholder-slate-400 mb-2"
+                    />
+                    <div className="max-h-48 overflow-y-auto border border-slate-300 rounded-lg divide-y divide-slate-100">
+                      {state.sales.filter(s => s.paid < s.total).filter(s => {
+                        const customer = state.customers.find(c => c.id === s.customerId);
+                        const q = paymentSaleSearch.toLowerCase();
+                        return !q || (customer?.name || '').toLowerCase().includes(q);
+                      }).map(s => {
                         const customer = state.customers.find(c => c.id === s.customerId);
                         const balance = s.total - s.paid;
+                        const selected = parseInt(formData.saleId) === s.id;
                         return (
-                          <option key={s.id} value={s.id}>
-                            {customer?.name} - KES {balance.toLocaleString()}
-                          </option>
+                          <button
+                            key={s.id}
+                            type="button"
+                            onClick={() => setFormData({ ...formData, saleId: String(s.id), amount: balance })}
+                            className={`w-full text-left px-3 py-2 text-sm transition flex justify-between items-center ${
+                              selected ? 'bg-sky-500/20 text-slate-900' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            <span>{customer?.name || 'Unknown'} <span className="text-xs text-slate-400">({s.invoiceNumber || 'INV'})</span></span>
+                            <span className="text-xs font-semibold text-rose-600">KES {balance.toLocaleString()}</span>
+                          </button>
                         );
                       })}
-                    </select>
+                      {state.sales.filter(s => s.paid < s.total).filter(s => {
+                        const customer = state.customers.find(c => c.id === s.customerId);
+                        const q = paymentSaleSearch.toLowerCase();
+                        return !q || (customer?.name || '').toLowerCase().includes(q);
+                      }).length === 0 && (
+                        <p className="text-slate-500 text-sm text-center py-3">No matching unpaid sales</p>
+                      )}
+                    </div>
                   </div>
 
                   {formData.saleId && (
@@ -4293,37 +4497,43 @@ export default function NorthernWaterSystemApp() {
                   </div>
 
                   <div>
-                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Category</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Expense Type</label>
                     <select
-                      value={formData.category || 'Raw Materials'}
+                      value={formData.subcategory || ''}
                       onChange={(e) => {
-                        const category = e.target.value;
+                        const type = e.target.value;
                         setFormData({
                           ...formData,
-                          category,
-                          subcategory: state.expenseCategories[category]?.[0] || ''
+                          subcategory: type,
+                          category: EXPENSE_TREATMENT[type] || 'operating'
                         });
                       }}
                       className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
                     >
-                      {Object.keys(state.expenseCategories).map(cat => (
-                        <option key={cat} value={cat}>{cat}</option>
-                      ))}
+                      <option value="">Select expense type...</option>
+                      <optgroup label="Operating (affects P&L)">
+                        {EXPENSE_TYPES.filter(t => t.treatment === 'operating').map(t => (
+                          <option key={t.name} value={t.name}>{t.name}</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Purchases / COGS">
+                        {EXPENSE_TYPES.filter(t => t.treatment === 'cogs').map(t => (
+                          <option key={t.name} value={t.name}>{t.name}</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Other (cash only, not in P&L)">
+                        {EXPENSE_TYPES.filter(t => t.treatment === 'excluded').map(t => (
+                          <option key={t.name} value={t.name}>{t.name}</option>
+                        ))}
+                      </optgroup>
                     </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Sub-Category</label>
-                    <select
-                      value={formData.subcategory || ''}
-                      onChange={(e) => setFormData({ ...formData, subcategory: e.target.value })}
-                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
-                    >
-                      <option value="">Select...</option>
-                      {state.expenseCategories[formData.category]?.map(sub => (
-                        <option key={sub} value={sub}>{sub}</option>
-                      ))}
-                    </select>
+                    {formData.subcategory && (
+                      <p className="text-xs mt-1 text-slate-400">
+                        {EXPENSE_TREATMENT[formData.subcategory] === 'operating' && '✓ Counts as an operating expense in the P&L'}
+                        {EXPENSE_TREATMENT[formData.subcategory] === 'cogs' && 'ℹ Raw material / purchase cost — not an operating expense'}
+                        {EXPENSE_TREATMENT[formData.subcategory] === 'excluded' && 'ℹ Recorded for cash only — excluded from the P&L'}
+                      </p>
+                    )}
                   </div>
 
                   <div>
