@@ -199,6 +199,7 @@ export default function NorthernWaterSystemApp() {
   const [customerSearch, setCustomerSearch] = useState('');
   const [saleCustomerSearch, setSaleCustomerSearch] = useState('');
   const [paymentSaleSearch, setPaymentSaleSearch] = useState('');
+  const [salesFilterDate, setSalesFilterDate] = useState('');
   const [breakdownCard, setBreakdownCard] = useState(null);
   const [cartonCosts, setCartonCosts] = useState({});
   const [employees, setEmployees] = useState([]);
@@ -571,6 +572,7 @@ export default function NorthernWaterSystemApp() {
     const sharedRate = Number(casualRate) || 0;
     const result = {}; // empId -> { days, cartons, pay }
     state.productionLogs.forEach(log => {
+      if (log.casual_paid) return; // already paid — don't show as due
       const d = log.date || '';
       if (range.start && range.end && (d < range.start || d > range.end)) return;
       const casuals = log.casuals || [];
@@ -642,8 +644,7 @@ export default function NorthernWaterSystemApp() {
     const pay = getCasualPay(range);
     const rows = employees.filter(e => e.category === 'casual' && pay[e.id]);
     const total = rows.reduce((s, e) => s + pay[e.id].pay, 0);
-    if (total <= 0) { alert('No casual pay to record for this range.'); return; }
-    if (casualRangeOverlaps(range) && !confirm('Part of this date range was already paid. Record anyway?')) return;
+    if (total <= 0) { alert('No unpaid casual pay to record for this range.'); return; }
     if (!confirm(`Record casual payout of KES ${total.toLocaleString('en-US', { minimumFractionDigits: 2 })} for ${range.start} to ${range.end}? This also creates a Casual Labour expense.`)) return;
 
     const datePaid = new Date().toISOString().split('T')[0];
@@ -658,7 +659,21 @@ export default function NorthernWaterSystemApp() {
       advance_employee_id: null,
       created_by: session?.user?.id || null
     };
-    setState({ ...state, expenses: [...state.expenses, newExpense] });
+
+    // Identify the unpaid production runs being paid now, and mark them paid
+    const paidRunIds = state.productionLogs.filter(log => {
+      if (log.casual_paid) return false;
+      const d = log.date || '';
+      if (range.start && range.end && (d < range.start || d > range.end)) return false;
+      return (log.casuals || []).length > 0 &&
+        Object.values(log.items || {}).reduce((s, q) => s + (q || 0), 0) > 0;
+    }).map(log => log.id);
+
+    const updatedLogs = state.productionLogs.map(log =>
+      paidRunIds.includes(log.id) ? { ...log, casual_paid: true, casual_expense_id: newExpense.id } : log
+    );
+
+    setState({ ...state, expenses: [...state.expenses, newExpense], productionLogs: updatedLogs });
 
     const paymentRows = rows.map(e => ({
       type: 'casual', employee_id: e.id, employee_name: e.name,
@@ -669,6 +684,10 @@ export default function NorthernWaterSystemApp() {
       await supabase.from('expenses').insert([newExpense]);
       const { data } = await supabase.from('payroll_payments').insert(paymentRows).select();
       if (data) setPayrollPayments([...payrollPayments, ...data]);
+      // Persist the paid flag on each production run
+      for (const runId of paidRunIds) {
+        await supabase.from('production_logs').update({ casual_paid: true, casual_expense_id: newExpense.id }).eq('id', runId);
+      }
       alert('Casual payout recorded.');
     } catch (err) {
       console.error('❌ Error recording casual payment:', err);
@@ -1672,9 +1691,17 @@ export default function NorthernWaterSystemApp() {
       if (linkedPayments.length > 0) {
         setPayrollPayments(payrollPayments.filter(p => p.expense_id !== id));
       }
+      // If this was a casual payout, un-flag the production runs it paid for,
+      // so they return to "Pay Due".
+      const runsToUnflag = state.productionLogs.filter(log => log.casual_expense_id === id).map(log => log.id);
+      const updatedLogs = runsToUnflag.length > 0
+        ? state.productionLogs.map(log => log.casual_expense_id === id ? { ...log, casual_paid: false, casual_expense_id: null } : log)
+        : state.productionLogs;
+
       setState({
         ...state,
-        expenses: state.expenses.filter(e => e.id !== id)
+        expenses: state.expenses.filter(e => e.id !== id),
+        productionLogs: updatedLogs
       });
       // Remove from Supabase
       (async () => {
@@ -1682,6 +1709,9 @@ export default function NorthernWaterSystemApp() {
           await supabase.from('expenses').delete().eq('id', id);
           if (linkedPayments.length > 0) {
             await supabase.from('payroll_payments').delete().eq('expense_id', id);
+          }
+          for (const runId of runsToUnflag) {
+            await supabase.from('production_logs').update({ casual_paid: false, casual_expense_id: null }).eq('id', runId);
           }
           console.log('✅ Expense deleted from Supabase');
         } catch (error) {
@@ -3211,12 +3241,56 @@ export default function NorthernWaterSystemApp() {
             </div>
 
             <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
-              <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm md:text-base">History</h3>
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3 md:mb-4">
+                <h3 className="text-slate-900 font-semibold text-sm md:text-base">History</h3>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="date"
+                    value={salesFilterDate}
+                    onChange={(e) => setSalesFilterDate(e.target.value)}
+                    className="bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 py-1.5 text-sm"
+                  />
+                  {salesFilterDate && (
+                    <button onClick={() => setSalesFilterDate('')} className="text-xs text-slate-500 hover:text-slate-800 px-2 py-1">Clear</button>
+                  )}
+                </div>
+              </div>
+
+              {(() => {
+                const filtered = salesFilterDate
+                  ? visibleSales.filter(s => s.date === salesFilterDate)
+                  : visibleSales;
+
+                // Day summary: cash collected vs debt (handles partial payments)
+                if (salesFilterDate) {
+                  const dayTotal = filtered.reduce((sum, s) => sum + s.total, 0);
+                  const dayCash = filtered.reduce((sum, s) => sum + (s.paid || 0), 0);
+                  const dayDebt = dayTotal - dayCash;
+                  return (
+                    <div className="grid grid-cols-3 gap-2 mb-4">
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-center">
+                        <p className="text-slate-500 text-xs">Total</p>
+                        <p className="text-slate-900 font-bold text-sm">KES {dayTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                      </div>
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-center">
+                        <p className="text-emerald-600 text-xs">Cash</p>
+                        <p className="text-slate-900 font-bold text-sm">KES {dayCash.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                      </div>
+                      <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 text-center">
+                        <p className="text-rose-600 text-xs">Debt</p>
+                        <p className="text-slate-900 font-bold text-sm">KES {dayDebt.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+
               <div className="space-y-2 md:space-y-3 max-h-96 overflow-y-auto">
-                {visibleSales.length === 0 ? (
-                  <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No sales</p>
+                {(salesFilterDate ? visibleSales.filter(s => s.date === salesFilterDate) : visibleSales).length === 0 ? (
+                  <p className="text-slate-500 text-center py-4 md:py-8 text-sm">{salesFilterDate ? 'No sales on this day' : 'No sales'}</p>
                 ) : (
-                  visibleSales.slice().reverse().map(sale => {
+                  (salesFilterDate ? visibleSales.filter(s => s.date === salesFilterDate) : visibleSales).slice().reverse().map(sale => {
                     const customer = state.customers.find(c => c.id === sale.customerId);
                     return (
                       <div key={sale.id} className="p-3 md:p-4 bg-slate-50 rounded-lg border border-slate-100">
