@@ -200,6 +200,10 @@ export default function NorthernWaterSystemApp() {
   const [saleCustomerSearch, setSaleCustomerSearch] = useState('');
   const [paymentSaleSearch, setPaymentSaleSearch] = useState('');
   const [salesFilterDate, setSalesFilterDate] = useState('');
+  const [salesSearch, setSalesSearch] = useState('');
+  const [paymentsSearch, setPaymentsSearch] = useState('');
+  const [debtsSearch, setDebtsSearch] = useState('');
+  const [invoiceDetail, setInvoiceDetail] = useState(null);
   const [breakdownCard, setBreakdownCard] = useState(null);
   const [cartonCosts, setCartonCosts] = useState({});
   const [employees, setEmployees] = useState([]);
@@ -3245,21 +3249,34 @@ export default function NorthernWaterSystemApp() {
                 <h3 className="text-slate-900 font-semibold text-sm md:text-base">History</h3>
                 <div className="flex items-center gap-2">
                   <input
+                    type="text"
+                    value={salesSearch}
+                    onChange={(e) => setSalesSearch(e.target.value)}
+                    placeholder="Search name / invoice..."
+                    className="bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 py-1.5 text-sm placeholder-slate-400"
+                  />
+                  <input
                     type="date"
                     value={salesFilterDate}
                     onChange={(e) => setSalesFilterDate(e.target.value)}
                     className="bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 py-1.5 text-sm"
                   />
-                  {salesFilterDate && (
-                    <button onClick={() => setSalesFilterDate('')} className="text-xs text-slate-500 hover:text-slate-800 px-2 py-1">Clear</button>
+                  {(salesFilterDate || salesSearch) && (
+                    <button onClick={() => { setSalesFilterDate(''); setSalesSearch(''); }} className="text-xs text-slate-500 hover:text-slate-800 px-2 py-1">Clear</button>
                   )}
                 </div>
               </div>
 
               {(() => {
-                const filtered = salesFilterDate
-                  ? visibleSales.filter(s => s.date === salesFilterDate)
-                  : visibleSales;
+                const matchesSearch = (s) => {
+                  if (!salesSearch) return true;
+                  const c = state.customers.find(c => c.id === s.customerId);
+                  const q = salesSearch.toLowerCase();
+                  return (c?.name || '').toLowerCase().includes(q) || (s.invoiceNumber || '').toLowerCase().includes(q);
+                };
+                const filtered = visibleSales
+                  .filter(s => !salesFilterDate || s.date === salesFilterDate)
+                  .filter(matchesSearch);
 
                 // Day summary: cash collected vs debt (handles partial payments)
                 if (salesFilterDate) {
@@ -3287,10 +3304,20 @@ export default function NorthernWaterSystemApp() {
               })()}
 
               <div className="space-y-2 md:space-y-3 max-h-96 overflow-y-auto">
-                {(salesFilterDate ? visibleSales.filter(s => s.date === salesFilterDate) : visibleSales).length === 0 ? (
-                  <p className="text-slate-500 text-center py-4 md:py-8 text-sm">{salesFilterDate ? 'No sales on this day' : 'No sales'}</p>
-                ) : (
-                  (salesFilterDate ? visibleSales.filter(s => s.date === salesFilterDate) : visibleSales).slice().reverse().map(sale => {
+                {(() => {
+                  const matchesSearch = (s) => {
+                    if (!salesSearch) return true;
+                    const c = state.customers.find(c => c.id === s.customerId);
+                    const q = salesSearch.toLowerCase();
+                    return (c?.name || '').toLowerCase().includes(q) || (s.invoiceNumber || '').toLowerCase().includes(q);
+                  };
+                  const list = visibleSales
+                    .filter(s => !salesFilterDate || s.date === salesFilterDate)
+                    .filter(matchesSearch);
+                  return list.length === 0 ? (
+                    <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No matching sales</p>
+                  ) : (
+                    list.slice().reverse().map(sale => {
                     const customer = state.customers.find(c => c.id === sale.customerId);
                     return (
                       <div key={sale.id} className="p-3 md:p-4 bg-slate-50 rounded-lg border border-slate-100">
@@ -3298,7 +3325,7 @@ export default function NorthernWaterSystemApp() {
                           <div className="min-w-0">
                             <div className="flex items-center gap-2">
                               <p className="text-slate-900 font-semibold text-sm truncate">{customer?.name}</p>
-                              <p className="text-slate-500 text-xs">{sale.invoiceNumber}</p>
+                              <button onClick={() => setInvoiceDetail(sale)} className="text-sky-700 text-xs underline hover:text-sky-800">{sale.invoiceNumber}</button>
                             </div>
                             <p className="text-slate-500 text-xs">{sale.date}</p>
                           </div>
@@ -3330,7 +3357,8 @@ export default function NorthernWaterSystemApp() {
                       </div>
                     );
                   })
-                )}
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -3407,16 +3435,26 @@ export default function NorthernWaterSystemApp() {
             {/* Outstanding Debts Tab */}
             {paymentsTab === 'debts' && (
               <div className="bg-white border border-slate-200 rounded-b-lg rounded-tr-lg p-4 md:p-6">
-                <h3 className="text-slate-900 font-semibold mb-4 text-base">Customers with Outstanding Debts</h3>
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
+                  <h3 className="text-slate-900 font-semibold text-base">Customers with Outstanding Debts</h3>
+                  <input
+                    type="text"
+                    value={debtsSearch}
+                    onChange={(e) => setDebtsSearch(e.target.value)}
+                    placeholder="Search customer..."
+                    className="bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 py-1.5 text-sm placeholder-slate-400"
+                  />
+                </div>
                 <div className="space-y-3">
-                  {visibleCustomers.filter(c => c.balance < 0).length === 0 ? (
+                  {visibleCustomers.filter(c => c.balance < 0).filter(c => !debtsSearch || (c.name || '').toLowerCase().includes(debtsSearch.toLowerCase())).length === 0 ? (
                     <div className="text-center py-8">
                       <p className="text-emerald-600 text-lg font-semibold">✓ No Outstanding Debts!</p>
-                      <p className="text-slate-500 text-sm mt-2">All customers are up to date</p>
+                      <p className="text-slate-500 text-sm mt-2">{debtsSearch ? 'No matching debtors' : 'All customers are up to date'}</p>
                     </div>
                   ) : (
                     visibleCustomers
                       .filter(c => c.balance < 0)
+                      .filter(c => !debtsSearch || (c.name || '').toLowerCase().includes(debtsSearch.toLowerCase()))
                       .sort((a, b) => a.balance - b.balance)
                       .map((customer) => {
                         const debt = Math.abs(customer.balance);
@@ -3465,10 +3503,10 @@ export default function NorthernWaterSystemApp() {
                                 <p className="text-rose-600 font-semibold text-sm mb-2">Unpaid Invoices:</p>
                                 <div className="space-y-1">
                                   {sales.map((sale) => (
-                                    <div key={sale.id} className="flex justify-between text-xs bg-slate-50 p-2 rounded">
-                                      <span className="text-slate-900">{sale.invoiceNumber} • {sale.date}</span>
+                                    <button key={sale.id} onClick={() => setInvoiceDetail(sale)} className="w-full flex justify-between text-xs bg-slate-50 hover:bg-sky-50 p-2 rounded transition text-left">
+                                      <span className="text-sky-700 underline">{sale.invoiceNumber} • {sale.date}</span>
                                       <span className="text-rose-600 font-semibold">KES {(sale.total - sale.paid).toLocaleString()}</span>
-                                    </div>
+                                    </button>
                                   ))}
                                 </div>
                               </div>
@@ -3492,12 +3530,27 @@ export default function NorthernWaterSystemApp() {
             {/* Payment History Tab */}
             {paymentsTab === 'history' && (
               <div className="bg-white border border-slate-200 rounded-b-lg rounded-tr-lg p-4 md:p-6">
-                <h3 className="text-slate-900 font-semibold mb-4 text-base">Payment History</h3>
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
+                  <h3 className="text-slate-900 font-semibold text-base">Payment History</h3>
+                  <input
+                    type="text"
+                    value={paymentsSearch}
+                    onChange={(e) => setPaymentsSearch(e.target.value)}
+                    placeholder="Search customer..."
+                    className="bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 py-1.5 text-sm placeholder-slate-400"
+                  />
+                </div>
                 <div className="space-y-2 md:space-y-3 max-h-96 overflow-y-auto">
-                  {visiblePayments.length === 0 ? (
-                    <p className="text-slate-500 text-center py-8 text-sm">No payments recorded</p>
-                  ) : (
-                    visiblePayments.slice().reverse().map(payment => {
+                  {(() => {
+                    const list = visiblePayments.filter(p => {
+                      if (!paymentsSearch) return true;
+                      const c = state.customers.find(c => c.id === p.customerId);
+                      return (c?.name || '').toLowerCase().includes(paymentsSearch.toLowerCase());
+                    });
+                    return list.length === 0 ? (
+                      <p className="text-slate-500 text-center py-8 text-sm">No matching payments</p>
+                    ) : (
+                      list.slice().reverse().map(payment => {
                       const customer = state.customers.find(c => c.id === payment.customerId);
                       const sale = state.sales.find(s => s.id === payment.saleId);
                       return (
@@ -3511,13 +3564,18 @@ export default function NorthernWaterSystemApp() {
                           </div>
                           <div className="flex gap-2 text-xs text-slate-500">
                             <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">{payment.method}</span>
-                            <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">{sale?.invoiceNumber || 'N/A'}</span>
+                            {sale ? (
+                              <button onClick={() => setInvoiceDetail(sale)} className="bg-sky-50 text-sky-700 underline px-2 py-1 rounded hover:bg-sky-100 transition">{sale.invoiceNumber}</button>
+                            ) : (
+                              <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">N/A</span>
+                            )}
                             {payment.reference && <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">Ref: {payment.reference}</span>}
                           </div>
                         </div>
                       );
                     })
-                  )}
+                    );
+                  })()}
                 </div>
               </div>
             )}
@@ -4090,6 +4148,66 @@ export default function NorthernWaterSystemApp() {
             )}
           </div>
         )}
+
+        {/* Invoice Detail Modal */}
+        {invoiceDetail && (() => {
+          const customer = state.customers.find(c => c.id === invoiceDetail.customerId);
+          const balance = invoiceDetail.total - (invoiceDetail.paid || 0);
+          const linkedPayments = state.payments.filter(p => p.saleId === invoiceDetail.id);
+          return (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setInvoiceDetail(null)}>
+              <div className="bg-white rounded-xl max-w-md w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between p-4 md:p-6 border-b border-slate-100 sticky top-0 bg-white">
+                  <div>
+                    <h3 className="text-slate-900 font-bold">{invoiceDetail.invoiceNumber}</h3>
+                    <p className="text-slate-400 text-xs">{invoiceDetail.date}</p>
+                  </div>
+                  <button onClick={() => setInvoiceDetail(null)} className="text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+                </div>
+                <div className="p-4 md:p-6 space-y-4">
+                  <div>
+                    <p className="text-slate-500 text-xs">Customer</p>
+                    <p className="text-slate-900 font-semibold">{customer?.name || 'Unknown'}</p>
+                    {customer?.location && <p className="text-slate-400 text-xs">{customer.location}</p>}
+                  </div>
+
+                  <div>
+                    <p className="text-slate-500 text-xs mb-2">Items</p>
+                    <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
+                      {invoiceDetail.items.map((item, i) => (
+                        <div key={i} className="flex justify-between items-center p-2 text-sm">
+                          <span className="text-slate-700">{SIZE_LABELS[item.size] || item.size}</span>
+                          <span className="text-slate-500 text-xs">{item.quantity} × {item.price}</span>
+                          <span className="text-slate-900 font-medium">KES {(item.subtotal || item.quantity * item.price).toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-50 rounded-lg p-3 space-y-1 text-sm">
+                    <div className="flex justify-between"><span className="text-slate-500">Total</span><span className="text-slate-900 font-semibold">KES {invoiceDetail.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Paid</span><span className="text-emerald-600 font-semibold">KES {(invoiceDetail.paid || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Balance</span><span className={`font-semibold ${balance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>KES {balance.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span></div>
+                  </div>
+
+                  {linkedPayments.length > 0 && (
+                    <div>
+                      <p className="text-slate-500 text-xs mb-2">Payments against this invoice</p>
+                      <div className="divide-y divide-slate-100">
+                        {linkedPayments.map(p => (
+                          <div key={p.id} className="flex justify-between items-center py-2 text-sm">
+                            <span className="text-slate-400 text-xs">{p.date} · {p.method}</span>
+                            <span className="text-emerald-600 font-medium">KES {p.amount.toLocaleString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Dashboard Card Breakdown Modal */}
         {breakdownCard && (
