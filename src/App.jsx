@@ -335,18 +335,18 @@ export default function NorthernWaterSystemApp() {
       : state.customers;
 
   // Load data from Supabase on app start — ONCE per login.
-  // Using a guard so silent session/token refreshes don't reload data
-  // and overwrite values the user is actively editing (e.g. carton costs).
+  // Triggered by userProfile (not session) so the role is known before fetching.
+  // The guard resets on logout because handleLogout sets userProfile to null.
   const hasLoadedData = useRef(false);
   useEffect(() => {
-    if (session && !hasLoadedData.current) {
+    if (userProfile && !hasLoadedData.current) {
       hasLoadedData.current = true;
-      loadDataFromSupabase();
+      loadDataFromSupabase(userProfile.role);
     }
-    if (!session) {
+    if (!userProfile) {
       hasLoadedData.current = false;
     }
-  }, [session]);
+  }, [userProfile]);
 
   // Persist inventory (raw materials + finished goods) to Supabase whenever
   // it changes — but only after the initial load, so we don't overwrite the
@@ -372,103 +372,88 @@ export default function NorthernWaterSystemApp() {
     saveInventory();
   }, [state.rawMaterials, state.finishedGoods]);
 
-  const loadDataFromSupabase = async () => {
+  const loadDataFromSupabase = async (role) => {
+    const isAdminOrManager = role === 'admin' || role === 'manager';
+    const isAdmin = role === 'admin';
+
     try {
-      // Load customers
-      const { data: customersData } = await supabase
-        .from('customers')
-        .select('*');
-      if (customersData && customersData.length > 0) {
-        setState(prev => ({ ...prev, customers: customersData }));
+      // Tier 1: all roles — core transactional data, fetched in parallel
+      const [
+        { data: customersData },
+        { data: salesData },
+        { data: paymentsData },
+      ] = await Promise.all([
+        supabase.from('customers').select('*'),
+        supabase.from('sales').select('*'),
+        supabase.from('payments').select('*'),
+      ]);
+
+      setState(prev => ({
+        ...prev,
+        ...(customersData?.length > 0 && { customers: customersData }),
+        ...(salesData?.length > 0 && { sales: salesData }),
+        ...(paymentsData?.length > 0 && { payments: paymentsData }),
+      }));
+
+      // Tier 2: admin + manager — operational records, fetched in parallel
+      if (isAdminOrManager) {
+        const [
+          { data: expensesData },
+          { data: purchasesData },
+          { data: prodData },
+        ] = await Promise.all([
+          supabase.from('expenses').select('*'),
+          supabase.from('purchases').select('*'),
+          supabase.from('production_logs').select('*'),
+        ]);
+
+        setState(prev => ({
+          ...prev,
+          ...(expensesData?.length > 0 && { expenses: expensesData }),
+          ...(purchasesData?.length > 0 && { purchases: purchasesData }),
+          ...(prodData?.length > 0 && { productionLogs: prodData }),
+        }));
       }
 
-      // Load sales
-      const { data: salesData } = await supabase
-        .from('sales')
-        .select('*');
-      if (salesData && salesData.length > 0) {
-        setState(prev => ({ ...prev, sales: salesData }));
+      // Tier 3: admin only — HR records, fetched in parallel
+      if (isAdmin) {
+        const [{ data: empData }, { data: payData }] = await Promise.all([
+          supabase.from('employees').select('*'),
+          supabase.from('payroll_payments').select('*'),
+        ]);
+        if (empData) setEmployees(empData);
+        if (payData) setPayrollPayments(payData);
       }
 
-      // Load payments
-      const { data: paymentsData } = await supabase
-        .from('payments')
-        .select('*');
-      if (paymentsData && paymentsData.length > 0) {
-        setState(prev => ({ ...prev, payments: paymentsData }));
-      }
-
-      // Load expenses
-      const { data: expensesData } = await supabase
-        .from('expenses')
-        .select('*');
-      if (expensesData && expensesData.length > 0) {
-        setState(prev => ({ ...prev, expenses: expensesData }));
-      }
-
-      // Load purchases
-      const { data: purchasesData } = await supabase
-        .from('purchases')
-        .select('*');
-      if (purchasesData && purchasesData.length > 0) {
-        setState(prev => ({ ...prev, purchases: purchasesData }));
-      }
-
-      // Load production logs
-      const { data: prodData } = await supabase
-        .from('production_logs')
-        .select('*');
-      if (prodData && prodData.length > 0) {
-        setState(prev => ({ ...prev, productionLogs: prodData }));
-      }
-
-      // Load cost settings (finished-goods carton costs)
+      // Cost settings — all roles (used in production cost calculations)
       try {
         const { data: costData } = await supabase
           .from('cost_settings')
           .select('costs')
           .eq('id', 1)
           .single();
-        if (costData && costData.costs) {
+        if (costData?.costs) {
           setCartonCosts(costData.costs);
           if (costData.costs.casual_rate != null) setCasualRate(Number(costData.costs.casual_rate) || 0);
         }
-      } catch (e) {
+      } catch {
         console.log('No cost settings yet');
       }
 
-      // Load saved inventory (raw materials + finished goods)
+      // Inventory state — all roles
       try {
-        const { data: invData } = await supabase
-          .from('inventory_state')
-          .select('*');
-        if (invData && invData.length > 0) {
+        const { data: invData } = await supabase.from('inventory_state').select('*');
+        if (invData?.length > 0) {
           const rm = invData.find(r => r.id === 'rawMaterials');
           const fg = invData.find(r => r.id === 'finishedGoods');
           setState(prev => ({
             ...prev,
-            rawMaterials: rm && rm.data ? rm.data : prev.rawMaterials,
-            finishedGoods: fg && fg.data ? fg.data : prev.finishedGoods
+            rawMaterials: rm?.data ?? prev.rawMaterials,
+            finishedGoods: fg?.data ?? prev.finishedGoods,
           }));
         }
-      } catch (e) {
+      } catch {
         console.log('No saved inventory yet');
-      }
-
-      // Load employees (HR)
-      try {
-        const { data: empData } = await supabase.from('employees').select('*');
-        if (empData) setEmployees(empData);
-      } catch (e) {
-        console.log('No employees yet');
-      }
-
-      // Load payroll payments
-      try {
-        const { data: payData } = await supabase.from('payroll_payments').select('*');
-        if (payData) setPayrollPayments(payData);
-      } catch (e) {
-        console.log('No payroll payments yet');
       }
 
       console.log('✅ Data loaded from Supabase successfully');
