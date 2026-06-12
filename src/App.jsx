@@ -2297,6 +2297,11 @@ export default function NorthernWaterSystemApp() {
 
   return (
     <div className="min-h-screen bg-slate-50">
+      <style>{`
+        input[type=number]::-webkit-inner-spin-button,
+        input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        input[type=number] { -moz-appearance: textfield; }
+      `}</style>
       {/* Header */}
       <header className="border-b border-slate-200 bg-white/90 backdrop-blur sticky top-0 z-40 shadow-sm">
         <div className="w-full px-4 md:px-6 py-3 md:py-4">
@@ -4569,6 +4574,7 @@ export default function NorthernWaterSystemApp() {
                             <input
                               type="number"
                               value={item.quantity || 0}
+                              onWheel={(e) => e.target.blur()}
                               onChange={(e) => {
                                 const newItems = [...formData.items];
                                 newItems[idx].quantity = parseInt(e.target.value) || 0;
@@ -4583,6 +4589,7 @@ export default function NorthernWaterSystemApp() {
                             <input
                               type="number"
                               value={item.price || 0}
+                              onWheel={(e) => e.target.blur()}
                               onChange={(e) => {
                                 const newItems = [...formData.items];
                                 newItems[idx].price = parseInt(e.target.value) || 0;
