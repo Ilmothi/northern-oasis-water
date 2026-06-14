@@ -415,13 +415,13 @@ export default function NorthernWaterSystemApp() {
         }));
       }
 
-      // Tier 3: admin only — HR records, fetched in parallel
+      // Employees — all roles (RLS filters sales to casual employees only; needed for production log)
+      const { data: empData } = await supabase.from('employees').select('*');
+      if (empData) setEmployees(empData);
+
+      // Tier 3: admin only — payroll records
       if (isAdmin) {
-        const [{ data: empData }, { data: payData }] = await Promise.all([
-          supabase.from('employees').select('*'),
-          supabase.from('payroll_payments').select('*'),
-        ]);
-        if (empData) setEmployees(empData);
+        const { data: payData } = await supabase.from('payroll_payments').select('*');
         if (payData) setPayrollPayments(payData);
       }
 
