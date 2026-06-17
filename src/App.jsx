@@ -176,16 +176,9 @@ const initialState = {
   }
 };
 
-const BOTTLE_PRICES = {
-  '0.5L': 100,
-  '1.5L': 150,
-  '5L': 350,
-  '18.9L_disposable': 650,
-  '18.9L_refill': 600,
-  'refill_10L': 50,
-  'refill_15L': 75,
-  'refill_20L': 100
-};
+// Sizes available on a sale. Prices are NOT hardcoded — staff enter the
+// price manually for each line so it can vary by customer / order.
+const SALE_SIZES = ['0.5L', '1.5L', '5L', '18.9L_disposable', '18.9L_refill', 'refill_10L', 'refill_15L', 'refill_20L'];
 
 // Friendly labels for sale item sizes
 const SIZE_LABELS = {
@@ -2061,7 +2054,7 @@ export default function NorthernWaterSystemApp() {
     setSaleCustomerSearch('');
     setFormData({ 
       customerId: '', 
-      items: [{ size: '0.5L', quantity: 0, price: 100 }],
+      items: [{ size: '0.5L', quantity: 0, price: 0 }],
       date: new Date().toISOString().split('T')[0],
       paymentStatus: 'unpaid'
     });
@@ -2071,6 +2064,13 @@ export default function NorthernWaterSystemApp() {
   const handleSaveSale = () => {
     if (!formData.customerId || formData.items.filter(i => i.quantity > 0).length === 0) {
       alert('Please select customer and add items');
+      return;
+    }
+
+    // Prices are entered manually — guard against accidentally saving a
+    // line that has a quantity but no price (which would be a KES 0 invoice).
+    if (formData.items.some(i => i.quantity > 0 && (!i.price || i.price <= 0))) {
+      alert('Please enter a price for every item with a quantity.');
       return;
     }
 
@@ -4886,12 +4886,11 @@ export default function NorthernWaterSystemApp() {
                               onChange={(e) => {
                                 const newItems = [...formData.items];
                                 newItems[idx].size = e.target.value;
-                                newItems[idx].price = BOTTLE_PRICES[e.target.value] || 0;
                                 setFormData({ ...formData, items: newItems });
                               }}
                               className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded px-2 py-1"
                             >
-                              {Object.keys(BOTTLE_PRICES).map(s => (
+                              {SALE_SIZES.map(s => (
                                 <option key={s} value={s}>{SIZE_LABELS[s] || s}</option>
                               ))}
                             </select>
@@ -4936,7 +4935,7 @@ export default function NorthernWaterSystemApp() {
                     <button
                       onClick={() => setFormData({
                         ...formData,
-                        items: [...(formData.items || []), { size: '0.5L', quantity: 0, price: 100, subtotal: 0 }]
+                        items: [...(formData.items || []), { size: '0.5L', quantity: 0, price: 0, subtotal: 0 }]
                       })}
                       className="mt-3 text-sky-600 text-xs"
                     >
