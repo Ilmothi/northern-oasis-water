@@ -1,6 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, Calendar, ShoppingCart, Wallet, Search, Filter } from 'lucide-react';
 import { supabase } from './supabaseClient';
+import { OASIS_LOGO } from './oasisLogo';
+
+// Seller details printed on customer invoices.
+const COMPANY = {
+  name: 'Northern Oasis Water Company',
+  brand: 'OASIS Springs — Purified Drinking Water',
+  phone: '0718662867',
+  kraPin: 'P052211072N',
+};
 
 // ─── Shared presentational primitives ───────────────────────────────
 // Small, style-only building blocks reused across modules. No business
@@ -1657,6 +1666,133 @@ export default function NorthernWaterSystemApp() {
     }, 500);
   };
 
+  // Build a printable customer invoice and open it for printing / Save-as-PDF.
+  // Read-only: renders an existing sale as a document, changes no records.
+  const downloadInvoiceAsPDF = (sale) => {
+    if (!sale) return;
+    const customer = state.customers.find(c => c.id === sale.customerId);
+    const paid = sale.paid || 0;
+    const balance = sale.total - paid;
+    const fmt = (n) => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const statusLabel = balance <= 0 ? 'PAID' : paid > 0 ? 'PARTIALLY PAID' : 'UNPAID';
+    const statusColor = balance <= 0 ? '#10b981' : paid > 0 ? '#d97706' : '#e11d48';
+
+    const rows = sale.items.map(item => {
+      const amount = item.subtotal || (item.quantity * item.price);
+      return `
+        <tr>
+          <td>${SIZE_LABELS[item.size] || item.size}</td>
+          <td style="text-align:center;">${item.quantity}</td>
+          <td style="text-align:right;">${fmt(item.price)}</td>
+          <td style="text-align:right;">${fmt(amount)}</td>
+        </tr>`;
+    }).join('');
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Invoice ${sale.invoiceNumber}</title>
+        <style>
+          * { box-sizing: border-box; }
+          body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 32px; color: #1e293b; background: #fff; }
+          .invoice { max-width: 760px; margin: 0 auto; }
+          .top { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #0369a1; padding-bottom: 16px; }
+          .brand { display: flex; gap: 14px; align-items: center; }
+          .brand img { width: 72px; height: 72px; border-radius: 50%; }
+          .brand h1 { margin: 0; font-size: 20px; color: #0369a1; }
+          .brand p { margin: 2px 0 0; font-size: 12px; color: #64748b; }
+          .seller { text-align: right; font-size: 12px; color: #475569; }
+          .seller strong { color: #0f172a; }
+          .title { text-align: right; margin-top: 18px; }
+          .title h2 { margin: 0; font-size: 28px; letter-spacing: 2px; color: #0f172a; }
+          .meta { margin-top: 6px; font-size: 13px; color: #475569; }
+          .billto { margin-top: 24px; }
+          .billto .label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 4px; }
+          .billto .name { font-size: 16px; font-weight: bold; color: #0f172a; }
+          .billto .sub { font-size: 13px; color: #64748b; }
+          table { width: 100%; border-collapse: collapse; margin-top: 24px; font-size: 13px; }
+          thead th { background: #0369a1; color: #fff; padding: 10px 12px; text-align: left; }
+          thead th:nth-child(2) { text-align: center; }
+          thead th:nth-child(3), thead th:nth-child(4) { text-align: right; }
+          tbody td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; }
+          tbody tr:nth-child(even) { background: #f8fafc; }
+          .totals { margin-top: 18px; margin-left: auto; width: 280px; font-size: 13px; }
+          .totals .row { display: flex; justify-content: space-between; padding: 6px 0; }
+          .totals .row.grand { border-top: 2px solid #0f172a; margin-top: 6px; padding-top: 10px; font-size: 16px; font-weight: bold; }
+          .totals .balance { color: #e11d48; font-weight: bold; }
+          .status { display: inline-block; margin-top: 18px; padding: 6px 14px; border-radius: 999px; color: #fff; font-size: 12px; font-weight: bold; letter-spacing: 1px; background: ${statusColor}; }
+          .footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid #e2e8f0; font-size: 11px; color: #94a3b8; text-align: center; }
+          @media print { body { padding: 0; } .invoice { max-width: 100%; } }
+        </style>
+      </head>
+      <body>
+        <div class="invoice">
+          <div class="top">
+            <div class="brand">
+              <img src="${OASIS_LOGO}" alt="OASIS Springs" />
+              <div>
+                <h1>${COMPANY.name}</h1>
+                <p>${COMPANY.brand}</p>
+              </div>
+            </div>
+            <div class="seller">
+              <p><strong>Tel:</strong> ${COMPANY.phone}</p>
+              <p><strong>KRA PIN:</strong> ${COMPANY.kraPin}</p>
+            </div>
+          </div>
+
+          <div class="title">
+            <h2>INVOICE</h2>
+            <div class="meta"><strong>${sale.invoiceNumber}</strong> &nbsp;•&nbsp; ${sale.date}</div>
+          </div>
+
+          <div class="billto">
+            <div class="label">Bill To</div>
+            <div class="name">${customer?.name || 'Walk-in Customer'}</div>
+            ${customer?.location ? `<div class="sub">${customer.location}</div>` : ''}
+            ${customer?.phone ? `<div class="sub">Tel: ${customer.phone}</div>` : ''}
+          </div>
+
+          <table>
+            <thead>
+              <tr><th>Description</th><th>Qty</th><th>Unit Price (KES)</th><th>Amount (KES)</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+
+          <div class="totals">
+            <div class="row"><span>Total</span><span>KES ${fmt(sale.total)}</span></div>
+            <div class="row"><span>Paid</span><span>KES ${fmt(paid)}</span></div>
+            <div class="row grand"><span>Balance Due</span><span class="${balance > 0 ? 'balance' : ''}">KES ${fmt(balance)}</span></div>
+          </div>
+
+          <div><span class="status">${statusLabel}</span></div>
+
+          <div class="footer">
+            <p>Thank you for your business.</p>
+            <p>${COMPANY.name} • Generated by OASIS Springs Management System</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('Please allow pop-ups for this site to download the invoice.');
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+    printWindow.onload = () => { printWindow.focus(); printWindow.print(); };
+    setTimeout(() => {
+      try { printWindow.focus(); printWindow.print(); } catch (e) {}
+    }, 500);
+  };
+
   // Expense Management
   const handleAddExpense = () => {
     setEditingExpense(null);
@@ -2420,7 +2556,7 @@ export default function NorthernWaterSystemApp() {
             { id: 'salesdashboard', roles: ['sales'] },
           ] },
           { id: 'sales', label: 'Sales', icon: DollarSign, tabs: [
-            { id: 'sales', label: 'Sales History', roles: ['admin', 'manager', 'sales'] },
+            { id: 'sales', label: 'Invoices', roles: ['admin', 'manager', 'sales'] },
             { id: 'payments', label: 'Payments', roles: ['admin', 'manager', 'sales'] },
           ]},
           { id: 'inventory', label: 'Inventory', icon: Package, tabs: [
@@ -3300,7 +3436,10 @@ export default function NorthernWaterSystemApp() {
         {activeTab === 'sales' && (
           <div className="space-y-4 md:space-y-6">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
-              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Sales</h2>
+              <div>
+                <h2 className="text-xl md:text-2xl font-bold text-slate-900">Invoices</h2>
+                <p className="text-slate-500 text-sm mt-1">Record sales and download printable invoices for customers.</p>
+              </div>
               <button
                 onClick={handleAddSale}
                 className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-white font-medium px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
@@ -3311,7 +3450,7 @@ export default function NorthernWaterSystemApp() {
 
             <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3 md:mb-4">
-                <h3 className="text-slate-900 font-semibold text-sm md:text-base">History</h3>
+                <h3 className="text-slate-900 font-semibold text-sm md:text-base">Invoice History</h3>
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
@@ -3409,16 +3548,22 @@ export default function NorthernWaterSystemApp() {
                             </div>
                           ))}
                         </div>
-                        {(role === 'admin' || role === 'manager') && (
-                          <div className="flex justify-end pt-2 mt-2 border-t border-slate-100">
+                        <div className="flex justify-end gap-1 pt-2 mt-2 border-t border-slate-100">
+                          <button
+                            onClick={() => downloadInvoiceAsPDF(sale)}
+                            className="flex items-center gap-1 text-xs text-sky-700 hover:text-sky-800 hover:bg-sky-50 px-2 py-1 rounded transition"
+                          >
+                            <Download className="w-3 h-3" /> Invoice PDF
+                          </button>
+                          {(role === 'admin' || role === 'manager') && (
                             <button
                               onClick={() => handleDeleteSale(sale.id)}
                               className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded transition"
                             >
                               <Trash2 className="w-3 h-3" /> Delete
                             </button>
-                          </div>
-                        )}
+                          )}
+                        </div>
                       </div>
                     );
                   })
@@ -4341,7 +4486,15 @@ export default function NorthernWaterSystemApp() {
                     <h3 className="text-slate-900 font-bold">{invoiceDetail.invoiceNumber}</h3>
                     <p className="text-slate-400 text-xs">{invoiceDetail.date}</p>
                   </div>
-                  <button onClick={() => setInvoiceDetail(null)} className="text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => downloadInvoiceAsPDF(invoiceDetail)}
+                      className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-600 text-white font-medium px-3 py-1.5 rounded-lg transition text-xs"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Download / Print
+                    </button>
+                    <button onClick={() => setInvoiceDetail(null)} className="text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+                  </div>
                 </div>
                 <div className="p-4 md:p-6 space-y-4">
                   <div>
