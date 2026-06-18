@@ -661,7 +661,6 @@ export default function NorthernWaterSystemApp() {
 
     const datePaid = new Date().toISOString().split('T')[0];
     const newExpense = {
-      id: Math.max(...state.expenses.map(e => e.id), 0) + 1,
       date: datePaid,
       category: 'operating',
       subcategory: 'Salary',
@@ -675,16 +674,24 @@ export default function NorthernWaterSystemApp() {
       period_label: month, period_start: `${month}-01`, period_end: `${month}-28`,
       amount: netAmount, date_paid: datePaid
     };
-    setState({ ...state, expenses: [...state.expenses, newExpense] });
-    try {
-      await supabase.from('expenses').insert([newExpense]);
-      const { data } = await supabase.from('payroll_payments').insert([{ ...payment, expense_id: newExpense.id }]).select();
-      if (data && data[0]) setPayrollPayments([...payrollPayments, data[0]]);
-      alert('Salary payment recorded.');
-    } catch (err) {
-      console.error('❌ Error recording salary payment:', err);
-      alert('Error recording payment.');
+
+    // Persist the expense first so payroll links to its real (DB-assigned) id.
+    const { data: savedExpense, error: expError } = await supabase
+      .from('expenses').insert([newExpense]).select().single();
+    if (expError || !savedExpense) {
+      console.error('❌ Error recording salary payment:', expError);
+      alert('Error recording payment — nothing was saved.');
+      return;
     }
+    const { data, error: payError } = await supabase
+      .from('payroll_payments').insert([{ ...payment, expense_id: savedExpense.id }]).select();
+    if (payError) {
+      console.error('❌ Error recording salary payroll row:', payError);
+      alert('Expense saved but the payroll record failed — please check HR.');
+    }
+    setState({ ...state, expenses: [...state.expenses, savedExpense] });
+    if (data && data[0]) setPayrollPayments([...payrollPayments, data[0]]);
+    alert('Salary payment recorded.');
   };
 
   // Record a casual payout for a date range: logs each casual's payment AND
@@ -700,7 +707,6 @@ export default function NorthernWaterSystemApp() {
     const datePaid = new Date().toISOString().split('T')[0];
     const rangeLabel = `${range.start} to ${range.end}`;
     const newExpense = {
-      id: Math.max(...state.expenses.map(e => e.id), 0) + 1,
       date: datePaid,
       category: 'operating',
       subcategory: 'Casual Labour',
@@ -719,30 +725,37 @@ export default function NorthernWaterSystemApp() {
         Object.values(log.items || {}).reduce((s, q) => s + (q || 0), 0) > 0;
     }).map(log => log.id);
 
+    // Persist the expense first so payroll/production link to its real id.
+    const { data: savedExpense, error: expError } = await supabase
+      .from('expenses').insert([newExpense]).select().single();
+    if (expError || !savedExpense) {
+      console.error('❌ Error recording casual payment:', expError);
+      alert('Error recording payout — nothing was saved.');
+      return;
+    }
+    const expenseId = savedExpense.id;
+
     const updatedLogs = state.productionLogs.map(log =>
-      paidRunIds.includes(log.id) ? { ...log, casual_paid: true, casual_expense_id: newExpense.id } : log
+      paidRunIds.includes(log.id) ? { ...log, casual_paid: true, casual_expense_id: expenseId } : log
     );
-
-    setState({ ...state, expenses: [...state.expenses, newExpense], productionLogs: updatedLogs });
-
     const paymentRows = rows.map(e => ({
       type: 'casual', employee_id: e.id, employee_name: e.name,
       period_label: rangeLabel, period_start: range.start, period_end: range.end,
-      amount: pay[e.id].pay, date_paid: datePaid, expense_id: newExpense.id
+      amount: pay[e.id].pay, date_paid: datePaid, expense_id: expenseId
     }));
-    try {
-      await supabase.from('expenses').insert([newExpense]);
-      const { data } = await supabase.from('payroll_payments').insert(paymentRows).select();
-      if (data) setPayrollPayments([...payrollPayments, ...data]);
-      // Persist the paid flag on each production run
-      for (const runId of paidRunIds) {
-        await supabase.from('production_logs').update({ casual_paid: true, casual_expense_id: newExpense.id }).eq('id', runId);
-      }
-      alert('Casual payout recorded.');
-    } catch (err) {
-      console.error('❌ Error recording casual payment:', err);
-      alert('Error recording payout.');
+
+    const { data, error: payError } = await supabase.from('payroll_payments').insert(paymentRows).select();
+    if (payError) {
+      console.error('❌ Error recording casual payroll rows:', payError);
+      alert('Expense saved but the payroll records failed — please check HR.');
     }
+    for (const runId of paidRunIds) {
+      await supabase.from('production_logs').update({ casual_paid: true, casual_expense_id: expenseId }).eq('id', runId);
+    }
+
+    setState({ ...state, expenses: [...state.expenses, savedExpense], productionLogs: updatedLogs });
+    if (data) setPayrollPayments([...payrollPayments, ...data]);
+    alert('Casual payout recorded.');
   };
 
   // ===== HR: Employee management (admin only) =====
@@ -919,7 +932,7 @@ export default function NorthernWaterSystemApp() {
     alert(`Updated ${label}: ${oldQty} → ${qty}`);
   };
 
-  const handleSavePurchase = () => {
+  const handleSavePurchase = async () => {
     if (!formData.supplier || !formData.date || formData.items.filter(i => i.material && i.quantity > 0).length === 0) {
       alert('Please fill supplier, date, and add items');
       return;
@@ -949,13 +962,26 @@ export default function NorthernWaterSystemApp() {
       })();
     } else {
       const newPurchase = {
-        id: Math.max(...state.purchases.map(p => p.id), 0) + 1,
         date: formData.date,
         supplier: formData.supplier,
         items: validItems,
         totalAmount,
         status: 'received'
       };
+
+      // Persist the purchase FIRST; only apply the raw-material increase (which
+      // auto-persists) on a confirmed save, so a failed insert can't raise stock
+      // with no purchase record behind it.
+      const { data: savedPurchase, error: purchaseError } = await supabase
+        .from('purchases')
+        .insert([newPurchase])
+        .select()
+        .single();
+      if (purchaseError || !savedPurchase) {
+        console.error('❌ Error saving purchase:', purchaseError);
+        alert('Could not save this purchase — it has NOT been recorded and stock was not changed. Please try again.\n\n' + (purchaseError?.message || 'Unknown error'));
+        return;
+      }
 
       // Update raw materials
       const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
@@ -994,18 +1020,9 @@ export default function NorthernWaterSystemApp() {
 
       setState({
         ...state,
-        purchases: [...state.purchases, newPurchase],
+        purchases: [...state.purchases, savedPurchase],
         rawMaterials: updatedRawMaterials
       });
-
-      (async () => {
-        try {
-          await supabase.from('purchases').insert([newPurchase]);
-          console.log('✅ Purchase saved to Supabase');
-        } catch (error) {
-          console.error('❌ Error saving purchase:', error);
-        }
-      })();
     }
 
     setShowModal(false);
@@ -1800,7 +1817,7 @@ export default function NorthernWaterSystemApp() {
     setShowModal(true);
   };
 
-  const handleSaveExpense = () => {
+  const handleSaveExpense = async () => {
     if (!formData.category || !formData.subcategory || formData.amount <= 0) {
       alert('Please fill all fields');
       return;
@@ -1836,7 +1853,6 @@ export default function NorthernWaterSystemApp() {
       saveToSupabase();
     } else {
       const newExpense = {
-        id: Math.max(...state.expenses.map(e => e.id), 0) + 1,
         date: formData.date,
         category: formData.category,
         subcategory: formData.subcategory,
@@ -1845,17 +1861,19 @@ export default function NorthernWaterSystemApp() {
         advance_employee_id: advanceId,
         created_by: session?.user?.id || null
       };
-      setState({ ...state, expenses: [...state.expenses, newExpense] });
 
-      const saveToSupabase = async () => {
-        try {
-          await supabase.from('expenses').insert([newExpense]);
-          console.log('✅ Expense saved to Supabase');
-        } catch (error) {
-          console.error('❌ Error saving expense:', error);
-        }
-      };
-      saveToSupabase();
+      const { data: savedExpense, error: expError } = await supabase
+        .from('expenses')
+        .insert([newExpense])
+        .select()
+        .single();
+      if (expError || !savedExpense) {
+        console.error('❌ Error saving expense:', expError);
+        alert('Could not save this expense — it has NOT been recorded. Please try again.\n\n' + (expError?.message || 'Unknown error'));
+        return;
+      }
+
+      setState({ ...state, expenses: [...state.expenses, savedExpense] });
     }
     setShowModal(false);
   };
@@ -2367,7 +2385,7 @@ export default function NorthernWaterSystemApp() {
     setShowModal(true);
   };
 
-  const handleSaveCustomer = () => {
+  const handleSaveCustomer = async () => {
     if (!formData.name || !formData.location || !formData.phone) {
       alert('Please fill in all fields');
       return;
@@ -2394,23 +2412,25 @@ export default function NorthernWaterSystemApp() {
       saveToSupabase();
     } else {
       const newCustomer = {
-        id: Math.max(...state.customers.map(c => c.id), 0) + 1,
         ...formData,
         balance: 0,
         isActive: true
       };
-      setState({ ...state, customers: [...state.customers, newCustomer] });
 
-      // Save to Supabase
-      const saveToSupabase = async () => {
-        try {
-          await supabase.from('customers').insert([newCustomer]);
-          console.log('✅ Customer saved to Supabase');
-        } catch (error) {
-          console.error('❌ Error saving customer:', error);
-        }
-      };
-      saveToSupabase();
+      // The DB assigns the id — a sales user only sees an RLS-filtered subset of
+      // customers and would otherwise generate a colliding id.
+      const { data: savedCustomer, error: custError } = await supabase
+        .from('customers')
+        .insert([newCustomer])
+        .select()
+        .single();
+      if (custError || !savedCustomer) {
+        console.error('❌ Error saving customer:', custError);
+        alert('Could not save this customer — it has NOT been recorded. Please try again.\n\n' + (custError?.message || 'Unknown error'));
+        return;
+      }
+
+      setState({ ...state, customers: [...state.customers, savedCustomer] });
     }
     setShowModal(false);
   };
