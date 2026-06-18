@@ -2248,15 +2248,15 @@ export default function NorthernWaterSystemApp() {
     setShowModal(true);
   };
 
-  const handleSaveProduction = () => {
+  const handleSaveProduction = async () => {
     if (Object.keys(formData.items).length === 0) {
       alert('Please add items');
       return;
     }
 
     // Input is in CARTONS for all sizes
+    // id is assigned by the database (identity column) — see handleSaveSale.
     const newProduction = {
-      id: Math.max(...state.productionLogs.map(p => p.id), 0) + 1,
       date: formData.date,
       items: formData.items, // Cartons produced
       unit: 'cartons', // Always cartons
@@ -2334,22 +2334,27 @@ export default function NorthernWaterSystemApp() {
       updatedRawMaterials.seals['short_neck'] -= totalShortNeckBottles;
     }
 
+    // Persist the production log FIRST. Only then apply the inventory changes,
+    // so a failed insert can't leave raw materials deducted / finished goods
+    // added (which auto-persist) with no production record to explain them.
+    const { data: savedProduction, error: prodError } = await supabase
+      .from('production_logs')
+      .insert([newProduction])
+      .select()
+      .single();
+
+    if (prodError || !savedProduction) {
+      console.error('❌ Error saving production log:', prodError);
+      alert('Could not save this production log — it has NOT been recorded and stock was not changed. Please try again.\n\n' + (prodError?.message || 'Unknown error'));
+      return; // leave the modal open with the entry intact
+    }
+
     setState({
       ...state,
-      productionLogs: [...state.productionLogs, newProduction],
+      productionLogs: [...state.productionLogs, savedProduction],
       rawMaterials: updatedRawMaterials,
       finishedGoods: updatedFinishedGoods
     });
-
-    // Persist the production log to Supabase
-    (async () => {
-      try {
-        await supabase.from('production_logs').insert([newProduction]);
-        console.log('✅ Production log saved to Supabase');
-      } catch (error) {
-        console.error('❌ Error saving production log:', error);
-      }
-    })();
 
     setShowModal(false);
   };
