@@ -1,6 +1,73 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, Calendar, ShoppingCart, Wallet } from 'lucide-react';
+import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, Calendar, ShoppingCart, Wallet, Search, Filter } from 'lucide-react';
 import { supabase } from './supabaseClient';
+import { OASIS_LOGO } from './oasisLogo';
+
+// Seller details printed on customer invoices.
+const COMPANY = {
+  name: 'Northern Oasis Water Company',
+  brand: 'OASIS Springs — Purified Drinking Water',
+  phone: '0718662867',
+  kraPin: 'P052211072N',
+};
+
+// ─── Shared presentational primitives ───────────────────────────────
+// Small, style-only building blocks reused across modules. No business
+// logic lives here — callers pass already-computed values.
+
+const ACCENT_STYLES = {
+  sky: 'bg-sky-50 text-sky-600',
+  emerald: 'bg-emerald-50 text-emerald-600',
+  rose: 'bg-rose-50 text-rose-600',
+  amber: 'bg-amber-50 text-amber-600',
+  slate: 'bg-slate-100 text-slate-600',
+};
+
+// Summary tile: label + big value + optional sub-text and accent icon.
+// Renders as a button when onClick is provided (e.g. dashboard drill-downs).
+function StatCard({ label, value, icon: Icon, accent = 'sky', sub, onClick }) {
+  const inner = (
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <p className="text-slate-500 text-[11px] md:text-xs font-medium uppercase tracking-wide">{label}</p>
+        <p className="text-slate-900 text-lg md:text-2xl font-bold mt-2 break-words">{value}</p>
+        {sub && <p className="text-slate-400 text-xs mt-1">{sub}</p>}
+      </div>
+      {Icon && (
+        <div className={`flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${ACCENT_STYLES[accent] || ACCENT_STYLES.sky}`}>
+          <Icon className="w-5 h-5" />
+        </div>
+      )}
+    </div>
+  );
+  const base = 'bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-5';
+  if (onClick) {
+    return (
+      <button onClick={onClick} className={`${base} text-left w-full hover:border-sky-300 transition cursor-pointer`}>
+        {inner}
+      </button>
+    );
+  }
+  return <div className={base}>{inner}</div>;
+}
+
+const BADGE_STYLES = {
+  slate: 'bg-slate-100 text-slate-600',
+  emerald: 'bg-emerald-50 text-emerald-700',
+  rose: 'bg-rose-50 text-rose-700',
+  sky: 'bg-sky-50 text-sky-700',
+  amber: 'bg-amber-50 text-amber-700',
+};
+
+// Pill label with an optional leading status dot.
+function Badge({ children, color = 'slate', dot = false }) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap ${BADGE_STYLES[color] || BADGE_STYLES.slate}`}>
+      {dot && <span className="w-1.5 h-1.5 rounded-full bg-current" />}
+      {children}
+    </span>
+  );
+}
 
 const initialState = {
   rawMaterials: {
@@ -109,16 +176,9 @@ const initialState = {
   }
 };
 
-const BOTTLE_PRICES = {
-  '0.5L': 100,
-  '1.5L': 150,
-  '5L': 350,
-  '18.9L_disposable': 650,
-  '18.9L_refill': 600,
-  'refill_10L': 50,
-  'refill_15L': 75,
-  'refill_20L': 100
-};
+// Sizes available on a sale. Prices are NOT hardcoded — staff enter the
+// price manually for each line so it can vary by customer / order.
+const SALE_SIZES = ['0.5L', '1.5L', '5L', '18.9L_disposable', '18.9L_refill', 'refill_10L', 'refill_15L', 'refill_20L'];
 
 // Friendly labels for sale item sizes
 const SIZE_LABELS = {
@@ -197,6 +257,7 @@ export default function NorthernWaterSystemApp() {
   const [reportData, setReportData] = useState(null);
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [customerSearch, setCustomerSearch] = useState('');
+  const [customerStatusFilter, setCustomerStatusFilter] = useState('all'); // all | active | inactive
   const [saleCustomerSearch, setSaleCustomerSearch] = useState('');
   const [paymentSaleSearch, setPaymentSaleSearch] = useState('');
   const [salesFilterDate, setSalesFilterDate] = useState('');
@@ -1598,6 +1659,133 @@ export default function NorthernWaterSystemApp() {
     }, 500);
   };
 
+  // Build a printable customer invoice and open it for printing / Save-as-PDF.
+  // Read-only: renders an existing sale as a document, changes no records.
+  const downloadInvoiceAsPDF = (sale) => {
+    if (!sale) return;
+    const customer = state.customers.find(c => c.id === sale.customerId);
+    const paid = sale.paid || 0;
+    const balance = sale.total - paid;
+    const fmt = (n) => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const statusLabel = balance <= 0 ? 'PAID' : paid > 0 ? 'PARTIALLY PAID' : 'UNPAID';
+    const statusColor = balance <= 0 ? '#10b981' : paid > 0 ? '#d97706' : '#e11d48';
+
+    const rows = sale.items.map(item => {
+      const amount = item.subtotal || (item.quantity * item.price);
+      return `
+        <tr>
+          <td>${SIZE_LABELS[item.size] || item.size}</td>
+          <td style="text-align:center;">${item.quantity}</td>
+          <td style="text-align:right;">${fmt(item.price)}</td>
+          <td style="text-align:right;">${fmt(amount)}</td>
+        </tr>`;
+    }).join('');
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Invoice ${sale.invoiceNumber}</title>
+        <style>
+          * { box-sizing: border-box; }
+          body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 32px; color: #1e293b; background: #fff; }
+          .invoice { max-width: 760px; margin: 0 auto; }
+          .top { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #0369a1; padding-bottom: 16px; }
+          .brand { display: flex; gap: 14px; align-items: center; }
+          .brand img { width: 72px; height: 72px; border-radius: 50%; }
+          .brand h1 { margin: 0; font-size: 20px; color: #0369a1; }
+          .brand p { margin: 2px 0 0; font-size: 12px; color: #64748b; }
+          .seller { text-align: right; font-size: 12px; color: #475569; }
+          .seller strong { color: #0f172a; }
+          .title { text-align: right; margin-top: 18px; }
+          .title h2 { margin: 0; font-size: 28px; letter-spacing: 2px; color: #0f172a; }
+          .meta { margin-top: 6px; font-size: 13px; color: #475569; }
+          .billto { margin-top: 24px; }
+          .billto .label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 4px; }
+          .billto .name { font-size: 16px; font-weight: bold; color: #0f172a; }
+          .billto .sub { font-size: 13px; color: #64748b; }
+          table { width: 100%; border-collapse: collapse; margin-top: 24px; font-size: 13px; }
+          thead th { background: #0369a1; color: #fff; padding: 10px 12px; text-align: left; }
+          thead th:nth-child(2) { text-align: center; }
+          thead th:nth-child(3), thead th:nth-child(4) { text-align: right; }
+          tbody td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; }
+          tbody tr:nth-child(even) { background: #f8fafc; }
+          .totals { margin-top: 18px; margin-left: auto; width: 280px; font-size: 13px; }
+          .totals .row { display: flex; justify-content: space-between; padding: 6px 0; }
+          .totals .row.grand { border-top: 2px solid #0f172a; margin-top: 6px; padding-top: 10px; font-size: 16px; font-weight: bold; }
+          .totals .balance { color: #e11d48; font-weight: bold; }
+          .status { display: inline-block; margin-top: 18px; padding: 6px 14px; border-radius: 999px; color: #fff; font-size: 12px; font-weight: bold; letter-spacing: 1px; background: ${statusColor}; }
+          .footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid #e2e8f0; font-size: 11px; color: #94a3b8; text-align: center; }
+          @media print { body { padding: 0; } .invoice { max-width: 100%; } }
+        </style>
+      </head>
+      <body>
+        <div class="invoice">
+          <div class="top">
+            <div class="brand">
+              <img src="${OASIS_LOGO}" alt="OASIS Springs" />
+              <div>
+                <h1>${COMPANY.name}</h1>
+                <p>${COMPANY.brand}</p>
+              </div>
+            </div>
+            <div class="seller">
+              <p><strong>Tel:</strong> ${COMPANY.phone}</p>
+              <p><strong>KRA PIN:</strong> ${COMPANY.kraPin}</p>
+            </div>
+          </div>
+
+          <div class="title">
+            <h2>INVOICE</h2>
+            <div class="meta"><strong>${sale.invoiceNumber}</strong> &nbsp;•&nbsp; ${sale.date}</div>
+          </div>
+
+          <div class="billto">
+            <div class="label">Bill To</div>
+            <div class="name">${customer?.name || 'Walk-in Customer'}</div>
+            ${customer?.location ? `<div class="sub">${customer.location}</div>` : ''}
+            ${customer?.phone ? `<div class="sub">Tel: ${customer.phone}</div>` : ''}
+          </div>
+
+          <table>
+            <thead>
+              <tr><th>Description</th><th>Qty</th><th>Unit Price (KES)</th><th>Amount (KES)</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+
+          <div class="totals">
+            <div class="row"><span>Total</span><span>KES ${fmt(sale.total)}</span></div>
+            <div class="row"><span>Paid</span><span>KES ${fmt(paid)}</span></div>
+            <div class="row grand"><span>Balance Due</span><span class="${balance > 0 ? 'balance' : ''}">KES ${fmt(balance)}</span></div>
+          </div>
+
+          <div><span class="status">${statusLabel}</span></div>
+
+          <div class="footer">
+            <p>Thank you for your business.</p>
+            <p>${COMPANY.name} • Generated by OASIS Springs Management System</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('Please allow pop-ups for this site to download the invoice.');
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+    printWindow.onload = () => { printWindow.focus(); printWindow.print(); };
+    setTimeout(() => {
+      try { printWindow.focus(); printWindow.print(); } catch (e) {}
+    }, 500);
+  };
+
   // Expense Management
   const handleAddExpense = () => {
     setEditingExpense(null);
@@ -1866,16 +2054,23 @@ export default function NorthernWaterSystemApp() {
     setSaleCustomerSearch('');
     setFormData({ 
       customerId: '', 
-      items: [{ size: '0.5L', quantity: 0, price: 100 }], 
+      items: [{ size: '0.5L', quantity: 0, price: 0 }],
       date: new Date().toISOString().split('T')[0],
       paymentStatus: 'unpaid'
     });
     setShowModal(true);
   };
 
-  const handleSaveSale = () => {
+  const handleSaveSale = async () => {
     if (!formData.customerId || formData.items.filter(i => i.quantity > 0).length === 0) {
       alert('Please select customer and add items');
+      return;
+    }
+
+    // Prices are entered manually — guard against accidentally saving a
+    // line that has a quantity but no price (which would be a KES 0 invoice).
+    if (formData.items.some(i => i.quantity > 0 && (!i.price || i.price <= 0))) {
+      alert('Please enter a price for every item with a quantity.');
       return;
     }
 
@@ -1890,15 +2085,16 @@ export default function NorthernWaterSystemApp() {
     const total = validItems.reduce((sum, i) => sum + (i.quantity * i.price), 0);
     const isPaid = formData.paymentStatus === 'paid';
     
+    // id and invoiceNumber are assigned by the database (identity column +
+    // invoice-number sequence) — never on the client, which only ever sees an
+    // RLS-filtered subset of sales and would generate colliding values.
     const newSale = {
-      id: Math.max(...state.sales.map(s => s.id), 0) + 1,
       customerId: parseInt(formData.customerId),
       date: formData.date,
       items: validItems,
       total,
       paid: isPaid ? total : 0,
       status: isPaid ? 'paid' : 'pending',
-      invoiceNumber: `INV-${String(Math.max(...state.sales.map(s => parseInt(s.invoiceNumber?.split('-')[1] || 0)), 0) + 1).padStart(3, '0')}`,
       created_by: session?.user?.id || null
     };
 
@@ -1918,27 +2114,34 @@ export default function NorthernWaterSystemApp() {
         : c
     );
 
+    // Persist FIRST — only reflect the sale locally if the database accepts it.
+    // (Previously the row was added to state optimistically and the insert could
+    // be silently rejected on a primary-key collision, so the rep saw a sale
+    // that was never saved.)
+    const { data: savedSale, error: saleError } = await supabase
+      .from('sales')
+      .insert([newSale])
+      .select()
+      .single();
+
+    if (saleError || !savedSale) {
+      console.error('❌ Error saving sale to Supabase:', saleError);
+      alert('Could not save this sale — it has NOT been recorded. Please try again.\n\n' + (saleError?.message || 'Unknown error'));
+      return; // leave the modal open with the entry intact
+    }
+
     setState({
       ...state,
-      sales: [...state.sales, newSale],
+      sales: [...state.sales, savedSale],
       finishedGoods: updatedFinishedGoods,
       customers: updatedCustomers
     });
 
-    // Save to Supabase (STEP 7D)
-    const saveToSupabase = async () => {
-      try {
-        await supabase.from('sales').insert([newSale]);
-        await supabase
-          .from('customers')
-          .update({ balance: updatedCustomers.find(c => c.id === parseInt(formData.customerId)).balance })
-          .eq('id', parseInt(formData.customerId));
-        console.log('✅ Sale saved to Supabase');
-      } catch (error) {
-        console.error('❌ Error saving sale to Supabase:', error);
-      }
-    };
-    saveToSupabase();
+    const { error: custError } = await supabase
+      .from('customers')
+      .update({ balance: updatedCustomers.find(c => c.id === parseInt(formData.customerId)).balance })
+      .eq('id', parseInt(formData.customerId));
+    if (custError) console.error('❌ Error updating customer balance after sale:', custError);
 
     setShowModal(false);
   };
@@ -1956,7 +2159,7 @@ export default function NorthernWaterSystemApp() {
     setShowModal(true);
   };
 
-  const handleSavePayment = () => {
+  const handleSavePayment = async () => {
     if (!formData.saleId || formData.amount <= 0) {
       alert('Please select sale and enter amount');
       return;
@@ -1970,8 +2173,8 @@ export default function NorthernWaterSystemApp() {
       return;
     }
 
+    // id is assigned by the database (identity column) — see handleSaveSale.
     const newPayment = {
-      id: Math.max(...state.payments.map(p => p.id), 0) + 1,
       saleId: parseInt(formData.saleId),
       customerId: sale.customerId,
       date: formData.date,
@@ -2000,27 +2203,40 @@ export default function NorthernWaterSystemApp() {
       return c;
     });
 
+    // Persist the payment FIRST; only update local state if it actually saved.
+    const { data: savedPayment, error: payError } = await supabase
+      .from('payments')
+      .insert([newPayment])
+      .select()
+      .single();
+
+    if (payError || !savedPayment) {
+      console.error('❌ Error saving payment:', payError);
+      alert('Could not save this payment — it has NOT been recorded. Please try again.\n\n' + (payError?.message || 'Unknown error'));
+      return; // leave the modal open with the entry intact
+    }
+
     setState({
       ...state,
-      payments: [...state.payments, newPayment],
+      payments: [...state.payments, savedPayment],
       sales: newSalesState,
       customers: updatedCustomers
     });
 
-    // Save to Supabase
-    const savePaymentToSupabase = async () => {
-      try {
-        await supabase.from('payments').insert([newPayment]);
-        const updatedSale = newSalesState.find(s => s.id === parseInt(formData.saleId));
-        await supabase.from('sales').update({ paid: updatedSale.paid, status: updatedSale.status }).eq('id', updatedSale.id);
-        const updatedCust = updatedCustomers.find(c => c.id === sale.customerId);
-        await supabase.from('customers').update({ balance: updatedCust.balance }).eq('id', updatedCust.id);
-        console.log('✅ Payment saved to Supabase');
-      } catch (error) {
-        console.error('❌ Error saving payment:', error);
-      }
-    };
-    savePaymentToSupabase();
+    // Reflect the payment on the sale (paid/status) and the customer balance.
+    const updatedSale = newSalesState.find(s => s.id === parseInt(formData.saleId));
+    const { error: saleUpdErr } = await supabase
+      .from('sales')
+      .update({ paid: updatedSale.paid, status: updatedSale.status })
+      .eq('id', updatedSale.id);
+    if (saleUpdErr) console.error('❌ Error updating sale after payment:', saleUpdErr);
+
+    const updatedCust = updatedCustomers.find(c => c.id === sale.customerId);
+    const { error: custUpdErr } = await supabase
+      .from('customers')
+      .update({ balance: updatedCust.balance })
+      .eq('id', updatedCust.id);
+    if (custUpdErr) console.error('❌ Error updating customer after payment:', custUpdErr);
 
     setShowModal(false);
   };
@@ -2341,7 +2557,7 @@ export default function NorthernWaterSystemApp() {
                 </div>
                 <button
                   onClick={handleLogout}
-                  className="bg-slate-100 hover:bg-red-500/30 border border-slate-200 hover:border-rose-200 text-slate-500 hover:text-rose-600 rounded-lg px-3 py-1.5 text-xs md:text-sm transition whitespace-nowrap"
+                  className="bg-slate-100 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 text-slate-500 hover:text-rose-600 rounded-lg px-3 py-1.5 text-xs md:text-sm transition whitespace-nowrap"
                 >
                   Logout
                 </button>
@@ -2361,7 +2577,7 @@ export default function NorthernWaterSystemApp() {
             { id: 'salesdashboard', roles: ['sales'] },
           ] },
           { id: 'sales', label: 'Sales', icon: DollarSign, tabs: [
-            { id: 'sales', label: 'Sales History', roles: ['admin', 'manager', 'sales'] },
+            { id: 'sales', label: 'Invoices', roles: ['admin', 'manager', 'sales'] },
             { id: 'payments', label: 'Payments', roles: ['admin', 'manager', 'sales'] },
           ]},
           { id: 'inventory', label: 'Inventory', icon: Package, tabs: [
@@ -2461,18 +2677,22 @@ export default function NorthernWaterSystemApp() {
           return (
             <div className="space-y-4 md:space-y-6">
               <div className="grid grid-cols-2 gap-3 md:gap-4">
-                <button onClick={() => setActiveTab('customers')} className="relative overflow-hidden bg-white border border-slate-200 rounded-xl shadow-sm p-4 text-left hover:border-sky-300 transition">
-                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-sky-500" />
-                  <p className="text-slate-500 text-xs mb-1 pl-1">Customers</p>
-                  <p className="text-slate-900 text-lg md:text-2xl font-bold pl-1">{totalCustomers.toLocaleString()}</p>
-                  <p className="text-slate-400 text-xs pl-1 mt-1">in your area →</p>
-                </button>
-                <button onClick={() => { setActiveTab('payments'); setPaymentsTab('debts'); }} className="relative overflow-hidden bg-white border border-slate-200 rounded-xl shadow-sm p-4 text-left hover:border-rose-300 transition">
-                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-rose-500" />
-                  <p className="text-slate-500 text-xs mb-1 pl-1">Outstanding Debts</p>
-                  <p className="text-slate-900 text-lg md:text-2xl font-bold pl-1 break-words">KES {totalDebt.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                  <p className="text-slate-400 text-xs pl-1 mt-1">across debtors →</p>
-                </button>
+                <StatCard
+                  label="Customers"
+                  value={totalCustomers.toLocaleString()}
+                  icon={Users}
+                  accent="sky"
+                  sub="in your area →"
+                  onClick={() => setActiveTab('customers')}
+                />
+                <StatCard
+                  label="Outstanding Debts"
+                  value={`KES ${totalDebt.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                  icon={Wallet}
+                  accent="rose"
+                  sub="across debtors →"
+                  onClick={() => { setActiveTab('payments'); setPaymentsTab('debts'); }}
+                />
               </div>
 
               {/* Monthly cartons by size */}
@@ -2543,21 +2763,20 @@ export default function NorthernWaterSystemApp() {
           <div className="space-y-4 md:space-y-6">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
               {[
-                { id: 'customers', label: 'Customers', value: state.customers.length.toLocaleString(), accent: 'bg-sky-500', sub: 'total accounts' },
-                { id: 'debt', label: 'Outstanding Debts', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-rose-500', sub: 'across debtors' },
-                { id: 'sales', label: 'Sales', value: `KES ${state.sales.reduce((sum, s) => sum + s.total, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-emerald-500', sub: 'total sales' },
-                { id: 'costs', label: 'Operating Costs', value: `KES ${(getTotalExpenses() + getTotalPurchases()).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-amber-500', sub: 'expenses + purchases' },
+                { id: 'customers', label: 'Customers', value: state.customers.length.toLocaleString(), accent: 'sky', icon: Users, sub: 'total accounts' },
+                { id: 'debt', label: 'Outstanding Debts', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'rose', icon: Wallet, sub: 'across debtors' },
+                { id: 'sales', label: 'Sales', value: `KES ${state.sales.reduce((sum, s) => sum + s.total, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'emerald', icon: DollarSign, sub: 'total sales' },
+                { id: 'costs', label: 'Operating Costs', value: `KES ${(getTotalExpenses() + getTotalPurchases()).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'amber', icon: ShoppingCart, sub: 'expenses + purchases' },
               ].map((card, i) => (
-                <button
+                <StatCard
                   key={i}
+                  label={card.label}
+                  value={card.value}
+                  icon={card.icon}
+                  accent={card.accent}
+                  sub={card.sub}
                   onClick={() => setBreakdownCard(card.id)}
-                  className="relative overflow-hidden bg-white border border-slate-200 rounded-xl shadow-sm p-4 text-left hover:border-sky-300 transition cursor-pointer"
-                >
-                  <div className={`absolute left-0 top-0 bottom-0 w-1 ${card.accent}`} />
-                  <p className="text-slate-500 text-xs mb-1 pl-1">{card.label}</p>
-                  <p className="text-slate-900 text-lg md:text-2xl font-bold pl-1 break-words">{card.value}</p>
-                  <p className="text-slate-400 text-xs pl-1 mt-1">{card.sub}</p>
-                </button>
+                />
               ))}
             </div>
 
@@ -2628,24 +2847,31 @@ export default function NorthernWaterSystemApp() {
               <h2 className="text-xl md:text-2xl font-bold text-slate-900">Raw Materials Purchases</h2>
               <button
                 onClick={handleAddPurchase}
-                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-slate-900 px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-white font-medium px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
                 <Plus className="w-4 h-4" /> New Purchase
               </button>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-6">
-              {[
-                { label: 'Total Purchased', value: `KES ${getTotalPurchases().toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-sky-500' },
-                { label: 'Purchase Count', value: state.purchases.length.toLocaleString(), accent: 'bg-slate-400' },
-                { label: 'Current Stock Value', value: `KES ${calculateInventoryValue().toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-emerald-500' },
-              ].map((card, i) => (
-                <div key={i} className="relative overflow-hidden bg-white border border-slate-200 rounded-xl shadow-sm p-4">
-                  <div className={`absolute left-0 top-0 bottom-0 w-1 ${card.accent}`} />
-                  <p className="text-slate-500 text-xs mb-1 pl-1">{card.label}</p>
-                  <p className="text-slate-900 text-lg md:text-2xl font-bold pl-1 break-words">{card.value}</p>
-                </div>
-              ))}
+              <StatCard
+                label="Total Purchased"
+                value={`KES ${getTotalPurchases().toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                icon={ShoppingCart}
+                accent="sky"
+              />
+              <StatCard
+                label="Purchase Count"
+                value={state.purchases.length.toLocaleString()}
+                icon={ClipboardList}
+                accent="slate"
+              />
+              <StatCard
+                label="Current Stock Value"
+                value={`KES ${calculateInventoryValue().toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                icon={Package}
+                accent="emerald"
+              />
             </div>
 
             <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
@@ -2677,7 +2903,7 @@ export default function NorthernWaterSystemApp() {
                             </button>
                             <button
                               onClick={() => handleDeletePurchase(purchase.id)}
-                              className="p-1 hover:bg-red-500/30 rounded transition"
+                              className="p-1 hover:bg-rose-50 rounded transition"
                             >
                               <Trash2 className="w-3 h-3 text-rose-600" />
                             </button>
@@ -2704,7 +2930,10 @@ export default function NorthernWaterSystemApp() {
         {/* Inventory Tab */}
         {activeTab === 'inventory' && (
           <div className="space-y-4 md:space-y-6">
-            <h2 className="text-xl md:text-2xl font-bold text-slate-900">Raw Materials Inventory</h2>
+            <div>
+              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Raw Materials Inventory</h2>
+              <p className="text-slate-500 text-sm mt-1">Live stock counts for bottles, seals, labels, caps, overwraps, and consumables.</p>
+            </div>
 
             {/* Empty Bottles */}
             <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
@@ -2805,7 +3034,10 @@ export default function NorthernWaterSystemApp() {
         {/* Reports Tab */}
         {activeTab === 'reports' && (
           <div className="space-y-4 md:space-y-6">
-            <h2 className="text-xl md:text-2xl font-bold text-slate-900">Reports</h2>
+            <div>
+              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Reports</h2>
+              <p className="text-slate-500 text-sm mt-1">Generate debtor, sales, cash, expense, and P&amp;L summaries, then export to PDF.</p>
+            </div>
 
             {/* Report Selection */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
@@ -2821,8 +3053,8 @@ export default function NorthernWaterSystemApp() {
                   onClick={() => handleGenerateReport(report.id)}
                   className={`p-3 md:p-4 rounded-lg md:rounded-xl border-2 transition text-sm md:text-base ${
                     reportType === report.id
-                      ? 'border-cyan-400 bg-sky-500/20'
-                      : 'border-slate-300 bg-white hover:border-cyan-400'
+                      ? 'border-sky-400 bg-sky-50'
+                      : 'border-slate-200 bg-white hover:border-sky-300'
                   }`}
                 >
                   <p className="text-xl md:text-2xl mb-1 md:mb-2">{report.icon}</p>
@@ -2856,13 +3088,13 @@ export default function NorthernWaterSystemApp() {
                   <div className="flex items-end gap-2">
                     <button
                       onClick={() => handleGenerateReport(reportType)}
-                      className="flex-1 bg-sky-500 hover:bg-sky-600 text-slate-900 px-2 md:px-4 py-1 md:py-2 rounded-lg transition text-sm"
+                      className="flex-1 bg-sky-500 hover:bg-sky-600 text-white font-medium px-2 md:px-4 py-1 md:py-2 rounded-lg transition text-sm"
                     >
                       Generate
                     </button>
                     <button
                       onClick={() => { setDateRange({ start: '', end: '' }); setTimeout(() => handleGenerateReport(reportType), 0); }}
-                      className="bg-slate-600 hover:bg-slate-500 text-slate-900 px-2 md:px-3 py-1 md:py-2 rounded-lg transition text-xs"
+                      className="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-2 md:px-3 py-1 md:py-2 rounded-lg transition text-xs"
                       title="Clear dates (show all time)"
                     >
                       All Time
@@ -2885,7 +3117,7 @@ export default function NorthernWaterSystemApp() {
                   </div>
                   <button
                     onClick={downloadReportAsPDF}
-                    className="flex items-center gap-2 bg-sky-500 hover:bg-sky-600 text-slate-900 px-3 md:px-4 py-2 rounded-lg transition text-sm w-full md:w-auto justify-center"
+                    className="flex items-center gap-2 bg-sky-500 hover:bg-sky-600 text-white font-medium px-3 md:px-4 py-2 rounded-lg transition text-sm w-full md:w-auto justify-center"
                   >
                     <Download className="w-4 h-4" /> Save as PDF
                   </button>
@@ -3156,7 +3388,7 @@ export default function NorthernWaterSystemApp() {
               <h2 className="text-xl md:text-2xl font-bold text-slate-900">Production</h2>
               <button
                 onClick={handleAddProduction}
-                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-slate-900 px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-white font-medium px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
                 <Plus className="w-4 h-4" /> New
               </button>
@@ -3207,7 +3439,7 @@ export default function NorthernWaterSystemApp() {
                         <div className="flex justify-end pt-2 mt-2 border-t border-slate-100">
                           <button
                             onClick={() => handleDeleteProduction(log.id)}
-                            className="flex items-center gap-1 text-xs text-rose-600 hover:text-red-200 hover:bg-rose-50 px-2 py-1 rounded transition"
+                            className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded transition"
                           >
                             <Trash2 className="w-3 h-3" /> Delete
                           </button>
@@ -3225,10 +3457,13 @@ export default function NorthernWaterSystemApp() {
         {activeTab === 'sales' && (
           <div className="space-y-4 md:space-y-6">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
-              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Sales</h2>
+              <div>
+                <h2 className="text-xl md:text-2xl font-bold text-slate-900">Invoices</h2>
+                <p className="text-slate-500 text-sm mt-1">Record sales and download printable invoices for customers.</p>
+              </div>
               <button
                 onClick={handleAddSale}
-                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-slate-900 px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-white font-medium px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
                 <Plus className="w-4 h-4" /> New Sale
               </button>
@@ -3236,7 +3471,7 @@ export default function NorthernWaterSystemApp() {
 
             <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3 md:mb-4">
-                <h3 className="text-slate-900 font-semibold text-sm md:text-base">History</h3>
+                <h3 className="text-slate-900 font-semibold text-sm md:text-base">Invoice History</h3>
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
@@ -3321,7 +3556,7 @@ export default function NorthernWaterSystemApp() {
                           </div>
                           <div className="text-right flex-shrink-0">
                             <p className="text-emerald-600 font-semibold text-sm">KES {sale.total.toLocaleString()}</p>
-                            <span className={`text-xs px-2 py-1 rounded block mt-1 ${sale.status === 'paid' ? 'bg-slate-100 text-emerald-600' : sale.status === 'partial' ? 'bg-orange-500/30 text-amber-600' : 'bg-red-500/30 text-rose-600'}`}>
+                            <span className={`text-xs px-2 py-1 rounded block mt-1 ${sale.status === 'paid' ? 'bg-slate-100 text-emerald-600' : sale.status === 'partial' ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-700'}`}>
                               {sale.status === 'paid' ? '✓' : sale.status === 'partial' ? '◐' : '○'}
                             </span>
                           </div>
@@ -3334,16 +3569,22 @@ export default function NorthernWaterSystemApp() {
                             </div>
                           ))}
                         </div>
-                        {(role === 'admin' || role === 'manager') && (
-                          <div className="flex justify-end pt-2 mt-2 border-t border-slate-100">
+                        <div className="flex justify-end gap-1 pt-2 mt-2 border-t border-slate-100">
+                          <button
+                            onClick={() => downloadInvoiceAsPDF(sale)}
+                            className="flex items-center gap-1 text-xs text-sky-700 hover:text-sky-800 hover:bg-sky-50 px-2 py-1 rounded transition"
+                          >
+                            <Download className="w-3 h-3" /> Invoice PDF
+                          </button>
+                          {(role === 'admin' || role === 'manager') && (
                             <button
                               onClick={() => handleDeleteSale(sale.id)}
-                              className="flex items-center gap-1 text-xs text-rose-600 hover:text-red-200 hover:bg-rose-50 px-2 py-1 rounded transition"
+                              className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded transition"
                             >
                               <Trash2 className="w-3 h-3" /> Delete
                             </button>
-                          </div>
-                        )}
+                          )}
+                        </div>
                       </div>
                     );
                   })
@@ -3369,23 +3610,25 @@ export default function NorthernWaterSystemApp() {
 
             {/* Summary Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-6">
-              {[
-                { label: 'Total Debt', value: `KES ${visibleCustomers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-rose-500', tab: 'debts' },
-                { label: 'Total Credits', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, c.balance), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-emerald-500' },
-                { label: 'Total Received', value: `KES ${state.payments.reduce((sum, p) => sum + p.amount, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'bg-sky-500' },
-              ].map((card, i) => (
-                <div 
-                  key={i} 
-                  className={`relative overflow-hidden bg-white border border-slate-200 rounded-xl shadow-sm p-4 transition hover:border-sky-300 ${card.tab ? 'cursor-pointer' : ''} ${
-                    card.label === 'Total Debt' && paymentsTab === 'debts' ? 'ring-2 ring-sky-300' : ''
-                  }`}
-                  onClick={() => card.tab && setPaymentsTab('debts')}
-                >
-                  <div className={`absolute left-0 top-0 bottom-0 w-1 ${card.accent}`} />
-                  <p className="text-slate-500 text-xs mb-1 pl-1">{card.label}</p>
-                  <p className="text-slate-900 text-lg md:text-2xl font-bold pl-1 break-words">{card.value}</p>
-                </div>
-              ))}
+              <StatCard
+                label="Total Debt"
+                value={`KES ${visibleCustomers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                icon={Wallet}
+                accent="rose"
+                onClick={() => setPaymentsTab('debts')}
+              />
+              <StatCard
+                label="Total Credits"
+                value={`KES ${state.customers.reduce((sum, c) => sum + Math.max(0, c.balance), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                icon={TrendingUp}
+                accent="emerald"
+              />
+              <StatCard
+                label="Total Received"
+                value={`KES ${state.payments.reduce((sum, p) => sum + p.amount, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                icon={DollarSign}
+                accent="sky"
+              />
             </div>
 
             {/* Tab Navigation */}
@@ -3394,7 +3637,7 @@ export default function NorthernWaterSystemApp() {
                 onClick={() => setPaymentsTab('debts')}
                 className={`flex-1 py-2 px-4 rounded-t-lg transition text-sm font-semibold ${
                   paymentsTab === 'debts'
-                    ? 'bg-red-500/30 text-rose-600 border-b-2 border-red-400'
+                    ? 'bg-rose-50 text-rose-700 border-b-2 border-rose-400'
                     : 'text-slate-500 hover:text-slate-900'
                 }`}
               >
@@ -3404,7 +3647,7 @@ export default function NorthernWaterSystemApp() {
                 onClick={() => setPaymentsTab('history')}
                 className={`flex-1 py-2 px-4 rounded-t-lg transition text-sm font-semibold ${
                   paymentsTab === 'history'
-                    ? 'bg-sky-500/30 text-sky-600 border-b-2 border-cyan-400'
+                    ? 'bg-sky-50 text-sky-700 border-b-2 border-sky-400'
                     : 'text-slate-500 hover:text-slate-900'
                 }`}
               >
@@ -3414,7 +3657,7 @@ export default function NorthernWaterSystemApp() {
                 onClick={() => setPaymentsTab('accounts')}
                 className={`flex-1 py-2 px-4 rounded-t-lg transition text-sm font-semibold ${
                   paymentsTab === 'accounts'
-                    ? 'bg-slate-100 text-emerald-600 border-b-2 border-green-400'
+                    ? 'bg-emerald-50 text-emerald-700 border-b-2 border-emerald-400'
                     : 'text-slate-500 hover:text-slate-900'
                 }`}
               >
@@ -3466,7 +3709,7 @@ export default function NorthernWaterSystemApp() {
                             </div>
 
                             {/* Customer Details */}
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 py-3 border-t border-b border-red-500/30">
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 py-3 border-t border-b border-rose-200">
                               <div>
                                 <p className="text-slate-500 text-xs">Phone</p>
                                 <p className="text-slate-900 font-semibold text-sm">{customer.phone}</p>
@@ -3489,7 +3732,7 @@ export default function NorthernWaterSystemApp() {
 
                             {/* Unpaid Invoices */}
                             {sales.length > 0 && (
-                              <div className="mt-3 pt-3 border-t border-red-500/30">
+                              <div className="mt-3 pt-3 border-t border-rose-200">
                                 <p className="text-rose-600 font-semibold text-sm mb-2">Unpaid Invoices:</p>
                                 <div className="space-y-1">
                                   {sales.map((sale) => (
@@ -3505,7 +3748,7 @@ export default function NorthernWaterSystemApp() {
                             {/* Action Button */}
                             <button
                               onClick={handleAddPayment}
-                              className="mt-3 w-full bg-slate-100 hover:bg-green-500/50 border border-emerald-200 text-emerald-600 py-2 px-3 rounded-lg transition text-sm font-semibold"
+                              className="mt-3 w-full bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 py-2 px-3 rounded-lg transition text-sm font-semibold"
                             >
                               Record Payment
                             </button>
@@ -3544,7 +3787,7 @@ export default function NorthernWaterSystemApp() {
                       const customer = state.customers.find(c => c.id === payment.customerId);
                       const sale = state.sales.find(s => s.id === payment.saleId);
                       return (
-                        <div key={payment.id} className="p-3 md:p-4 bg-slate-50 rounded-lg border border-cyan-400/20">
+                        <div key={payment.id} className="p-3 md:p-4 bg-slate-50 rounded-lg border border-slate-200">
                           <div className="flex justify-between items-start mb-2">
                             <div className="min-w-0 flex-1">
                               <p className="text-slate-900 font-semibold truncate">{customer?.name}</p>
@@ -3586,11 +3829,11 @@ export default function NorthernWaterSystemApp() {
                         <div 
                           key={customer.id} 
                           className={`p-3 md:p-4 rounded-lg flex justify-between items-center border-l-4 transition ${
-                            isDebtor 
-                              ? 'bg-red-900/20 border-red-500 hover:bg-red-900/30' 
-                              : isCreditor 
-                              ? 'bg-green-900/20 border-green-500 hover:bg-green-900/30'
-                              : 'bg-slate-50 border-slate-300 hover:bg-slate-50'
+                            isDebtor
+                              ? 'bg-rose-50 border-rose-400 hover:bg-rose-100'
+                              : isCreditor
+                              ? 'bg-emerald-50 border-emerald-400 hover:bg-emerald-100'
+                              : 'bg-slate-50 border-slate-300 hover:bg-slate-100'
                           }`}
                         >
                           <div className="min-w-0">
@@ -3621,10 +3864,13 @@ export default function NorthernWaterSystemApp() {
         {activeTab === 'expenses' && (
           <div className="space-y-4 md:space-y-6">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
-              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Expenses</h2>
+              <div>
+                <h2 className="text-xl md:text-2xl font-bold text-slate-900">Expenses</h2>
+                <p className="text-slate-500 text-sm mt-1">Track operating costs and cost-of-goods spending by category.</p>
+              </div>
               <button
                 onClick={handleAddExpense}
-                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-slate-900 px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-white font-medium px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
                 <Plus className="w-4 h-4" /> New Expense
               </button>
@@ -3643,11 +3889,13 @@ export default function NorthernWaterSystemApp() {
             </div>
 
             {/* Total Expenses */}
-            <div className="relative overflow-hidden bg-white border border-slate-200 rounded-xl shadow-sm p-4 md:p-6">
-              <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-500" />
-              <p className="text-slate-500 text-sm mb-1 pl-1">Total Expenses</p>
-              <p className="text-slate-900 text-3xl md:text-4xl font-bold pl-1">KES {getTotalExpenses().toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-            </div>
+            <StatCard
+              label="Total Expenses"
+              value={`KES ${getTotalExpenses().toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+              icon={Wallet}
+              accent="amber"
+              sub="all recorded expenses"
+            />
 
             {/* Expenses List */}
             <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
@@ -3680,7 +3928,7 @@ export default function NorthernWaterSystemApp() {
                             </button>
                             <button
                               onClick={() => handleDeleteExpense(expense.id)}
-                              className="p-1 hover:bg-red-500/30 rounded transition"
+                              className="p-1 hover:bg-rose-50 rounded transition"
                             >
                               <Trash2 className="w-3 h-3 text-rose-600" />
                             </button>
@@ -3703,82 +3951,189 @@ export default function NorthernWaterSystemApp() {
           </div>
         )}
         {/* Customers Tab */}
-        {activeTab === 'customers' && (
+        {activeTab === 'customers' && (() => {
+          // Stats reflect ALL customers in scope (not the current search).
+          const allCustomers = state.customers;
+          const totalCustomers = allCustomers.length;
+          const activeCount = allCustomers.filter(c => c.isActive).length;
+          const outstandingDebt = allCustomers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0);
+
+          // Helper for initials avatar.
+          const initialsOf = (name) =>
+            (name || '?').split(' ').filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase();
+
+          // Apply search + status filter to the visible list.
+          const filtered = allCustomers.filter(customer => {
+            const searchTerm = customerSearch.toLowerCase();
+            const matchesSearch =
+              customer.name.toLowerCase().includes(searchTerm) ||
+              customer.location.toLowerCase().includes(searchTerm) ||
+              customer.phone.includes(searchTerm);
+            const matchesStatus =
+              customerStatusFilter === 'all' ||
+              (customerStatusFilter === 'active' && customer.isActive) ||
+              (customerStatusFilter === 'inactive' && !customer.isActive);
+            return matchesSearch && matchesStatus;
+          });
+
+          const openEdit = (customer) => {
+            setEditingCustomer(customer);
+            setModalType('customer');
+            setFormData(customer);
+            setShowModal(true);
+          };
+
+          return (
           <div className="space-y-4 md:space-y-6">
+            {/* Page header */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
-              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Customers</h2>
+              <div>
+                <h2 className="text-xl md:text-2xl font-bold text-slate-900">Customer Management</h2>
+                <p className="text-slate-500 text-sm mt-1">Manage and monitor accounts for hotels, shops, and individual clients.</p>
+              </div>
               <button
                 onClick={handleAddCustomer}
-                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-slate-900 px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                className="w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-white px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm font-medium shadow-sm"
               >
-                <Plus className="w-4 h-4" /> New
+                <Plus className="w-4 h-4" /> New Customer
               </button>
             </div>
 
-            {/* Customer Search Bar */}
-            <div className="bg-white border border-slate-200 rounded-lg p-3 md:p-4">
-              <input
-                type="text"
-                placeholder="Search customers by name, location, or phone..."
-                value={customerSearch}
-                onChange={(e) => setCustomerSearch(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-4 py-2 text-sm placeholder-slate-400"
-              />
+            {/* Summary cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4">
+              <StatCard label="Total Customers" value={totalCustomers.toLocaleString()} icon={Users} accent="sky" sub="accounts in your scope" />
+              <StatCard label="Outstanding Debt" value={`KES ${outstandingDebt.toLocaleString()}`} icon={Wallet} accent="rose" sub="owed across all accounts" />
+              <StatCard label="Active Accounts" value={activeCount.toLocaleString()} icon={TrendingUp} accent="emerald" sub={`${totalCustomers - activeCount} inactive`} />
             </div>
 
-            <div className="grid grid-cols-1 gap-3 md:gap-4">
-              {state.customers
-                .filter(customer => {
-                  const searchTerm = customerSearch.toLowerCase();
-                  return (
-                    customer.name.toLowerCase().includes(searchTerm) ||
-                    customer.location.toLowerCase().includes(searchTerm) ||
-                    customer.phone.includes(searchTerm)
-                  );
-                })
-                .map(customer => (
-                <div key={customer.id} className="p-4 md:p-6 bg-white border border-slate-200 rounded-lg md:rounded-xl">
-                  <div className="flex justify-between items-start gap-3 mb-3">
-                    <div className="min-w-0">
-                      <p className="text-slate-900 text-base md:text-lg font-semibold">{customer.name}</p>
-                      <p className="text-slate-500 text-xs md:text-sm">{customer.location} • {customer.phone}</p>
+            {/* Search + filter bar */}
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-3 md:p-4 flex flex-col sm:flex-row gap-3">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="Search by name, location, or phone..."
+                  value={customerSearch}
+                  onChange={(e) => setCustomerSearch(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg pl-9 pr-4 py-2 text-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-200 focus:border-sky-400"
+                />
+              </div>
+              <div className="relative sm:w-44">
+                <Filter className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <select
+                  value={customerStatusFilter}
+                  onChange={(e) => setCustomerStatusFilter(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-200 focus:border-sky-400"
+                >
+                  <option value="all">Any Status</option>
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Customer list */}
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+              {/* Desktop table */}
+              <table className="hidden md:table w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-left text-slate-500">
+                    <th className="font-medium px-5 py-3">Customer Details</th>
+                    <th className="font-medium px-5 py-3">Location</th>
+                    <th className="font-medium px-5 py-3">Status</th>
+                    <th className="font-medium px-5 py-3 text-right">Balance</th>
+                    <th className="font-medium px-5 py-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map(customer => (
+                    <tr key={customer.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60 transition">
+                      <td className="px-5 py-3">
+                        <div className="flex items-center gap-3">
+                          <div className="flex-shrink-0 w-9 h-9 rounded-full bg-sky-50 text-sky-600 flex items-center justify-center text-xs font-semibold">
+                            {initialsOf(customer.name)}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-slate-900 font-semibold truncate">{customer.name}</p>
+                            <p className="text-slate-500 text-xs truncate">{customer.phone}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3 text-slate-600">{customer.location}</td>
+                      <td className="px-5 py-3">
+                        <Badge color={customer.isActive ? 'emerald' : 'rose'} dot>
+                          {customer.isActive ? 'Active' : 'Inactive'}
+                        </Badge>
+                      </td>
+                      <td className={`px-5 py-3 text-right font-semibold ${customer.balance >= 0 ? 'text-slate-900' : 'text-rose-600'}`}>
+                        KES {customer.balance.toLocaleString()}
+                      </td>
+                      <td className="px-5 py-3">
+                        <div className="flex items-center justify-end gap-1">
+                          <button onClick={() => openEdit(customer)} className="p-2 hover:bg-slate-100 rounded-lg transition" title="Edit">
+                            <Edit2 className="w-4 h-4 text-slate-500" />
+                          </button>
+                          <button onClick={() => handleDeleteCustomer(customer.id)} className="p-2 hover:bg-rose-50 rounded-lg transition" title="Delete">
+                            <Trash2 className="w-4 h-4 text-rose-600" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {/* Mobile cards */}
+              <div className="md:hidden divide-y divide-slate-100">
+                {filtered.map(customer => (
+                  <div key={customer.id} className="p-4">
+                    <div className="flex justify-between items-start gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="flex-shrink-0 w-9 h-9 rounded-full bg-sky-50 text-sky-600 flex items-center justify-center text-xs font-semibold">
+                          {initialsOf(customer.name)}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-slate-900 font-semibold truncate">{customer.name}</p>
+                          <p className="text-slate-500 text-xs truncate">{customer.location} • {customer.phone}</p>
+                        </div>
+                      </div>
+                      <div className="flex gap-1 flex-shrink-0">
+                        <button onClick={() => openEdit(customer)} className="p-2 hover:bg-slate-100 rounded-lg transition">
+                          <Edit2 className="w-4 h-4 text-slate-500" />
+                        </button>
+                        <button onClick={() => handleDeleteCustomer(customer.id)} className="p-2 hover:bg-rose-50 rounded-lg transition">
+                          <Trash2 className="w-4 h-4 text-rose-600" />
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex gap-2 flex-shrink-0">
-                      <button
-                        onClick={() => {
-                          setEditingCustomer(customer);
-                          setModalType('customer');
-                          setFormData(customer);
-                          setShowModal(true);
-                        }}
-                        className="p-2 hover:bg-slate-100 rounded-lg transition"
-                      >
-                        <Edit2 className="w-4 h-4 text-slate-500" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteCustomer(customer.id)}
-                        className="p-2 hover:bg-red-500/30 rounded-lg transition"
-                      >
-                        <Trash2 className="w-4 h-4 text-rose-600" />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between pt-3 border-t border-slate-100">
-                    <div>
-                      <p className="text-slate-500 text-xs md:text-sm">Balance</p>
-                      <p className={`text-lg md:text-xl font-semibold ${customer.balance >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    <div className="flex items-center justify-between pt-3 mt-3 border-t border-slate-100">
+                      <Badge color={customer.isActive ? 'emerald' : 'rose'} dot>
+                        {customer.isActive ? 'Active' : 'Inactive'}
+                      </Badge>
+                      <p className={`text-base font-semibold ${customer.balance >= 0 ? 'text-slate-900' : 'text-rose-600'}`}>
                         KES {customer.balance.toLocaleString()}
                       </p>
                     </div>
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${customer.isActive ? 'bg-slate-100 text-emerald-600' : 'bg-red-500/30 text-rose-600'}`}>
-                      {customer.isActive ? 'Active' : 'Inactive'}
-                    </span>
                   </div>
+                ))}
+              </div>
+
+              {/* Empty state */}
+              {filtered.length === 0 && (
+                <div className="px-5 py-12 text-center text-slate-400 text-sm">
+                  No customers match your search.
                 </div>
-              ))}
+              )}
             </div>
+
+            {filtered.length > 0 && (
+              <p className="text-slate-400 text-xs px-1">
+                Showing {filtered.length} of {totalCustomers} customer{totalCustomers === 1 ? '' : 's'}
+              </p>
+            )}
           </div>
-        )}
+          );
+        })()}
 
         {/* Cost Settings Tab (admin only) */}
         {activeTab === 'costsettings' && role === 'admin' && (
@@ -3808,7 +4163,7 @@ export default function NorthernWaterSystemApp() {
               </div>
               <button
                 onClick={handleSaveCartonCosts}
-                className="mt-6 w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-slate-900 px-6 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                className="mt-6 w-full md:w-auto bg-sky-500 hover:bg-sky-600 text-white font-medium px-6 py-2 rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
                 <Save className="w-4 h-4" /> Save Costs
               </button>
@@ -3857,7 +4212,7 @@ export default function NorthernWaterSystemApp() {
                         setFormData({ itemId: item.id, itemLabel: item.label, currentQty: item.qty, newQty: '', reason: '' });
                         setShowModal(true);
                       }}
-                      className="bg-sky-500/80 hover:bg-sky-500 text-slate-900 px-3 py-1.5 rounded text-xs whitespace-nowrap"
+                      className="bg-sky-500 hover:bg-sky-600 text-white font-medium px-3 py-1.5 rounded text-xs whitespace-nowrap"
                     >
                       Adjust
                     </button>
@@ -4152,7 +4507,15 @@ export default function NorthernWaterSystemApp() {
                     <h3 className="text-slate-900 font-bold">{invoiceDetail.invoiceNumber}</h3>
                     <p className="text-slate-400 text-xs">{invoiceDetail.date}</p>
                   </div>
-                  <button onClick={() => setInvoiceDetail(null)} className="text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => downloadInvoiceAsPDF(invoiceDetail)}
+                      className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-600 text-white font-medium px-3 py-1.5 rounded-lg transition text-xs"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Download / Print
+                    </button>
+                    <button onClick={() => setInvoiceDetail(null)} className="text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+                  </div>
                 </div>
                 <div className="p-4 md:p-6 space-y-4">
                   <div>
@@ -4544,12 +4907,11 @@ export default function NorthernWaterSystemApp() {
                               onChange={(e) => {
                                 const newItems = [...formData.items];
                                 newItems[idx].size = e.target.value;
-                                newItems[idx].price = BOTTLE_PRICES[e.target.value] || 0;
                                 setFormData({ ...formData, items: newItems });
                               }}
                               className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded px-2 py-1"
                             >
-                              {Object.keys(BOTTLE_PRICES).map(s => (
+                              {SALE_SIZES.map(s => (
                                 <option key={s} value={s}>{SIZE_LABELS[s] || s}</option>
                               ))}
                             </select>
@@ -4594,7 +4956,7 @@ export default function NorthernWaterSystemApp() {
                     <button
                       onClick={() => setFormData({
                         ...formData,
-                        items: [...(formData.items || []), { size: '0.5L', quantity: 0, price: 100, subtotal: 0 }]
+                        items: [...(formData.items || []), { size: '0.5L', quantity: 0, price: 0, subtotal: 0 }]
                       })}
                       className="mt-3 text-sky-600 text-xs"
                     >
@@ -5051,7 +5413,7 @@ export default function NorthernWaterSystemApp() {
                   else if (modalType === 'adjust') handleStockAdjustment();
                   else if (modalType === 'employee') handleSaveEmployee();
                 }}
-                className="flex-1 px-3 md:px-4 py-2 bg-sky-500 hover:bg-sky-600 text-slate-900 rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                className="flex-1 px-3 md:px-4 py-2 bg-sky-500 hover:bg-sky-600 text-white font-medium rounded-lg transition flex items-center justify-center gap-2 text-sm"
               >
                 <Save className="w-4 h-4" /> Save
               </button>
