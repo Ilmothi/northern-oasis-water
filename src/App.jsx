@@ -2061,7 +2061,7 @@ export default function NorthernWaterSystemApp() {
     setShowModal(true);
   };
 
-  const handleSaveSale = () => {
+  const handleSaveSale = async () => {
     if (!formData.customerId || formData.items.filter(i => i.quantity > 0).length === 0) {
       alert('Please select customer and add items');
       return;
@@ -2085,15 +2085,16 @@ export default function NorthernWaterSystemApp() {
     const total = validItems.reduce((sum, i) => sum + (i.quantity * i.price), 0);
     const isPaid = formData.paymentStatus === 'paid';
     
+    // id and invoiceNumber are assigned by the database (identity column +
+    // invoice-number sequence) — never on the client, which only ever sees an
+    // RLS-filtered subset of sales and would generate colliding values.
     const newSale = {
-      id: Math.max(...state.sales.map(s => s.id), 0) + 1,
       customerId: parseInt(formData.customerId),
       date: formData.date,
       items: validItems,
       total,
       paid: isPaid ? total : 0,
       status: isPaid ? 'paid' : 'pending',
-      invoiceNumber: `INV-${String(Math.max(...state.sales.map(s => parseInt(s.invoiceNumber?.split('-')[1] || 0)), 0) + 1).padStart(3, '0')}`,
       created_by: session?.user?.id || null
     };
 
@@ -2113,27 +2114,34 @@ export default function NorthernWaterSystemApp() {
         : c
     );
 
+    // Persist FIRST — only reflect the sale locally if the database accepts it.
+    // (Previously the row was added to state optimistically and the insert could
+    // be silently rejected on a primary-key collision, so the rep saw a sale
+    // that was never saved.)
+    const { data: savedSale, error: saleError } = await supabase
+      .from('sales')
+      .insert([newSale])
+      .select()
+      .single();
+
+    if (saleError || !savedSale) {
+      console.error('❌ Error saving sale to Supabase:', saleError);
+      alert('Could not save this sale — it has NOT been recorded. Please try again.\n\n' + (saleError?.message || 'Unknown error'));
+      return; // leave the modal open with the entry intact
+    }
+
     setState({
       ...state,
-      sales: [...state.sales, newSale],
+      sales: [...state.sales, savedSale],
       finishedGoods: updatedFinishedGoods,
       customers: updatedCustomers
     });
 
-    // Save to Supabase (STEP 7D)
-    const saveToSupabase = async () => {
-      try {
-        await supabase.from('sales').insert([newSale]);
-        await supabase
-          .from('customers')
-          .update({ balance: updatedCustomers.find(c => c.id === parseInt(formData.customerId)).balance })
-          .eq('id', parseInt(formData.customerId));
-        console.log('✅ Sale saved to Supabase');
-      } catch (error) {
-        console.error('❌ Error saving sale to Supabase:', error);
-      }
-    };
-    saveToSupabase();
+    const { error: custError } = await supabase
+      .from('customers')
+      .update({ balance: updatedCustomers.find(c => c.id === parseInt(formData.customerId)).balance })
+      .eq('id', parseInt(formData.customerId));
+    if (custError) console.error('❌ Error updating customer balance after sale:', custError);
 
     setShowModal(false);
   };
@@ -2151,7 +2159,7 @@ export default function NorthernWaterSystemApp() {
     setShowModal(true);
   };
 
-  const handleSavePayment = () => {
+  const handleSavePayment = async () => {
     if (!formData.saleId || formData.amount <= 0) {
       alert('Please select sale and enter amount');
       return;
@@ -2165,8 +2173,8 @@ export default function NorthernWaterSystemApp() {
       return;
     }
 
+    // id is assigned by the database (identity column) — see handleSaveSale.
     const newPayment = {
-      id: Math.max(...state.payments.map(p => p.id), 0) + 1,
       saleId: parseInt(formData.saleId),
       customerId: sale.customerId,
       date: formData.date,
@@ -2195,27 +2203,40 @@ export default function NorthernWaterSystemApp() {
       return c;
     });
 
+    // Persist the payment FIRST; only update local state if it actually saved.
+    const { data: savedPayment, error: payError } = await supabase
+      .from('payments')
+      .insert([newPayment])
+      .select()
+      .single();
+
+    if (payError || !savedPayment) {
+      console.error('❌ Error saving payment:', payError);
+      alert('Could not save this payment — it has NOT been recorded. Please try again.\n\n' + (payError?.message || 'Unknown error'));
+      return; // leave the modal open with the entry intact
+    }
+
     setState({
       ...state,
-      payments: [...state.payments, newPayment],
+      payments: [...state.payments, savedPayment],
       sales: newSalesState,
       customers: updatedCustomers
     });
 
-    // Save to Supabase
-    const savePaymentToSupabase = async () => {
-      try {
-        await supabase.from('payments').insert([newPayment]);
-        const updatedSale = newSalesState.find(s => s.id === parseInt(formData.saleId));
-        await supabase.from('sales').update({ paid: updatedSale.paid, status: updatedSale.status }).eq('id', updatedSale.id);
-        const updatedCust = updatedCustomers.find(c => c.id === sale.customerId);
-        await supabase.from('customers').update({ balance: updatedCust.balance }).eq('id', updatedCust.id);
-        console.log('✅ Payment saved to Supabase');
-      } catch (error) {
-        console.error('❌ Error saving payment:', error);
-      }
-    };
-    savePaymentToSupabase();
+    // Reflect the payment on the sale (paid/status) and the customer balance.
+    const updatedSale = newSalesState.find(s => s.id === parseInt(formData.saleId));
+    const { error: saleUpdErr } = await supabase
+      .from('sales')
+      .update({ paid: updatedSale.paid, status: updatedSale.status })
+      .eq('id', updatedSale.id);
+    if (saleUpdErr) console.error('❌ Error updating sale after payment:', saleUpdErr);
+
+    const updatedCust = updatedCustomers.find(c => c.id === sale.customerId);
+    const { error: custUpdErr } = await supabase
+      .from('customers')
+      .update({ balance: updatedCust.balance })
+      .eq('id', updatedCust.id);
+    if (custUpdErr) console.error('❌ Error updating customer after payment:', custUpdErr);
 
     setShowModal(false);
   };
