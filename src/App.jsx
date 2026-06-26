@@ -263,6 +263,7 @@ export default function NorthernWaterSystemApp() {
   const [salesFilterDate, setSalesFilterDate] = useState('');
   const [salesSearch, setSalesSearch] = useState('');
   const [paymentsSearch, setPaymentsSearch] = useState('');
+  const [paymentsFilterDate, setPaymentsFilterDate] = useState('');
   const [debtsSearch, setDebtsSearch] = useState('');
   const [invoiceDetail, setInvoiceDetail] = useState(null);
   const [breakdownCard, setBreakdownCard] = useState(null);
@@ -3790,21 +3791,51 @@ export default function NorthernWaterSystemApp() {
               <div className="bg-white border border-slate-200 rounded-b-lg rounded-tr-lg p-4 md:p-6">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
                   <h3 className="text-slate-900 font-semibold text-base">Payment History</h3>
-                  <input
-                    type="text"
-                    value={paymentsSearch}
-                    onChange={(e) => setPaymentsSearch(e.target.value)}
-                    placeholder="Search customer..."
-                    className="bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 py-1.5 text-sm placeholder-slate-400"
-                  />
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={paymentsSearch}
+                      onChange={(e) => setPaymentsSearch(e.target.value)}
+                      placeholder="Search customer..."
+                      className="bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 py-1.5 text-sm placeholder-slate-400"
+                    />
+                    <input
+                      type="date"
+                      value={paymentsFilterDate}
+                      onChange={(e) => setPaymentsFilterDate(e.target.value)}
+                      className="bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 py-1.5 text-sm"
+                    />
+                    {(paymentsFilterDate || paymentsSearch) && (
+                      <button onClick={() => { setPaymentsFilterDate(''); setPaymentsSearch(''); }} className="text-xs text-slate-500 hover:text-slate-800 px-2 py-1">Clear</button>
+                    )}
+                  </div>
                 </div>
-                <div className="space-y-2 md:space-y-3 max-h-96 overflow-y-auto">
-                  {(() => {
-                    const list = visiblePayments.filter(p => {
+                {(() => {
+                  if (!paymentsFilterDate) return null;
+                  const dayList = visiblePayments
+                    .filter(p => p.date === paymentsFilterDate)
+                    .filter(p => {
                       if (!paymentsSearch) return true;
                       const c = state.customers.find(c => c.id === p.customerId);
                       return (c?.name || '').toLowerCase().includes(paymentsSearch.toLowerCase());
                     });
+                  const dayTotal = dayList.reduce((sum, p) => sum + p.amount, 0);
+                  return (
+                    <div className="mb-4 bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3 flex justify-between items-center">
+                      <span className="text-emerald-700 text-sm font-medium">Collected on {paymentsFilterDate} ({dayList.length} payment{dayList.length === 1 ? '' : 's'})</span>
+                      <span className="text-emerald-600 font-bold text-lg">KES {dayTotal.toLocaleString()}</span>
+                    </div>
+                  );
+                })()}
+                <div className="space-y-2 md:space-y-3 max-h-96 overflow-y-auto">
+                  {(() => {
+                    const list = visiblePayments
+                      .filter(p => !paymentsFilterDate || p.date === paymentsFilterDate)
+                      .filter(p => {
+                        if (!paymentsSearch) return true;
+                        const c = state.customers.find(c => c.id === p.customerId);
+                        return (c?.name || '').toLowerCase().includes(paymentsSearch.toLowerCase());
+                      });
                     return list.length === 0 ? (
                       <p className="text-slate-500 text-center py-8 text-sm">No matching payments</p>
                     ) : (
