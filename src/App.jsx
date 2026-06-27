@@ -2260,6 +2260,75 @@ export default function NorthernWaterSystemApp() {
     setShowModal(false);
   };
 
+  // Delete Payment — reverses a mistakenly-entered payment.
+  // Mirrors handleSavePayment in reverse: rolls back the sale's paid/status
+  // and the customer's balance, then removes the payment record.
+  const handleDeletePayment = (id) => {
+    const payment = state.payments.find(p => p.id === id);
+    if (!payment) return;
+
+    const customer = state.customers.find(c => c.id === payment.customerId);
+    const sale = state.sales.find(s => s.id === payment.saleId);
+
+    let confirmMsg = `Delete this payment of KES ${payment.amount.toLocaleString()}`;
+    if (customer) confirmMsg += ` from ${customer.name}`;
+    confirmMsg += '? This will increase the outstanding balance';
+    if (sale) confirmMsg += ` on invoice ${sale.invoiceNumber}`;
+    confirmMsg += ' and reduce cash collected. This cannot be undone.';
+    if (!confirm(confirmMsg)) return;
+
+    // 1. Reverse the sale's paid amount and status (if the sale still exists)
+    const updatedSales = state.sales.map(s => {
+      if (s.id === payment.saleId) {
+        const newPaid = (s.paid || 0) - payment.amount;
+        return {
+          ...s,
+          paid: newPaid,
+          status: newPaid >= s.total ? 'paid' : newPaid > 0 ? 'partial' : 'pending'
+        };
+      }
+      return s;
+    });
+
+    // 2. Reverse the customer's balance (payment had credited it)
+    const updatedCustomers = state.customers.map(c =>
+      c.id === payment.customerId
+        ? { ...c, balance: c.balance - payment.amount }
+        : c
+    );
+
+    // 3. Remove the payment from state
+    const updatedPayments = state.payments.filter(p => p.id !== id);
+
+    setState({
+      ...state,
+      payments: updatedPayments,
+      sales: updatedSales,
+      customers: updatedCustomers
+    });
+
+    // 4. Reflect all of this in Supabase
+    (async () => {
+      try {
+        await supabase.from('payments').delete().eq('id', id);
+        if (sale) {
+          const updatedSale = updatedSales.find(s => s.id === payment.saleId);
+          await supabase
+            .from('sales')
+            .update({ paid: updatedSale.paid, status: updatedSale.status })
+            .eq('id', updatedSale.id);
+        }
+        if (customer) {
+          const updatedCust = updatedCustomers.find(c => c.id === payment.customerId);
+          await supabase.from('customers').update({ balance: updatedCust.balance }).eq('id', updatedCust.id);
+        }
+        console.log('✅ Payment deleted and reversed in Supabase');
+      } catch (error) {
+        console.error('❌ Error deleting payment:', error);
+      }
+    })();
+  };
+
   // Production
   const handleAddProduction = () => {
     setModalType('production');
@@ -3851,7 +3920,7 @@ export default function NorthernWaterSystemApp() {
                             </div>
                             <p className="text-emerald-600 font-bold text-lg ml-2">KES {payment.amount.toLocaleString()}</p>
                           </div>
-                          <div className="flex gap-2 text-xs text-slate-500">
+                          <div className="flex gap-2 text-xs text-slate-500 items-center">
                             <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">{payment.method}</span>
                             {sale ? (
                               <button onClick={() => setInvoiceDetail(sale)} className="bg-sky-50 text-sky-700 underline px-2 py-1 rounded hover:bg-sky-100 transition">{sale.invoiceNumber}</button>
@@ -3859,6 +3928,15 @@ export default function NorthernWaterSystemApp() {
                               <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">N/A</span>
                             )}
                             {payment.reference && <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">Ref: {payment.reference}</span>}
+                            {(role === 'admin' || role === 'manager') && (
+                              <button
+                                onClick={() => handleDeletePayment(payment.id)}
+                                className="flex items-center gap-1 text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded transition ml-auto"
+                                title="Delete payment"
+                              >
+                                <Trash2 className="w-3 h-3" /> Delete
+                              </button>
+                            )}
                           </div>
                         </div>
                       );
