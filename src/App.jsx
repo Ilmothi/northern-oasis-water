@@ -2156,7 +2156,10 @@ export default function NorthernWaterSystemApp() {
       created_by: session?.user?.id || null
     };
 
-    const updatedFinishedGoods = { ...state.finishedGoods };
+    // Deep clone so the deduction below never mutates live state in place — if
+    // the insert fails we return early without setState, and a shallow copy
+    // would leave the real finished-goods quantities already decremented.
+    const updatedFinishedGoods = JSON.parse(JSON.stringify(state.finishedGoods));
     validItems.forEach(item => {
       // Items already come in CARTONS from sales input
       // No conversion needed - just deduct directly
@@ -2391,8 +2394,12 @@ export default function NorthernWaterSystemApp() {
       casuals: formData.casuals || []
     };
 
-    const updatedRawMaterials = { ...state.rawMaterials };
-    const updatedFinishedGoods = { ...state.finishedGoods };
+    // Deep clone so the BOM deductions below never mutate live state in place —
+    // if the insert fails we return early without setState, and a shallow copy
+    // would leave the real raw-material / finished-goods quantities already
+    // changed (and out of step with the missing production record).
+    const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
+    const updatedFinishedGoods = JSON.parse(JSON.stringify(state.finishedGoods));
 
     Object.entries(formData.items).forEach(([size, cartonsProduced]) => {
       if (cartonsProduced === 0) return;
