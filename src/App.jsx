@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, Calendar, ShoppingCart, Wallet, Search, Filter } from 'lucide-react';
+import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, Calendar, ShoppingCart, Wallet, Search, Filter, ChevronRight, ChevronDown } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import { OASIS_LOGO } from './oasisLogo';
 
@@ -9,6 +9,26 @@ const COMPANY = {
   brand: 'OASIS Springs — Purified Drinking Water',
   phone: '0718662867',
   kraPin: 'P052211072N',
+};
+
+// Group a date-sorted transaction list into one bucket per day.
+// Input order is preserved (callers pass already-sorted lists), so the
+// returned groups stay in the same date order. Pure display helper — it
+// only sums amounts that are already in the list, never reads records.
+const groupByDay = (list) => {
+  const groups = [];
+  const byDate = new Map();
+  list.forEach(item => {
+    let group = byDate.get(item.date);
+    if (!group) {
+      group = { date: item.date, total: 0, items: [] };
+      byDate.set(item.date, group);
+      groups.push(group);
+    }
+    group.total += item.amount;
+    group.items.push(item);
+  });
+  return groups;
 };
 
 // ─── Shared presentational primitives ───────────────────────────────
@@ -255,6 +275,10 @@ export default function NorthernWaterSystemApp() {
   const [formData, setFormData] = useState({});
   const [reportType, setReportType] = useState('aging');
   const [reportData, setReportData] = useState(null);
+  // Which day rows are expanded in the Cash Collected report. Keyed by
+  // `${section}:${date}` (e.g. "cash:2026-06-29") so the two lists are independent.
+  const [expandedDays, setExpandedDays] = useState({});
+  const toggleDay = (key) => setExpandedDays(prev => ({ ...prev, [key]: !prev[key] }));
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [customerSearch, setCustomerSearch] = useState('');
   const [customerStatusFilter, setCustomerStatusFilter] = useState('all'); // all | active | inactive
@@ -1387,6 +1411,15 @@ export default function NorthernWaterSystemApp() {
           tr:nth-child(even) {
             background: #f9fafb;
           }
+          tr.daytotal td {
+            background: #eef2f7;
+            font-weight: bold;
+            border-top: 2px solid #cbd5e1;
+          }
+          td.detail {
+            padding-left: 28px;
+            color: #475569;
+          }
           .summary {
             background: #ecfdf5;
             padding: 15px;
@@ -1535,8 +1568,11 @@ export default function NorthernWaterSystemApp() {
       if (reportData.cashSalesList.length === 0) {
         htmlContent += `<tr><td colspan="4">None in this period</td></tr>`;
       }
-      reportData.cashSalesList.forEach(c => {
-        htmlContent += `<tr><td>${c.date}</td><td>${c.invoice}</td><td>${c.customer}</td><td>KES ${c.amount.toLocaleString()}</td></tr>`;
+      groupByDay(reportData.cashSalesList).forEach(g => {
+        htmlContent += `<tr class="daytotal"><td>${g.date}</td><td colspan="2">${g.items.length} ${g.items.length === 1 ? 'sale' : 'sales'}</td><td>KES ${g.total.toLocaleString()}</td></tr>`;
+        g.items.forEach(c => {
+          htmlContent += `<tr><td></td><td class="detail">${c.invoice}</td><td>${c.customer}</td><td>KES ${c.amount.toLocaleString()}</td></tr>`;
+        });
       });
       htmlContent += `
             </tbody>
@@ -1549,8 +1585,11 @@ export default function NorthernWaterSystemApp() {
       if (reportData.debtPaymentsList.length === 0) {
         htmlContent += `<tr><td colspan="4">None in this period</td></tr>`;
       }
-      reportData.debtPaymentsList.forEach(p => {
-        htmlContent += `<tr><td>${p.date}</td><td>${p.customer}</td><td>${p.method}</td><td>KES ${p.amount.toLocaleString()}</td></tr>`;
+      groupByDay(reportData.debtPaymentsList).forEach(g => {
+        htmlContent += `<tr class="daytotal"><td>${g.date}</td><td colspan="2">${g.items.length} ${g.items.length === 1 ? 'payment' : 'payments'}</td><td>KES ${g.total.toLocaleString()}</td></tr>`;
+        g.items.forEach(p => {
+          htmlContent += `<tr><td></td><td class="detail">${p.customer}</td><td>${p.method}</td><td>KES ${p.amount.toLocaleString()}</td></tr>`;
+        });
       });
       htmlContent += `
             </tbody>
@@ -3271,24 +3310,62 @@ export default function NorthernWaterSystemApp() {
                       <h4 className="text-slate-900 font-semibold mb-2 text-sm">Cash Sales (paid at point of sale)</h4>
                       {reportData.cashSalesList.length === 0 ? (
                         <p className="text-slate-500 text-xs py-2">None in this period</p>
-                      ) : reportData.cashSalesList.map((c, i) => (
-                        <div key={i} className="flex justify-between text-xs py-1 border-b border-slate-100">
-                          <span className="text-slate-600">{c.date} · {c.invoice} · {c.customer}</span>
-                          <span className="text-emerald-600">KES {c.amount.toLocaleString()}</span>
-                        </div>
-                      ))}
+                      ) : groupByDay(reportData.cashSalesList).map((g) => {
+                        const key = `cash:${g.date}`;
+                        const open = !!expandedDays[key];
+                        return (
+                          <div key={key} className="border-b border-slate-100 last:border-0">
+                            <button
+                              onClick={() => toggleDay(key)}
+                              className="w-full flex justify-between items-center text-xs py-2 hover:bg-slate-100 -mx-1 px-1 rounded transition"
+                            >
+                              <span className="flex items-center gap-1 text-slate-700 font-medium">
+                                {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                                {g.date}
+                                <span className="text-slate-400 font-normal">· {g.items.length} {g.items.length === 1 ? 'sale' : 'sales'}</span>
+                              </span>
+                              <span className="text-emerald-600 font-semibold">KES {g.total.toLocaleString()}</span>
+                            </button>
+                            {open && g.items.map((c, i) => (
+                              <div key={i} className="flex justify-between text-xs py-1 pl-5 border-t border-slate-100">
+                                <span className="text-slate-500">{c.invoice} · {c.customer}</span>
+                                <span className="text-emerald-600">KES {c.amount.toLocaleString()}</span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })}
                     </div>
 
                     <div className="bg-slate-50 rounded-lg p-3 md:p-4">
                       <h4 className="text-slate-900 font-semibold mb-2 text-sm">Debt Payments Received</h4>
                       {reportData.debtPaymentsList.length === 0 ? (
                         <p className="text-slate-500 text-xs py-2">None in this period</p>
-                      ) : reportData.debtPaymentsList.map((p, i) => (
-                        <div key={i} className="flex justify-between text-xs py-1 border-b border-slate-100">
-                          <span className="text-slate-600">{p.date} · {p.customer}{p.method ? ` · ${p.method}` : ''}</span>
-                          <span className="text-sky-600">KES {p.amount.toLocaleString()}</span>
-                        </div>
-                      ))}
+                      ) : groupByDay(reportData.debtPaymentsList).map((g) => {
+                        const key = `debt:${g.date}`;
+                        const open = !!expandedDays[key];
+                        return (
+                          <div key={key} className="border-b border-slate-100 last:border-0">
+                            <button
+                              onClick={() => toggleDay(key)}
+                              className="w-full flex justify-between items-center text-xs py-2 hover:bg-slate-100 -mx-1 px-1 rounded transition"
+                            >
+                              <span className="flex items-center gap-1 text-slate-700 font-medium">
+                                {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                                {g.date}
+                                <span className="text-slate-400 font-normal">· {g.items.length} {g.items.length === 1 ? 'payment' : 'payments'}</span>
+                              </span>
+                              <span className="text-sky-600 font-semibold">KES {g.total.toLocaleString()}</span>
+                            </button>
+                            {open && g.items.map((p, i) => (
+                              <div key={i} className="flex justify-between text-xs py-1 pl-5 border-t border-slate-100">
+                                <span className="text-slate-500">{p.customer}{p.method ? ` · ${p.method}` : ''}</span>
+                                <span className="text-sky-600">KES {p.amount.toLocaleString()}</span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
