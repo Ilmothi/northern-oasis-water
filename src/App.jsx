@@ -3403,6 +3403,7 @@ export default function NorthernWaterSystemApp() {
 
                     <div className="bg-slate-50 rounded-lg p-3 md:p-4">
                       <h4 className="text-slate-900 font-semibold mb-2 text-sm">Cash Sales (paid at point of sale)</h4>
+                      <div className="max-h-96 overflow-y-auto">
                       {reportData.cashSalesList.length === 0 ? (
                         <p className="text-slate-500 text-xs py-2">None in this period</p>
                       ) : groupByDay(reportData.cashSalesList).map((g) => {
@@ -3430,10 +3431,12 @@ export default function NorthernWaterSystemApp() {
                           </div>
                         );
                       })}
+                      </div>
                     </div>
 
                     <div className="bg-slate-50 rounded-lg p-3 md:p-4">
                       <h4 className="text-slate-900 font-semibold mb-2 text-sm">Debt Payments Received</h4>
+                      <div className="max-h-96 overflow-y-auto">
                       {reportData.debtPaymentsList.length === 0 ? (
                         <p className="text-slate-500 text-xs py-2">None in this period</p>
                       ) : groupByDay(reportData.debtPaymentsList).map((g) => {
@@ -3461,6 +3464,7 @@ export default function NorthernWaterSystemApp() {
                           </div>
                         );
                       })}
+                      </div>
                     </div>
                   </div>
                 )}
