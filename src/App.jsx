@@ -1523,6 +1523,35 @@ export default function NorthernWaterSystemApp() {
       htmlContent += `
             </tbody>
           </table>
+
+          <h2>Total Cartons Sold by Location</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Location</th>
+                <th>Total Cartons</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+      let overallCartons = 0;
+      Object.entries(reportData.bottlesByLocationAndSize).forEach(([location, cartons]) => {
+        const locTotal = Object.values(cartons).reduce((s, q) => s + q, 0);
+        overallCartons += locTotal;
+        htmlContent += `
+              <tr>
+                <td>${location}</td>
+                <td>${locTotal} cartons</td>
+              </tr>
+        `;
+      });
+      htmlContent += `
+              <tr>
+                <td><strong>Overall Total</strong></td>
+                <td><strong>${overallCartons} cartons</strong></td>
+              </tr>
+            </tbody>
+          </table>
       `;
       // Water refills — separate, in bottles
       if (reportData.refillsBySize && Object.keys(reportData.refillsBySize).length > 0) {
@@ -3332,7 +3361,12 @@ export default function NorthernWaterSystemApp() {
                       <div className="space-y-4">
                         {Object.entries(reportData.bottlesByLocationAndSize).map(([location, cartons]) => (
                           <div key={location} className="bg-white rounded-lg p-3 border border-slate-100">
-                            <p className="text-sky-600 font-bold text-sm mb-2">{location}</p>
+                            <div className="flex justify-between items-center mb-2">
+                              <p className="text-sky-600 font-bold text-sm">{location}</p>
+                              <p className="text-slate-900 font-bold text-sm">
+                                {Object.values(cartons).reduce((s, q) => s + q, 0)} cartons total
+                              </p>
+                            </div>
                             <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                               {Object.entries(cartons).map(([size, qty]) => (
                                 <div key={`${location}-${size}`} className="bg-slate-50 p-2 rounded text-xs text-center">
@@ -3343,6 +3377,13 @@ export default function NorthernWaterSystemApp() {
                             </div>
                           </div>
                         ))}
+                      </div>
+                      <div className="flex justify-between items-center mt-4 pt-3 border-t border-slate-300">
+                        <p className="text-slate-900 font-bold text-sm">Overall Total Cartons Sold</p>
+                        <p className="text-emerald-600 font-bold text-lg">
+                          {Object.values(reportData.bottlesByLocationAndSize)
+                            .reduce((sum, cartons) => sum + Object.values(cartons).reduce((s, q) => s + q, 0), 0)} cartons
+                        </p>
                       </div>
                     </div>
 
