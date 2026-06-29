@@ -263,6 +263,39 @@ const BOTTLES_PER_CARTON = {
   '18.9L_refill': 1
 };
 
+// Apply a purchase's line items to a raw-materials object. Mutates the object in
+// place, so always pass a clone. sign = +1 to add stock (new purchase), -1 to
+// reverse it (deleted or edited purchase). Uses != null throughout so a material
+// currently sitting at 0 is still updated — a truthy check would silently skip
+// restocking an emptied material.
+function applyPurchaseItemsToRawMaterials(rawMaterials, items, sign) {
+  (items || []).forEach(item => {
+    if (!item.material) return;
+    const category = item.material.split('_')[0];
+    const delta = sign * item.quantity;
+
+    if (category === 'emptyBottles') {
+      const size = item.material.replace('emptyBottles_', '');
+      if (rawMaterials.emptyBottles[size] != null) rawMaterials.emptyBottles[size] += delta;
+    } else if (category === 'seals') {
+      const type = item.material.replace('seals_', '');
+      if (rawMaterials.seals[type] != null) rawMaterials.seals[type] += delta;
+    } else if (category === 'labels') {
+      const size = item.material.replace('labels_', '');
+      if (rawMaterials.labels[size] != null) rawMaterials.labels[size] += delta;
+    } else if (category === 'caps') {
+      const size = item.material.replace('caps_', '');
+      if (rawMaterials.caps && rawMaterials.caps[size] != null) rawMaterials.caps[size] += delta;
+    } else if (category === 'overwraps') {
+      const size = item.material.replace('overwraps_', '');
+      if (rawMaterials.overwraps[size] != null) rawMaterials.overwraps[size] += delta;
+    } else if (rawMaterials[item.material] != null) {
+      // simple categories like kraStamps, roChemical
+      rawMaterials[item.material] += delta;
+    }
+  });
+}
+
 export default function NorthernWaterSystemApp() {
   const [state, setState] = useState(initialState);
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -967,24 +1000,31 @@ export default function NorthernWaterSystemApp() {
     const totalAmount = validItems.reduce((sum, i) => sum + i.total, 0);
 
     if (editingPurchase) {
+      // Persist the edit FIRST; only adjust raw materials (which auto-persist)
+      // once the update is confirmed.
+      const { error: updateError } = await supabase.from('purchases').update({
+        date: formData.date,
+        supplier: formData.supplier,
+        items: validItems,
+        totalAmount
+      }).eq('id', editingPurchase.id);
+      if (updateError) {
+        console.error('❌ Error updating purchase:', updateError);
+        alert('Could not update this purchase — it has NOT been changed and stock was not adjusted. Please try again.\n\n' + (updateError.message || 'Unknown error'));
+        return;
+      }
+
+      // Reverse the materials the OLD purchase added, then apply the NEW items,
+      // so editing a quantity / material keeps inventory in step. Previously the
+      // edit updated only the record and left raw materials untouched.
+      const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
+      applyPurchaseItemsToRawMaterials(updatedRawMaterials, editingPurchase.items, -1);
+      applyPurchaseItemsToRawMaterials(updatedRawMaterials, validItems, +1);
+
       const updatedPurchases = state.purchases.map(p =>
         p.id === editingPurchase.id ? { ...editingPurchase, ...formData, items: validItems, totalAmount } : p
       );
-      setState({ ...state, purchases: updatedPurchases });
-
-      (async () => {
-        try {
-          await supabase.from('purchases').update({
-            date: formData.date,
-            supplier: formData.supplier,
-            items: validItems,
-            totalAmount
-          }).eq('id', editingPurchase.id);
-          console.log('✅ Purchase updated in Supabase');
-        } catch (error) {
-          console.error('❌ Error updating purchase:', error);
-        }
-      })();
+      setState({ ...state, purchases: updatedPurchases, rawMaterials: updatedRawMaterials });
     } else {
       const newPurchase = {
         date: formData.date,
@@ -1010,38 +1050,7 @@ export default function NorthernWaterSystemApp() {
 
       // Update raw materials
       const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
-      validItems.forEach(item => {
-        const [category, subcategory] = item.material.split('_');
-        
-        if (category === 'emptyBottles') {
-          const size = item.material.replace('emptyBottles_', '');
-          if (updatedRawMaterials.emptyBottles[size]) {
-            updatedRawMaterials.emptyBottles[size] += item.quantity;
-          }
-        } else if (category === 'seals') {
-          const type = item.material.replace('seals_', '');
-          if (updatedRawMaterials.seals[type]) {
-            updatedRawMaterials.seals[type] += item.quantity;
-          }
-        } else if (category === 'labels') {
-          const size = item.material.replace('labels_', '');
-          if (updatedRawMaterials.labels[size]) {
-            updatedRawMaterials.labels[size] += item.quantity;
-          }
-        } else if (category === 'caps') {
-          const size = item.material.replace('caps_', '');
-          if (updatedRawMaterials.caps && updatedRawMaterials.caps[size] != null) {
-            updatedRawMaterials.caps[size] += item.quantity;
-          }
-        } else if (category === 'overwraps') {
-          const size = item.material.replace('overwraps_', '');
-          if (updatedRawMaterials.overwraps[size] != null) {
-            updatedRawMaterials.overwraps[size] += item.quantity;
-          }
-        } else if (updatedRawMaterials[category]) {
-          updatedRawMaterials[category] += item.quantity;
-        }
-      });
+      applyPurchaseItemsToRawMaterials(updatedRawMaterials, validItems, +1);
 
       setState({
         ...state,
@@ -1060,40 +1069,7 @@ export default function NorthernWaterSystemApp() {
 
     // Reverse the inventory that this purchase added
     const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
-    (purchase.items || []).forEach(item => {
-      if (!item.material) return;
-      const category = item.material.split('_')[0];
-
-      if (category === 'emptyBottles') {
-        const size = item.material.replace('emptyBottles_', '');
-        if (updatedRawMaterials.emptyBottles[size] != null) {
-          updatedRawMaterials.emptyBottles[size] -= item.quantity;
-        }
-      } else if (category === 'seals') {
-        const type = item.material.replace('seals_', '');
-        if (updatedRawMaterials.seals[type] != null) {
-          updatedRawMaterials.seals[type] -= item.quantity;
-        }
-      } else if (category === 'labels') {
-        const size = item.material.replace('labels_', '');
-        if (updatedRawMaterials.labels[size] != null) {
-          updatedRawMaterials.labels[size] -= item.quantity;
-        }
-      } else if (category === 'caps') {
-        const size = item.material.replace('caps_', '');
-        if (updatedRawMaterials.caps && updatedRawMaterials.caps[size] != null) {
-          updatedRawMaterials.caps[size] -= item.quantity;
-        }
-      } else if (category === 'overwraps') {
-        const size = item.material.replace('overwraps_', '');
-        if (updatedRawMaterials.overwraps[size] != null) {
-          updatedRawMaterials.overwraps[size] -= item.quantity;
-        }
-      } else if (updatedRawMaterials[item.material] != null) {
-        // simple categories like kraStamps, roChemical
-        updatedRawMaterials[item.material] -= item.quantity;
-      }
-    });
+    applyPurchaseItemsToRawMaterials(updatedRawMaterials, purchase.items, -1);
 
     setState({
       ...state,
