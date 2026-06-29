@@ -240,6 +240,8 @@ const EXPENSE_TYPES = [
   { name: 'Directors', treatment: 'operating' },
   { name: 'Offloading & Onloading', treatment: 'operating' },
   { name: 'Loan Interest', treatment: 'operating' },
+  // Casual labour is an operating expense — it is NOT part of the carton cost / COGS.
+  { name: 'Casual Labour', treatment: 'operating' },
   // Purchases / COGS — recorded, not operating
   { name: 'Bottles Costs', treatment: 'cogs' },
   { name: 'Labels Costs', treatment: 'cogs' },
@@ -248,7 +250,6 @@ const EXPENSE_TYPES = [
   { name: 'Excise Duty', treatment: 'cogs' },
   { name: 'Seals Expenses', treatment: 'cogs' },
   // Excluded from P&L — cash tracking only
-  { name: 'Casual Labour', treatment: 'operating' },
   { name: 'Empty Bottles Transport', treatment: 'excluded' },
   { name: 'Loan Principal', treatment: 'excluded' },
 ];
@@ -519,20 +520,26 @@ export default function NorthernWaterSystemApp() {
         const [
           { data: expensesData },
           { data: purchasesData },
-          { data: prodData },
         ] = await Promise.all([
           supabase.from('expenses').select('*'),
           supabase.from('purchases').select('*'),
-          supabase.from('production_logs').select('*'),
         ]);
 
         setState(prev => ({
           ...prev,
           ...(expensesData?.length > 0 && { expenses: expensesData }),
           ...(purchasesData?.length > 0 && { purchases: purchasesData }),
-          ...(prodData?.length > 0 && { productionLogs: prodData }),
         }));
       }
+
+      // Production logs — all roles. RLS returns every run for admin/manager and
+      // only the user's own runs for sales, so a rep's production history and the
+      // inventory effects they recorded are visible to them after a reload.
+      const { data: prodData } = await supabase.from('production_logs').select('*');
+      setState(prev => ({
+        ...prev,
+        ...(prodData?.length > 0 && { productionLogs: prodData }),
+      }));
 
       // Employees — all roles (RLS filters sales to casual employees only; needed for production log)
       const { data: empData } = await supabase.from('employees').select('*');
@@ -1283,8 +1290,9 @@ export default function NorthernWaterSystemApp() {
     // Sales revenue in period
     const totalRevenue = periodSales.reduce((sum, s) => sum + s.total, 0);
 
-    // COGS = cartons sold × cost per carton (carton cost already includes
-    // casual labour and overtime). Counts only what was actually sold.
+    // COGS = cartons sold × cost per carton (carton cost is raw materials only —
+    // it does NOT include casual labour, which is a separate operating expense).
+    // Counts only what was actually sold.
     let cogs = 0;
     periodSales.forEach(sale => {
       sale.items.forEach(item => {
@@ -1684,7 +1692,7 @@ export default function NorthernWaterSystemApp() {
               <td><strong>KES ${reportData.netProfit.toLocaleString()} (${reportData.netMargin}%)</strong></td>
             </tr>
           </table>
-          <p style="font-size:11px;color:#666;margin-top:10px;">COGS is based on cartons sold × cost per carton (includes casual labour). Raw material purchases and casual/overtime pay are not counted again as operating expenses.</p>
+          <p style="font-size:11px;color:#666;margin-top:10px;">COGS is based on cartons sold × cost per carton (raw materials only). Casual labour is an operating expense, not part of COGS. Raw material purchases are not counted again as operating expenses.</p>
         </div>
       `;
     }
@@ -2396,7 +2404,8 @@ export default function NorthernWaterSystemApp() {
       items: formData.items, // Cartons produced
       unit: 'cartons', // Always cartons
       notes: formData.notes,
-      casuals: formData.casuals || []
+      casuals: formData.casuals || [],
+      created_by: session?.user?.id || null
     };
 
     // Deep clone so the BOM deductions below never mutate live state in place —
@@ -3576,7 +3585,7 @@ export default function NorthernWaterSystemApp() {
                       <p className="text-xs mt-2">Net margin: {reportData.netMargin}%</p>
                     </div>
 
-                    <p className="text-slate-500 text-xs">Note: COGS is based on cartons sold × cost per carton (which includes casual labour). Raw material purchases and casual/overtime pay are not counted again as operating expenses.</p>
+                    <p className="text-slate-500 text-xs">Note: COGS is based on cartons sold × cost per carton (raw materials only). Casual labour is an operating expense, not part of COGS. Raw material purchases are not counted again as operating expenses.</p>
                   </div>
                 )}
               </div>
