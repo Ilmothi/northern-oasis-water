@@ -2419,7 +2419,10 @@ export default function NorthernWaterSystemApp() {
       }
 
       // ===== DEDUCT OVERWRAPS (per carton, BY SIZE) =====
-      if (updatedRawMaterials.overwraps[size]) {
+      // != null (not truthy): when overwraps for a size are at 0, production must
+      // still deduct (driving it negative to show the shortage), matching how the
+      // delete-production restore adds back unconditionally.
+      if (updatedRawMaterials.overwraps[size] != null) {
         updatedRawMaterials.overwraps[size] -= cartonsProduced;
       }
 
