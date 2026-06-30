@@ -1255,15 +1255,19 @@ export default function NorthernWaterSystemApp() {
 
     const totalExpenses = filtered.reduce((sum, e) => sum + e.amount, 0);
     const byType = {};       // group by the actual expense type (subcategory)
+    const entriesByType = {}; // individual expense entries that make up each type
     let operatingTotal = 0, cogsTotal = 0, excludedTotal = 0;
     filtered.forEach(e => {
       const type = e.subcategory || 'Other';
       byType[type] = (byType[type] || 0) + e.amount;
+      (entriesByType[type] = entriesByType[type] || []).push(e);
       const treatment = EXPENSE_TREATMENT[e.subcategory] || e.category || 'operating';
       if (treatment === 'operating') operatingTotal += e.amount;
       else if (treatment === 'cogs') cogsTotal += e.amount;
       else excludedTotal += e.amount;
     });
+    // newest entries first within each type
+    Object.values(entriesByType).forEach(list => list.sort((a, b) => new Date(b.date) - new Date(a.date)));
 
     return {
       title: 'Expense Report',
@@ -1271,6 +1275,7 @@ export default function NorthernWaterSystemApp() {
       period: dateRange.start ? `${dateRange.start} to ${dateRange.end}` : 'All Time',
       totalExpenses,
       byCategory: byType,
+      entriesByType,
       operatingTotal,
       cogsTotal,
       excludedTotal,
@@ -1640,7 +1645,7 @@ export default function NorthernWaterSystemApp() {
           <table>
             <thead>
               <tr>
-                <th>Type</th>
+                <th>Type / Entry</th>
                 <th>Treatment</th>
                 <th>Amount</th>
               </tr>
@@ -1650,11 +1655,20 @@ export default function NorthernWaterSystemApp() {
       Object.entries(reportData.byCategory).forEach(([type, amount]) => {
         htmlContent += `
               <tr>
-                <td>${type}</td>
+                <td><strong>${type}</strong></td>
                 <td>${EXPENSE_TREATMENT[type] || 'operating'}</td>
-                <td>KES ${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                <td><strong>KES ${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong></td>
               </tr>
         `;
+        (reportData.entriesByType[type] || []).forEach(e => {
+          htmlContent += `
+              <tr>
+                <td style="padding-left:20px;color:#64748b;">${e.date}${e.description ? ' · ' + e.description : ''}</td>
+                <td></td>
+                <td style="color:#64748b;">KES ${e.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+              </tr>
+          `;
+        });
       });
       htmlContent += `
             </tbody>
@@ -3528,12 +3542,28 @@ export default function NorthernWaterSystemApp() {
                       </div>
                     </div>
                     <h4 className="text-slate-900 font-semibold text-sm">By Type:</h4>
-                    {Object.entries(reportData.byCategory).map(([type, amount]) => (
-                      <div key={type} className="flex justify-between items-center p-3 md:p-4 bg-slate-50 rounded-lg text-xs md:text-sm">
-                        <p className="text-slate-500">{type} <span className="text-slate-400">· {EXPENSE_TREATMENT[type] || 'operating'}</span></p>
-                        <p className="text-slate-900 font-semibold">KES {amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
-                      </div>
-                    ))}
+                    {Object.entries(reportData.byCategory).map(([type, amount]) => {
+                      const entries = reportData.entriesByType[type] || [];
+                      return (
+                        <div key={type} className="bg-slate-50 rounded-lg p-3 md:p-4">
+                          <div className="flex justify-between items-center text-xs md:text-sm">
+                            <p className="text-slate-500">{type} <span className="text-slate-400">· {EXPENSE_TREATMENT[type] || 'operating'}</span> <span className="text-slate-400">({entries.length})</span></p>
+                            <p className="text-slate-900 font-semibold">KES {amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                          </div>
+                          <div className="mt-2 pt-2 border-t border-slate-200 space-y-1">
+                            {entries.map(e => (
+                              <div key={e.id} className="flex justify-between items-start gap-2 text-[11px] md:text-xs">
+                                <span className="text-slate-500">
+                                  <span className="text-slate-400">{e.date}</span>
+                                  {e.description ? ` · ${e.description}` : ''}
+                                </span>
+                                <span className="text-slate-700 whitespace-nowrap">KES {e.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
 
