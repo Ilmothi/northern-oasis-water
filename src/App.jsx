@@ -323,6 +323,7 @@ export default function NorthernWaterSystemApp() {
   const [paymentsSearch, setPaymentsSearch] = useState('');
   const [paymentsFilterDate, setPaymentsFilterDate] = useState('');
   const [debtsSearch, setDebtsSearch] = useState('');
+  const [statementRange, setStatementRange] = useState({ start: '', end: '' });
   const [invoiceDetail, setInvoiceDetail] = useState(null);
   const [breakdownCard, setBreakdownCard] = useState(null);
   const [cartonCosts, setCartonCosts] = useState({});
@@ -1859,6 +1860,218 @@ export default function NorthernWaterSystemApp() {
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
       alert('Please allow pop-ups for this site to download the invoice.');
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+    printWindow.onload = () => { printWindow.focus(); printWindow.print(); };
+    setTimeout(() => {
+      try { printWindow.focus(); printWindow.print(); } catch (e) {}
+    }, 500);
+  };
+
+  // Build a printable customer account statement: a chronological ledger of
+  // invoices (debits) and payments (credits) with a running balance. Optionally
+  // scoped to a date range, in which case an opening balance carries forward all
+  // activity before the start date. With no range, the closing balance equals the
+  // customer's current outstanding debt, so it reconciles with the balance shown
+  // in the UI and the Aging Debtors report.
+  // Read-only — renders existing records, changes nothing.
+  const downloadAccountStatementAsPDF = (customer, range = { start: '', end: '' }) => {
+    if (!customer) return;
+    const fmt = (n) => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const prettyMethod = (m) => (m ? String(m).replace(/_/g, ' ') : '');
+    const hasRange = !!(range.start && range.end);
+
+    const sales = state.sales.filter(s => s.customerId === customer.id);
+    const payments = state.payments.filter(p => p.customerId === customer.id);
+
+    // Ledger entries: each sale is a debit of its total. Its payment is split into
+    // recorded debt-payments and any amount paid at point of sale (mirrors the Cash
+    // Collected report so nothing is double-counted or dropped).
+    const allEntries = [];
+    sales.forEach(s => {
+      const items = (s.items || []).map(i => `${i.quantity}× ${SIZE_LABELS[i.size] || i.size}`).join(', ');
+      allEntries.push({
+        date: s.date,
+        order: 0,
+        ref: s.invoiceNumber || `Sale #${s.id}`,
+        desc: `Invoice${items ? ' · ' + items : ''}`,
+        debit: s.total || 0,
+        credit: 0
+      });
+      const linkedPayments = payments.filter(p => p.saleId === s.id);
+      const paidViaPayments = linkedPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+      const paidAtSale = (s.paid || 0) - paidViaPayments;
+      if (paidAtSale > 0) {
+        allEntries.push({
+          date: s.date,
+          order: 1,
+          ref: s.invoiceNumber || `Sale #${s.id}`,
+          desc: 'Payment at point of sale',
+          debit: 0,
+          credit: paidAtSale
+        });
+      }
+    });
+    payments.forEach(p => {
+      allEntries.push({
+        date: p.date,
+        order: 1,
+        ref: p.reference || (p.invoiceNumber || ''),
+        desc: `Payment${p.method ? ' · ' + prettyMethod(p.method) : ''}`,
+        debit: 0,
+        credit: p.amount || 0
+      });
+    });
+
+    // Chronological order; on the same date show the invoice before its payment.
+    allEntries.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order));
+
+    // Opening balance = net of everything before the start date; in-range entries
+    // are those within [start, end]. With no range, opening is 0 and all show.
+    let opening = 0;
+    const entries = [];
+    allEntries.forEach(e => {
+      const d = e.date || '';
+      if (hasRange && d && d < range.start) {
+        opening += e.debit - e.credit;
+      } else if (!hasRange || (d >= range.start && d <= range.end)) {
+        entries.push(e);
+      }
+    });
+
+    let running = opening;
+    let rows = hasRange ? `
+        <tr style="background:#f0f9ff;">
+          <td>${range.start}</td>
+          <td>—</td>
+          <td><strong>Opening balance</strong></td>
+          <td style="text-align:right;">—</td>
+          <td style="text-align:right;">—</td>
+          <td style="text-align:right;font-weight:bold;">${fmt(opening)}</td>
+        </tr>` : '';
+    rows += entries.map(e => {
+      running += e.debit - e.credit;
+      return `
+        <tr>
+          <td>${e.date || '—'}</td>
+          <td>${e.ref || '—'}</td>
+          <td>${e.desc}</td>
+          <td style="text-align:right;">${e.debit ? fmt(e.debit) : '—'}</td>
+          <td style="text-align:right;color:#059669;">${e.credit ? fmt(e.credit) : '—'}</td>
+          <td style="text-align:right;font-weight:bold;">${fmt(running)}</td>
+        </tr>`;
+    }).join('');
+
+    // Totals reflect the shown period. In-range charges/payments plus the opening
+    // balance give the closing balance as at the end date.
+    const totalCharged = entries.reduce((sum, e) => sum + e.debit, 0);
+    const totalPaid = entries.reduce((sum, e) => sum + e.credit, 0);
+    const closing = opening + totalCharged - totalPaid; // positive => customer owes
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Statement - ${customer.name}</title>
+        <style>
+          * { box-sizing: border-box; }
+          body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 32px; color: #1e293b; background: #fff; }
+          .stmt { max-width: 800px; margin: 0 auto; }
+          .top { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #0369a1; padding-bottom: 16px; }
+          .brand { display: flex; gap: 14px; align-items: center; }
+          .brand img { width: 72px; height: 72px; border-radius: 50%; }
+          .brand h1 { margin: 0; font-size: 20px; color: #0369a1; }
+          .brand p { margin: 2px 0 0; font-size: 12px; color: #64748b; }
+          .seller { text-align: right; font-size: 12px; color: #475569; }
+          .seller strong { color: #0f172a; }
+          .title { text-align: right; margin-top: 18px; }
+          .title h2 { margin: 0; font-size: 26px; letter-spacing: 2px; color: #0f172a; }
+          .meta { margin-top: 6px; font-size: 13px; color: #475569; }
+          .billto { margin-top: 24px; }
+          .billto .label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 4px; }
+          .billto .name { font-size: 16px; font-weight: bold; color: #0f172a; }
+          .billto .sub { font-size: 13px; color: #64748b; }
+          table { width: 100%; border-collapse: collapse; margin-top: 24px; font-size: 12px; }
+          thead th { background: #0369a1; color: #fff; padding: 9px 10px; text-align: left; }
+          thead th:nth-child(4), thead th:nth-child(5), thead th:nth-child(6) { text-align: right; }
+          tbody td { padding: 8px 10px; border-bottom: 1px solid #e2e8f0; }
+          tbody tr:nth-child(even) { background: #f8fafc; }
+          .totals { margin-top: 18px; margin-left: auto; width: 300px; font-size: 13px; }
+          .totals .row { display: flex; justify-content: space-between; padding: 6px 0; }
+          .totals .row.grand { border-top: 2px solid #0f172a; margin-top: 6px; padding-top: 10px; font-size: 16px; font-weight: bold; }
+          .totals .owed { color: #e11d48; font-weight: bold; }
+          .totals .credit { color: #059669; font-weight: bold; }
+          .footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid #e2e8f0; font-size: 11px; color: #94a3b8; text-align: center; }
+          .empty { margin-top: 24px; padding: 20px; text-align: center; color: #94a3b8; font-size: 13px; border: 1px dashed #e2e8f0; border-radius: 8px; }
+          @media print { body { padding: 0; } .stmt { max-width: 100%; } }
+        </style>
+      </head>
+      <body>
+        <div class="stmt">
+          <div class="top">
+            <div class="brand">
+              <img src="${OASIS_LOGO}" alt="OASIS Springs" />
+              <div>
+                <h1>${COMPANY.name}</h1>
+                <p>${COMPANY.brand}</p>
+              </div>
+            </div>
+            <div class="seller">
+              <p><strong>Tel:</strong> ${COMPANY.phone}</p>
+              <p><strong>KRA PIN:</strong> ${COMPANY.kraPin}</p>
+            </div>
+          </div>
+
+          <div class="title">
+            <h2>STATEMENT OF ACCOUNT</h2>
+            <div class="meta">${hasRange ? `Period: ${range.start} to ${range.end}` : `As at ${new Date().toLocaleDateString()}`}</div>
+          </div>
+
+          <div class="billto">
+            <div class="label">Account</div>
+            <div class="name">${customer.name}</div>
+            ${customer.location ? `<div class="sub">${customer.location}</div>` : ''}
+            ${customer.phone ? `<div class="sub">Tel: ${customer.phone}</div>` : ''}
+          </div>
+
+          ${entries.length === 0 && !hasRange ? `<div class="empty">No transactions on record for this account.</div>` : entries.length === 0 ? `<div class="empty">No transactions in this period. Opening balance carried: KES ${fmt(opening)}.</div>` : `
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Reference</th>
+                <th>Description</th>
+                <th>Charge (KES)</th>
+                <th>Paid (KES)</th>
+                <th>Balance (KES)</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>`}
+
+          <div class="totals">
+            ${hasRange ? `<div class="row"><span>Opening Balance</span><span>KES ${fmt(opening)}</span></div>` : ''}
+            <div class="row"><span>${hasRange ? 'Invoiced (period)' : 'Total Invoiced'}</span><span>KES ${fmt(totalCharged)}</span></div>
+            <div class="row"><span>${hasRange ? 'Paid (period)' : 'Total Paid'}</span><span>KES ${fmt(totalPaid)}</span></div>
+            <div class="row grand"><span>${closing >= 0 ? 'Balance Due' : 'Credit Balance'}</span><span class="${closing > 0 ? 'owed' : closing < 0 ? 'credit' : ''}">KES ${fmt(Math.abs(closing))}</span></div>
+          </div>
+
+          <div class="footer">
+            <p>${hasRange ? 'This statement reflects invoices and payments within the period shown, carried forward from the opening balance.' : 'This statement reflects all invoices and payments on record as at the date shown above.'}</p>
+            <p>${COMPANY.name} • Generated by OASIS Springs Management System</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('Please allow pop-ups for this site to download the statement.');
       return;
     }
     printWindow.document.open();
@@ -3920,6 +4133,35 @@ export default function NorthernWaterSystemApp() {
                     className="bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 py-1.5 text-sm placeholder-slate-400"
                   />
                 </div>
+                <div className="flex flex-col sm:flex-row sm:items-end gap-3 mb-4 p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                  <div className="flex-1">
+                    <label className="block text-slate-500 text-xs mb-1">Statement from</label>
+                    <input
+                      type="date"
+                      value={statementRange.start}
+                      onChange={(e) => setStatementRange({ ...statementRange, start: e.target.value })}
+                      className="w-full bg-white border border-slate-300 text-slate-900 rounded-lg px-3 py-1.5 text-sm"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-slate-500 text-xs mb-1">Statement to</label>
+                    <input
+                      type="date"
+                      value={statementRange.end}
+                      onChange={(e) => setStatementRange({ ...statementRange, end: e.target.value })}
+                      className="w-full bg-white border border-slate-300 text-slate-900 rounded-lg px-3 py-1.5 text-sm"
+                    />
+                  </div>
+                  <button
+                    onClick={() => setStatementRange({ start: '', end: '' })}
+                    className="bg-white hover:bg-slate-100 border border-slate-300 text-slate-600 rounded-lg px-3 py-1.5 text-sm font-semibold"
+                  >
+                    Clear
+                  </button>
+                  <p className="text-slate-400 text-xs sm:self-center">
+                    {statementRange.start && statementRange.end ? `Statements: ${statementRange.start} → ${statementRange.end}` : 'Statements: all time (set both dates to filter)'}
+                  </p>
+                </div>
                 <div className="space-y-3">
                   {visibleCustomers.filter(c => c.balance < 0).filter(c => !debtsSearch || (c.name || '').toLowerCase().includes(debtsSearch.toLowerCase())).length === 0 ? (
                     <div className="text-center py-8">
@@ -3987,13 +4229,21 @@ export default function NorthernWaterSystemApp() {
                               </div>
                             )}
 
-                            {/* Action Button */}
-                            <button
-                              onClick={handleAddPayment}
-                              className="mt-3 w-full bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 py-2 px-3 rounded-lg transition text-sm font-semibold"
-                            >
-                              Record Payment
-                            </button>
+                            {/* Action Buttons */}
+                            <div className="mt-3 flex flex-col sm:flex-row gap-2">
+                              <button
+                                onClick={handleAddPayment}
+                                className="flex-1 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 py-2 px-3 rounded-lg transition text-sm font-semibold"
+                              >
+                                Record Payment
+                              </button>
+                              <button
+                                onClick={() => downloadAccountStatementAsPDF(customer, statementRange)}
+                                className="flex-1 bg-sky-50 hover:bg-sky-100 border border-sky-200 text-sky-700 py-2 px-3 rounded-lg transition text-sm font-semibold"
+                              >
+                                Download Statement (PDF)
+                              </button>
+                            </div>
                           </div>
                         );
                       })
