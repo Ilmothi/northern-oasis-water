@@ -1213,6 +1213,7 @@ export default function NorthernWaterSystemApp() {
             date: s.date,
             invoice: s.invoiceNumber,
             customer: customer?.name || 'Unknown',
+            method: s.method || '',
             amount: paidAtSale
           });
         }
@@ -1599,16 +1600,16 @@ export default function NorthernWaterSystemApp() {
           </div>
           <h2>Cash Sales (paid at point of sale)</h2>
           <table>
-            <thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Amount</th></tr></thead>
+            <thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Method</th><th>Amount</th></tr></thead>
             <tbody>
       `;
       if (reportData.cashSalesList.length === 0) {
-        htmlContent += `<tr><td colspan="4">None in this period</td></tr>`;
+        htmlContent += `<tr><td colspan="5">None in this period</td></tr>`;
       }
       groupByDay(reportData.cashSalesList).forEach(g => {
-        htmlContent += `<tr class="daytotal"><td>${g.date}</td><td colspan="2">${g.items.length} ${g.items.length === 1 ? 'sale' : 'sales'}</td><td>KES ${g.total.toLocaleString()}</td></tr>`;
+        htmlContent += `<tr class="daytotal"><td>${g.date}</td><td colspan="3">${g.items.length} ${g.items.length === 1 ? 'sale' : 'sales'}</td><td>KES ${g.total.toLocaleString()}</td></tr>`;
         g.items.forEach(c => {
-          htmlContent += `<tr><td></td><td class="detail">${c.invoice}</td><td>${c.customer}</td><td>KES ${c.amount.toLocaleString()}</td></tr>`;
+          htmlContent += `<tr><td></td><td class="detail">${c.invoice}</td><td>${c.customer}</td><td>${c.method || ''}</td><td>KES ${c.amount.toLocaleString()}</td></tr>`;
         });
       });
       htmlContent += `
@@ -2350,11 +2351,14 @@ export default function NorthernWaterSystemApp() {
   const handleAddSale = () => {
     setModalType('sale');
     setSaleCustomerSearch('');
-    setFormData({ 
-      customerId: '', 
+    setFormData({
+      customerId: '',
       items: [{ size: '0.5L', quantity: 0, price: 0 }],
       date: new Date().toISOString().split('T')[0],
-      paymentStatus: 'unpaid'
+      // null = "paid in full": the Amount Paid input tracks the running total
+      // until the cashier types an amount themselves (partial/credit sale).
+      amountPaid: null,
+      method: 'cash'
     });
     setShowModal(true);
   };
@@ -2381,8 +2385,14 @@ export default function NorthernWaterSystemApp() {
     }));
 
     const total = validItems.reduce((sum, i) => sum + (i.quantity * i.price), 0);
-    const isPaid = formData.paymentStatus === 'paid';
-    
+    // null means the cashier never touched the Amount Paid field → paid in full.
+    const amountPaid = formData.amountPaid === null ? total : (parseInt(formData.amountPaid) || 0);
+
+    if (amountPaid < 0 || amountPaid > total) {
+      alert(`Amount paid must be between 0 and the sale total of KES ${total.toLocaleString()}`);
+      return;
+    }
+
     // id and invoiceNumber are assigned by the database (identity column +
     // invoice-number sequence) — never on the client, which only ever sees an
     // RLS-filtered subset of sales and would generate colliding values.
@@ -2391,8 +2401,11 @@ export default function NorthernWaterSystemApp() {
       date: formData.date,
       items: validItems,
       total,
-      paid: isPaid ? total : 0,
-      status: isPaid ? 'paid' : 'pending',
+      paid: amountPaid,
+      status: amountPaid >= total ? 'paid' : amountPaid > 0 ? 'partial' : 'pending',
+      // How the point-of-sale amount was received; later repayments carry their
+      // own method on the payment record.
+      method: amountPaid > 0 ? (formData.method || 'cash') : null,
       created_by: session?.user?.id || null
     };
 
@@ -2408,7 +2421,9 @@ export default function NorthernWaterSystemApp() {
       }
     });
 
-    const debtAmount = isPaid ? 0 : total;
+    // Only the unpaid remainder becomes debt — never the full total when part
+    // of it was paid on the spot.
+    const debtAmount = total - amountPaid;
     const updatedCustomers = state.customers.map(c => 
       c.id === parseInt(formData.customerId) 
         ? { ...c, balance: c.balance - debtAmount }
@@ -3687,7 +3702,7 @@ export default function NorthernWaterSystemApp() {
                             </button>
                             {open && g.items.map((c, i) => (
                               <div key={i} className="flex justify-between text-xs py-1 pl-5 border-t border-slate-100">
-                                <span className="text-slate-500">{c.invoice} · {c.customer}</span>
+                                <span className="text-slate-500">{c.invoice} · {c.customer}{c.method ? ` · ${c.method}` : ''}</span>
                                 <span className="text-emerald-600">KES {c.amount.toLocaleString()}</span>
                               </div>
                             ))}
@@ -5398,34 +5413,6 @@ export default function NorthernWaterSystemApp() {
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Payment Status</label>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setFormData({ ...formData, paymentStatus: 'unpaid' })}
-                        className={`flex-1 py-2 px-3 rounded-lg transition font-semibold text-sm ${
-                          formData.paymentStatus === 'unpaid'
-                            ? 'bg-red-500 text-slate-900'
-                            : 'bg-slate-50 text-slate-500 border border-slate-300 hover:border-red-400/50'
-                        }`}
-                      >
-                        ✗ UNPAID (Debt)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setFormData({ ...formData, paymentStatus: 'paid' })}
-                        className={`flex-1 py-2 px-3 rounded-lg transition font-semibold text-sm ${
-                          formData.paymentStatus === 'paid'
-                            ? 'bg-green-500 text-slate-900'
-                            : 'bg-slate-50 text-slate-500 border border-slate-300 hover:border-green-400/50'
-                        }`}
-                      >
-                        ✓ PAID
-                      </button>
-                    </div>
-                  </div>
-
                   <div className="bg-slate-50 rounded-lg p-3 md:p-4 border border-slate-100">
                     <h4 className="text-slate-900 font-semibold mb-3 text-sm">Items</h4>
                     <div className="space-y-3">
@@ -5495,12 +5482,63 @@ export default function NorthernWaterSystemApp() {
                     </button>
                   </div>
 
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 md:p-4">
-                    <p className="text-emerald-600 text-xs">Total</p>
-                    <p className="text-slate-900 text-lg md:text-xl font-bold">
-                      KES {(formData.items?.reduce((sum, i) => sum + (i.subtotal || 0), 0) || 0).toLocaleString()}
-                    </p>
-                  </div>
+                  {(() => {
+                    const saleTotal = formData.items?.reduce((sum, i) => sum + (i.subtotal || 0), 0) || 0;
+                    const amountPaid = formData.amountPaid === null ? saleTotal : formData.amountPaid;
+                    const balance = saleTotal - amountPaid;
+                    return (
+                      <>
+                        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 md:p-4">
+                          <p className="text-emerald-600 text-xs">Total</p>
+                          <p className="text-slate-900 text-lg md:text-xl font-bold">
+                            KES {saleTotal.toLocaleString()}
+                          </p>
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Amount Paid Now</label>
+                          <input
+                            type="number"
+                            value={amountPaid}
+                            onWheel={(e) => e.target.blur()}
+                            onChange={(e) => setFormData({ ...formData, amountPaid: parseInt(e.target.value) || 0 })}
+                            className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                          />
+                          <p className="text-slate-400 text-xs mt-1">Defaults to the full total — reduce it for a partial or credit sale.</p>
+                        </div>
+
+                        {amountPaid > 0 && (
+                          <div>
+                            <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Payment Method</label>
+                            <select
+                              value={formData.method || 'cash'}
+                              onChange={(e) => setFormData({ ...formData, method: e.target.value })}
+                              className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                            >
+                              <option value="cash">Cash</option>
+                              <option value="mpesa">M-Pesa</option>
+                            </select>
+                          </div>
+                        )}
+
+                        <div className={`rounded-lg p-3 md:p-4 border ${balance > 0 ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200'}`}>
+                          <p className={`text-xs ${balance > 0 ? 'text-rose-600' : 'text-slate-500'}`}>Balance (Debt)</p>
+                          <p className="text-slate-900 text-lg md:text-xl font-bold">
+                            KES {balance.toLocaleString()}
+                          </p>
+                          {balance > 0 && amountPaid > 0 && (
+                            <p className="text-rose-600 text-xs mt-1">Partial payment — the remainder becomes customer debt</p>
+                          )}
+                          {balance > 0 && amountPaid === 0 && (
+                            <p className="text-rose-600 text-xs mt-1">Unpaid — the full amount becomes customer debt</p>
+                          )}
+                          {balance < 0 && (
+                            <p className="text-rose-600 text-xs mt-1">Amount paid exceeds the sale total</p>
+                          )}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </>
               )}
 
