@@ -645,16 +645,23 @@ export default function NorthernWaterSystemApp() {
     return total;
   };
 
-  const getTotalExpensesByCategory = () => {
+  // Expenses-tab summary cards are month-to-date, matching the dashboard.
+  // Full history stays available in the records list and the Expense Report.
+  const getMonthExpensesByCategory = () => {
+    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
     const totals = {};
     state.expenses.forEach(exp => {
+      if ((exp.date || '').slice(0, 7) !== monthPrefix) return;
       totals[exp.category] = (totals[exp.category] || 0) + exp.amount;
     });
     return totals;
   };
 
-  const getTotalExpenses = () => {
-    return state.expenses.reduce((sum, exp) => sum + exp.amount, 0);
+  const getMonthExpenses = () => {
+    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    return state.expenses
+      .filter(exp => (exp.date || '').slice(0, 7) === monthPrefix)
+      .reduce((sum, exp) => sum + exp.amount, 0);
   };
 
   const getTotalPurchases = () => {
@@ -1189,8 +1196,11 @@ export default function NorthernWaterSystemApp() {
   };
 
   const generateCashCollectedReport = () => {
+    // With no date range selected, default to the current month (not all time)
+    // so the summary cards and the day lists below them stay in sync.
+    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
     const inPeriod = (d) => {
-      if (!dateRange.start || !dateRange.end) return true;
+      if (!dateRange.start || !dateRange.end) return (d || '').slice(0, 7) === monthPrefix;
       return d >= dateRange.start && d <= dateRange.end;
     };
 
@@ -1240,7 +1250,9 @@ export default function NorthernWaterSystemApp() {
     return {
       title: 'Cash Collected Report',
       date: new Date().toLocaleDateString(),
-      period: dateRange.start ? `${dateRange.start} to ${dateRange.end}` : 'All Time',
+      period: dateRange.start
+        ? `${dateRange.start} to ${dateRange.end}`
+        : `This Month (${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })})`,
       cashSalesTotal,
       debtPaymentsTotal,
       totalCollected: cashSalesTotal + debtPaymentsTotal,
@@ -4435,7 +4447,7 @@ export default function NorthernWaterSystemApp() {
             <>
             {/* Summary by Category */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-6">
-              {Object.entries(getTotalExpensesByCategory()).map(([category, amount]) => (
+              {Object.entries(getMonthExpensesByCategory()).map(([category, amount]) => (
                 <div key={category} className="bg-amber-50 border border-amber-200 rounded-lg md:rounded-xl p-3 md:p-4">
                   <p className="text-amber-600 text-xs md:text-sm">{category}</p>
                   <p className="text-slate-900 text-lg md:text-2xl font-bold">KES {amount.toLocaleString()}</p>
@@ -4446,10 +4458,10 @@ export default function NorthernWaterSystemApp() {
             {/* Total Expenses */}
             <StatCard
               label="Total Expenses"
-              value={`KES ${getTotalExpenses().toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+              value={`KES ${getMonthExpenses().toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
               icon={Wallet}
               accent="amber"
-              sub="all recorded expenses"
+              sub="this month"
             />
 
             {/* Expenses List */}
