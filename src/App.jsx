@@ -3159,14 +3159,22 @@ export default function NorthernWaterSystemApp() {
           );
         })()}
 
-        {activeTab === 'dashboard' && (
+        {activeTab === 'dashboard' && (() => {
+          // Sales and costs cards show month-to-date, not all-time (customers
+          // and debts are point-in-time balances, so they stay as-is).
+          const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+          const inMonth = (d) => (d || '').slice(0, 7) === monthPrefix;
+          const monthSalesTotal = state.sales.filter(s => inMonth(s.date)).reduce((sum, s) => sum + s.total, 0);
+          const monthCostsTotal = state.expenses.filter(e => inMonth(e.date)).reduce((sum, e) => sum + e.amount, 0)
+            + state.purchases.filter(p => inMonth(p.date)).reduce((sum, p) => sum + p.totalAmount, 0);
+          return (
           <div className="space-y-4 md:space-y-6">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
               {[
                 { id: 'customers', label: 'Customers', value: state.customers.length.toLocaleString(), accent: 'sky', icon: Users, sub: 'total accounts' },
                 { id: 'debt', label: 'Outstanding Debts', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'rose', icon: Wallet, sub: 'across debtors' },
-                { id: 'sales', label: 'Sales', value: `KES ${state.sales.reduce((sum, s) => sum + s.total, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'emerald', icon: DollarSign, sub: 'total sales' },
-                { id: 'costs', label: 'Operating Costs', value: `KES ${(getTotalExpenses() + getTotalPurchases()).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'amber', icon: ShoppingCart, sub: 'expenses + purchases' },
+                { id: 'sales', label: 'Sales', value: `KES ${monthSalesTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'emerald', icon: DollarSign, sub: 'this month' },
+                { id: 'costs', label: 'Operating Costs', value: `KES ${monthCostsTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'amber', icon: ShoppingCart, sub: 'expenses + purchases · this month' },
               ].map((card, i) => (
                 <StatCard
                   key={i}
@@ -3238,7 +3246,8 @@ export default function NorthernWaterSystemApp() {
               </div>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* Purchases Tab */}
         {activeTab === 'purchases' && (
@@ -5109,15 +5118,23 @@ export default function NorthernWaterSystemApp() {
         })()}
 
         {/* Dashboard Card Breakdown Modal */}
-        {breakdownCard && (
+        {breakdownCard && (() => {
+          // Sales and costs breakdowns are month-to-date, matching the cards.
+          const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+          const inMonth = (d) => (d || '').slice(0, 7) === monthPrefix;
+          const monthSales = state.sales.filter(s => inMonth(s.date));
+          const monthExpenses = state.expenses.filter(e => inMonth(e.date));
+          const monthExpensesTotal = monthExpenses.reduce((sum, e) => sum + e.amount, 0);
+          const monthPurchasesTotal = state.purchases.filter(p => inMonth(p.date)).reduce((sum, p) => sum + p.totalAmount, 0);
+          return (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setBreakdownCard(null)}>
             <div className="bg-white border border-slate-300 rounded-xl p-5 md:p-6 max-w-lg w-full max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-slate-900 font-bold text-lg capitalize">
                   {breakdownCard === 'customers' && 'All Customers'}
                   {breakdownCard === 'debt' && 'Outstanding Debts'}
-                  {breakdownCard === 'sales' && 'All Sales'}
-                  {breakdownCard === 'costs' && 'Cost Breakdown'}
+                  {breakdownCard === 'sales' && "This Month's Sales"}
+                  {breakdownCard === 'costs' && "This Month's Costs"}
                 </h3>
                 <button onClick={() => setBreakdownCard(null)} className="text-slate-500 hover:text-slate-900">
                   <X className="w-5 h-5" />
@@ -5167,9 +5184,9 @@ export default function NorthernWaterSystemApp() {
               {/* Sales breakdown */}
               {breakdownCard === 'sales' && (
                 <div className="space-y-2">
-                  {state.sales.length === 0 ? (
-                    <p className="text-slate-500 text-center py-4 text-sm">No sales</p>
-                  ) : state.sales.slice().reverse().map(s => {
+                  {monthSales.length === 0 ? (
+                    <p className="text-slate-500 text-center py-4 text-sm">No sales this month</p>
+                  ) : monthSales.slice().reverse().map(s => {
                     const cust = state.customers.find(c => c.id === s.customerId);
                     return (
                       <div key={s.id} className="flex justify-between items-center p-2 bg-slate-50 rounded text-sm">
@@ -5183,7 +5200,7 @@ export default function NorthernWaterSystemApp() {
                   })}
                   <div className="flex justify-between p-2 bg-emerald-50 rounded border border-emerald-200 mt-2 text-sm">
                     <span className="text-emerald-600 font-semibold">Total Sales</span>
-                    <span className="text-emerald-600 font-bold">KES {state.sales.reduce((sum, s) => sum + s.total, 0).toLocaleString()}</span>
+                    <span className="text-emerald-600 font-bold">KES {monthSales.reduce((sum, s) => sum + s.total, 0).toLocaleString()}</span>
                   </div>
                 </div>
               )}
@@ -5193,14 +5210,17 @@ export default function NorthernWaterSystemApp() {
                 <div className="space-y-2">
                   <div className="flex justify-between p-2 bg-slate-50 rounded text-sm">
                     <span className="text-slate-500">Total Expenses</span>
-                    <span className="text-slate-900 font-semibold">KES {getTotalExpenses().toLocaleString()}</span>
+                    <span className="text-slate-900 font-semibold">KES {monthExpensesTotal.toLocaleString()}</span>
                   </div>
                   <div className="flex justify-between p-2 bg-slate-50 rounded text-sm">
                     <span className="text-slate-500">Total Purchases</span>
-                    <span className="text-slate-900 font-semibold">KES {getTotalPurchases().toLocaleString()}</span>
+                    <span className="text-slate-900 font-semibold">KES {monthPurchasesTotal.toLocaleString()}</span>
                   </div>
                   <p className="text-slate-500 text-xs font-semibold mt-3 mb-1">Expenses by Category</p>
-                  {Object.entries(getTotalExpensesByCategory()).map(([cat, amt]) => (
+                  {Object.entries(monthExpenses.reduce((totals, exp) => {
+                    totals[exp.category] = (totals[exp.category] || 0) + exp.amount;
+                    return totals;
+                  }, {})).map(([cat, amt]) => (
                     <div key={cat} className="flex justify-between p-2 bg-slate-100/20 rounded text-xs">
                       <span className="text-slate-600">{cat}</span>
                       <span className="text-slate-900">KES {amt.toLocaleString()}</span>
@@ -5208,13 +5228,14 @@ export default function NorthernWaterSystemApp() {
                   ))}
                   <div className="flex justify-between p-2 bg-purple-50 rounded border border-purple-200 mt-2 text-sm">
                     <span className="text-purple-600 font-semibold">Total Costs</span>
-                    <span className="text-purple-600 font-bold">KES {(getTotalExpenses() + getTotalPurchases()).toLocaleString()}</span>
+                    <span className="text-purple-600 font-bold">KES {(monthExpensesTotal + monthPurchasesTotal).toLocaleString()}</span>
                   </div>
                 </div>
               )}
             </div>
           </div>
-        )}
+          );
+        })()}
       </main>
 
       {/* Modals */}
