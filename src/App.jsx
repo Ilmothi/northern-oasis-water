@@ -314,6 +314,7 @@ export default function NorthernWaterSystemApp() {
   const [expandedDays, setExpandedDays] = useState({});
   const toggleDay = (key) => setExpandedDays(prev => ({ ...prev, [key]: !prev[key] }));
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
+  const [debtorsLocation, setDebtorsLocation] = useState('all'); // 'all' or a location name — filters the Debtors report
   const [customerSearch, setCustomerSearch] = useState('');
   const [customerStatusFilter, setCustomerStatusFilter] = useState('all'); // all | active | inactive
   const [saleCustomerSearch, setSaleCustomerSearch] = useState('');
@@ -1107,9 +1108,12 @@ export default function NorthernWaterSystemApp() {
   };
 
   // Report Generators
-  const generateAgingDebtorsReport = () => {
+  const generateAgingDebtorsReport = (locationFilter = debtorsLocation) => {
     const today = new Date();
-    const debtors = state.customers.filter(c => c.balance < 0).map(c => {
+    const debtors = state.customers
+      .filter(c => c.balance < 0)
+      .filter(c => locationFilter === 'all' || (c.location || 'Unspecified') === locationFilter)
+      .map(c => {
       // Find this customer's oldest sale that isn't fully paid
       const unpaidSales = state.sales
         .filter(s => s.customerId === c.id && (s.paid || 0) < s.total)
@@ -1140,6 +1144,7 @@ export default function NorthernWaterSystemApp() {
     return {
       title: 'Aging Debtors Report',
       date: new Date().toLocaleDateString(),
+      locationLabel: locationFilter === 'all' ? 'All Locations' : locationFilter,
       data: debtors,
       byLocation,
       total: debtors.reduce((sum, d) => sum + d.debt, 0)
@@ -1476,6 +1481,7 @@ export default function NorthernWaterSystemApp() {
         <div class="header">
           <p><strong>Generated:</strong> ${reportData.date}</p>
           <p><strong>Report Type:</strong> ${reportType.toUpperCase()}</p>
+          ${reportData.locationLabel ? `<p><strong>Location:</strong> ${reportData.locationLabel}</p>` : ''}
         </div>
     `;
 
@@ -3500,6 +3506,30 @@ export default function NorthernWaterSystemApp() {
               ))}
             </div>
 
+            {/* Location filter — Debtors report only */}
+            {reportType === 'aging' && (
+              <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-3 md:p-4">
+                <label className="text-slate-500 text-xs md:text-sm block mb-1 md:mb-2">Location</label>
+                <select
+                  value={debtorsLocation}
+                  onChange={(e) => {
+                    const loc = e.target.value;
+                    setDebtorsLocation(loc);
+                    setReportData(generateAgingDebtorsReport(loc));
+                  }}
+                  className="w-full md:w-64 bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-2 md:px-4 py-1 md:py-2 text-sm"
+                >
+                  <option value="all">All Locations</option>
+                  {state.locations.map(loc => (
+                    <option key={loc} value={loc}>{loc}</option>
+                  ))}
+                </select>
+                <p className="text-slate-500 text-xs mt-2">
+                  {debtorsLocation === 'all' ? 'Showing debtors across all locations' : `Showing debtors in ${debtorsLocation} only — the PDF will cover this location`}
+                </p>
+              </div>
+            )}
+
             {/* Date Range — applies to all event-based reports */}
             {(reportType === 'sales' || reportType === 'cash' || reportType === 'expense' || reportType === 'profitloss') && (
               <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-3 md:p-4">
@@ -3550,7 +3580,7 @@ export default function NorthernWaterSystemApp() {
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 mb-4 md:mb-6">
                   <div>
                     <h3 className="text-slate-900 font-semibold text-base md:text-xl">{reportData.title}</h3>
-                    <p className="text-slate-500 text-xs md:text-sm">Generated: {reportData.date}</p>
+                    <p className="text-slate-500 text-xs md:text-sm">Generated: {reportData.date}{reportData.locationLabel ? ` · ${reportData.locationLabel}` : ''}</p>
                   </div>
                   <button
                     onClick={downloadReportAsPDF}
@@ -3564,7 +3594,7 @@ export default function NorthernWaterSystemApp() {
                 {reportType === 'aging' && (
                   <div className="space-y-4">
                     {reportData.data.length === 0 ? (
-                      <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No debtors</p>
+                      <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No debtors{debtorsLocation !== 'all' ? ` in ${debtorsLocation}` : ''}</p>
                     ) : (
                       <>
                         {Object.entries(reportData.byLocation)
