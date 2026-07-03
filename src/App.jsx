@@ -664,8 +664,11 @@ export default function NorthernWaterSystemApp() {
       .reduce((sum, exp) => sum + exp.amount, 0);
   };
 
-  const getTotalPurchases = () => {
-    return state.purchases.reduce((sum, p) => sum + p.totalAmount, 0);
+  // Purchases-tab summary cards are month-to-date, matching the dashboard.
+  // Full history stays available in the purchases list below them.
+  const getMonthPurchasesList = () => {
+    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    return state.purchases.filter(p => (p.date || '').slice(0, 7) === monthPrefix);
   };
 
   // Purchase Management
@@ -1144,10 +1147,12 @@ export default function NorthernWaterSystemApp() {
   };
 
   const generateSalesReport = () => {
-    let filteredSales = state.sales;
-    if (dateRange.start && dateRange.end) {
-      filteredSales = state.sales.filter(s => s.date >= dateRange.start && s.date <= dateRange.end);
-    }
+    // With no date range selected, default to the current month (not all time),
+    // matching the Cash Collected report and the dashboard cards.
+    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const filteredSales = (dateRange.start && dateRange.end)
+      ? state.sales.filter(s => s.date >= dateRange.start && s.date <= dateRange.end)
+      : state.sales.filter(s => (s.date || '').slice(0, 7) === monthPrefix);
 
     const REFILL_KEYS = ['refill_10L', 'refill_15L', 'refill_20L'];
 
@@ -1183,7 +1188,9 @@ export default function NorthernWaterSystemApp() {
     return {
       title: 'Sales Report',
       date: new Date().toLocaleDateString(),
-      period: dateRange.start ? `${dateRange.start} to ${dateRange.end}` : 'All Time',
+      period: (dateRange.start && dateRange.end)
+        ? `${dateRange.start} to ${dateRange.end}`
+        : `This Month (${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })})`,
       totalSales: filteredSales.reduce((sum, s) => sum + s.total, 0),
       totalTransactions: filteredSales.length,
       salesByLocation,
@@ -1250,7 +1257,7 @@ export default function NorthernWaterSystemApp() {
     return {
       title: 'Cash Collected Report',
       date: new Date().toLocaleDateString(),
-      period: dateRange.start
+      period: (dateRange.start && dateRange.end)
         ? `${dateRange.start} to ${dateRange.end}`
         : `This Month (${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })})`,
       cashSalesTotal,
@@ -1262,10 +1269,11 @@ export default function NorthernWaterSystemApp() {
   };
 
   const generateExpenseReport = () => {
-    let filtered = state.expenses;
-    if (dateRange.start && dateRange.end) {
-      filtered = state.expenses.filter(e => e.date >= dateRange.start && e.date <= dateRange.end);
-    }
+    // With no date range selected, default to the current month (not all time).
+    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const filtered = (dateRange.start && dateRange.end)
+      ? state.expenses.filter(e => e.date >= dateRange.start && e.date <= dateRange.end)
+      : state.expenses.filter(e => (e.date || '').slice(0, 7) === monthPrefix);
 
     const totalExpenses = filtered.reduce((sum, e) => sum + e.amount, 0);
     const byType = {};       // group by the actual expense type (subcategory)
@@ -1286,7 +1294,9 @@ export default function NorthernWaterSystemApp() {
     return {
       title: 'Expense Report',
       date: new Date().toLocaleDateString(),
-      period: dateRange.start ? `${dateRange.start} to ${dateRange.end}` : 'All Time',
+      period: (dateRange.start && dateRange.end)
+        ? `${dateRange.start} to ${dateRange.end}`
+        : `This Month (${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })})`,
       totalExpenses,
       byCategory: byType,
       entriesByType,
@@ -1298,8 +1308,10 @@ export default function NorthernWaterSystemApp() {
   };
 
   const generateProfitLossReport = () => {
+    // With no date range selected, default to the current month (not all time).
+    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
     const inPeriod = (d) => {
-      if (!dateRange.start || !dateRange.end) return true;
+      if (!dateRange.start || !dateRange.end) return (d || '').slice(0, 7) === monthPrefix;
       return d >= dateRange.start && d <= dateRange.end;
     };
 
@@ -1348,7 +1360,9 @@ export default function NorthernWaterSystemApp() {
     return {
       title: 'Profit & Loss Statement',
       date: new Date().toLocaleDateString(),
-      period: dateRange.start ? `${dateRange.start} to ${dateRange.end}` : 'All Time',
+      period: (dateRange.start && dateRange.end)
+        ? `${dateRange.start} to ${dateRange.end}`
+        : `This Month (${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })})`,
       revenue: totalRevenue,
       cogs,
       grossProfit,
@@ -3276,16 +3290,18 @@ export default function NorthernWaterSystemApp() {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-6">
               <StatCard
-                label="Total Purchased"
-                value={`KES ${getTotalPurchases().toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                label="Purchased This Month"
+                value={`KES ${getMonthPurchasesList().reduce((sum, p) => sum + p.totalAmount, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                 icon={ShoppingCart}
                 accent="sky"
+                sub="this month"
               />
               <StatCard
                 label="Purchase Count"
-                value={state.purchases.length.toLocaleString()}
+                value={getMonthPurchasesList().length.toLocaleString()}
                 icon={ClipboardList}
                 accent="slate"
+                sub="this month"
               />
               <StatCard
                 label="Current Stock Value"
@@ -3516,14 +3532,14 @@ export default function NorthernWaterSystemApp() {
                     <button
                       onClick={() => { setDateRange({ start: '', end: '' }); setTimeout(() => handleGenerateReport(reportType), 0); }}
                       className="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-2 md:px-3 py-1 md:py-2 rounded-lg transition text-xs"
-                      title="Clear dates (show all time)"
+                      title="Clear dates (show current month)"
                     >
-                      All Time
+                      This Month
                     </button>
                   </div>
                 </div>
                 <p className="text-slate-500 text-xs mt-2">
-                  {dateRange.start && dateRange.end ? `Showing: ${dateRange.start} to ${dateRange.end}` : 'Showing: All Time (set dates to filter)'}
+                  {dateRange.start && dateRange.end ? `Showing: ${dateRange.start} to ${dateRange.end}` : `Showing: This Month (${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}) — set dates for another period`}
                 </p>
               </div>
             )}
@@ -4115,10 +4131,11 @@ export default function NorthernWaterSystemApp() {
                 accent="emerald"
               />
               <StatCard
-                label="Total Received"
-                value={`KES ${state.payments.reduce((sum, p) => sum + p.amount, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                label="Received This Month"
+                value={`KES ${visiblePayments.filter(p => (p.date || '').slice(0, 7) === new Date().toISOString().slice(0, 7)).reduce((sum, p) => sum + p.amount, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                 icon={DollarSign}
                 accent="sky"
+                sub="debt payments this month"
               />
             </div>
 
