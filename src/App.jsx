@@ -2148,31 +2148,31 @@ export default function NorthernWaterSystemApp() {
     const advanceId = formData.advanceEmployeeId ? parseInt(formData.advanceEmployeeId) : null;
 
     if (editingExpense) {
+      // Persist FIRST — only reflect the edit locally once the database
+      // accepts it (supabase returns errors rather than throwing).
+      const { error: updError } = await supabase
+        .from('expenses')
+        .update({
+          date: formData.date,
+          category: formData.category,
+          subcategory: formData.subcategory,
+          description: formData.description || '',
+          amount: parseFloat(formData.amount),
+          advance_employee_id: advanceId
+        })
+        .eq('id', editingExpense.id);
+      if (updError) {
+        console.error('❌ Error updating expense:', updError);
+        alert('Could not update this expense — it has NOT been changed. Please try again.\n\n' + (updError.message || 'Unknown error'));
+        return;
+      }
+
       const updated = { ...editingExpense, ...formData, amount: parseFloat(formData.amount), advance_employee_id: advanceId };
       const updatedExpenses = state.expenses.map(e =>
         e.id === editingExpense.id ? updated : e
       );
       setState({ ...state, expenses: updatedExpenses });
-
-      const saveToSupabase = async () => {
-        try {
-          await supabase
-            .from('expenses')
-            .update({
-              date: formData.date,
-              category: formData.category,
-              subcategory: formData.subcategory,
-              description: formData.description || '',
-              amount: parseFloat(formData.amount),
-              advance_employee_id: advanceId
-            })
-            .eq('id', editingExpense.id);
-          console.log('✅ Expense updated in Supabase');
-        } catch (error) {
-          console.error('❌ Error updating expense:', error);
-        }
-      };
-      saveToSupabase();
+      console.log('✅ Expense updated in Supabase');
     } else {
       const newExpense = {
         date: formData.date,
@@ -4605,7 +4605,11 @@ export default function NorthernWaterSystemApp() {
                               onClick={() => {
                                 setEditingExpense(expense);
                                 setModalType('expense');
-                                setFormData(expense);
+                                // Map the stored advance link into the form field the
+                                // modal and save handler use — without this, editing an
+                                // advance expense silently cleared advance_employee_id
+                                // and the advance stopped being deducted from salary.
+                                setFormData({ ...expense, advanceEmployeeId: expense.advance_employee_id ?? '' });
                                 setShowModal(true);
                               }}
                               className="p-1 hover:bg-slate-100 rounded transition"
