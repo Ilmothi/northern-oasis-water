@@ -22,6 +22,16 @@ const localDateString = (d = new Date()) =>
 // Current month in LOCAL time as YYYY-MM, for month-to-date filters.
 const localMonthPrefix = () => localDateString().slice(0, 7);
 
+// Escape user-entered text (names, descriptions, references) before it is
+// interpolated into the printable-HTML documents opened via document.write —
+// otherwise a value containing markup would render (or run) in that window.
+const escapeHtml = (v) => String(v ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
 // Group a date-sorted transaction list into one bucket per day.
 // Input order is preserved (callers pass already-sorted lists), so the
 // returned groups stay in the same date order. Pure display helper — it
@@ -1519,7 +1529,7 @@ export default function NorthernWaterSystemApp() {
         .sort((a, b) => b[1].total - a[1].total)
         .forEach(([location, group]) => {
           htmlContent += `
-            <h2>${location} — KES ${group.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</h2>
+            <h2>${escapeHtml(location)} — KES ${group.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</h2>
             <table>
               <thead>
                 <tr>
@@ -1534,10 +1544,10 @@ export default function NorthernWaterSystemApp() {
           group.debtors.forEach(d => {
             htmlContent += `
               <tr>
-                <td>${d.name}</td>
+                <td>${escapeHtml(d.name)}</td>
                 <td>KES ${d.debt.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                 <td>${d.daysOverdue}</td>
-                <td>${d.phone || '-'}</td>
+                <td>${escapeHtml(d.phone || '-')}</td>
               </tr>
             `;
           });
@@ -1567,7 +1577,7 @@ export default function NorthernWaterSystemApp() {
       Object.entries(reportData.salesByLocation).forEach(([location, amount]) => {
         htmlContent += `
               <tr>
-                <td>${location}</td>
+                <td>${escapeHtml(location)}</td>
                 <td>KES ${amount.toLocaleString()}</td>
               </tr>
         `;
@@ -1614,7 +1624,7 @@ export default function NorthernWaterSystemApp() {
         overallCartons += locTotal;
         htmlContent += `
               <tr>
-                <td>${location}</td>
+                <td>${escapeHtml(location)}</td>
                 <td>${locTotal} cartons</td>
               </tr>
         `;
@@ -1668,7 +1678,7 @@ export default function NorthernWaterSystemApp() {
       groupByDay(reportData.cashSalesList).forEach(g => {
         htmlContent += `<tr class="daytotal"><td>${g.date}</td><td colspan="3">${g.items.length} ${g.items.length === 1 ? 'sale' : 'sales'}</td><td>KES ${g.total.toLocaleString()}</td></tr>`;
         g.items.forEach(c => {
-          htmlContent += `<tr><td></td><td class="detail">${c.invoice}</td><td>${c.customer}</td><td>${c.method || ''}</td><td>KES ${c.amount.toLocaleString()}</td></tr>`;
+          htmlContent += `<tr><td></td><td class="detail">${escapeHtml(c.invoice)}</td><td>${escapeHtml(c.customer)}</td><td>${escapeHtml(c.method || '')}</td><td>KES ${c.amount.toLocaleString()}</td></tr>`;
         });
       });
       htmlContent += `
@@ -1685,7 +1695,7 @@ export default function NorthernWaterSystemApp() {
       groupByDay(reportData.debtPaymentsList).forEach(g => {
         htmlContent += `<tr class="daytotal"><td>${g.date}</td><td colspan="2">${g.items.length} ${g.items.length === 1 ? 'payment' : 'payments'}</td><td>KES ${g.total.toLocaleString()}</td></tr>`;
         g.items.forEach(p => {
-          htmlContent += `<tr><td></td><td class="detail">${p.customer}</td><td>${p.method}</td><td>KES ${p.amount.toLocaleString()}</td></tr>`;
+          htmlContent += `<tr><td></td><td class="detail">${escapeHtml(p.customer)}</td><td>${escapeHtml(p.method)}</td><td>KES ${p.amount.toLocaleString()}</td></tr>`;
         });
       });
       htmlContent += `
@@ -1716,7 +1726,7 @@ export default function NorthernWaterSystemApp() {
       Object.entries(reportData.byCategory).forEach(([type, amount]) => {
         htmlContent += `
               <tr>
-                <td><strong>${type}</strong></td>
+                <td><strong>${escapeHtml(type)}</strong></td>
                 <td>${EXPENSE_TREATMENT[type] || 'operating'}</td>
                 <td><strong>KES ${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong></td>
               </tr>
@@ -1724,7 +1734,7 @@ export default function NorthernWaterSystemApp() {
         (reportData.entriesByType[type] || []).forEach(e => {
           htmlContent += `
               <tr>
-                <td style="padding-left:20px;color:#64748b;">${e.date}${e.description ? ' · ' + e.description : ''}</td>
+                <td style="padding-left:20px;color:#64748b;">${escapeHtml(e.date)}${e.description ? ' · ' + escapeHtml(e.description) : ''}</td>
                 <td></td>
                 <td style="color:#64748b;">KES ${e.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
               </tr>
@@ -1739,7 +1749,7 @@ export default function NorthernWaterSystemApp() {
     } else if (reportType === 'profitloss') {
       let opRows = '';
       Object.entries(reportData.operatingBreakdown).forEach(([k, v]) => {
-        opRows += `<tr><td style="padding-left:20px;">${k}</td><td>KES ${v.toLocaleString()}</td></tr>`;
+        opRows += `<tr><td style="padding-left:20px;">${escapeHtml(k)}</td><td>KES ${v.toLocaleString()}</td></tr>`;
       });
       htmlContent += `
         <div class="section">
@@ -1831,7 +1841,7 @@ export default function NorthernWaterSystemApp() {
       <html>
       <head>
         <meta charset="UTF-8">
-        <title>Invoice ${sale.invoiceNumber}</title>
+        <title>Invoice ${escapeHtml(sale.invoiceNumber)}</title>
         <style>
           * { box-sizing: border-box; }
           body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 32px; color: #1e293b; background: #fff; }
@@ -1883,14 +1893,14 @@ export default function NorthernWaterSystemApp() {
 
           <div class="title">
             <h2>INVOICE</h2>
-            <div class="meta"><strong>${sale.invoiceNumber}</strong> &nbsp;•&nbsp; ${sale.date}</div>
+            <div class="meta"><strong>${escapeHtml(sale.invoiceNumber)}</strong> &nbsp;•&nbsp; ${escapeHtml(sale.date)}</div>
           </div>
 
           <div class="billto">
             <div class="label">Bill To</div>
-            <div class="name">${customer?.name || 'Walk-in Customer'}</div>
-            ${customer?.location ? `<div class="sub">${customer.location}</div>` : ''}
-            ${customer?.phone ? `<div class="sub">Tel: ${customer.phone}</div>` : ''}
+            <div class="name">${escapeHtml(customer?.name || 'Walk-in Customer')}</div>
+            ${customer?.location ? `<div class="sub">${escapeHtml(customer.location)}</div>` : ''}
+            ${customer?.phone ? `<div class="sub">Tel: ${escapeHtml(customer.phone)}</div>` : ''}
           </div>
 
           <table>
@@ -2016,9 +2026,9 @@ export default function NorthernWaterSystemApp() {
       running += e.debit - e.credit;
       return `
         <tr>
-          <td>${e.date || '—'}</td>
-          <td>${e.ref || '—'}</td>
-          <td>${e.desc}</td>
+          <td>${escapeHtml(e.date || '—')}</td>
+          <td>${escapeHtml(e.ref || '—')}</td>
+          <td>${escapeHtml(e.desc)}</td>
           <td style="text-align:right;">${e.debit ? fmt(e.debit) : '—'}</td>
           <td style="text-align:right;color:#059669;">${e.credit ? fmt(e.credit) : '—'}</td>
           <td style="text-align:right;font-weight:bold;">${fmt(running)}</td>
@@ -2036,7 +2046,7 @@ export default function NorthernWaterSystemApp() {
       <html>
       <head>
         <meta charset="UTF-8">
-        <title>Statement - ${customer.name}</title>
+        <title>Statement - ${escapeHtml(customer.name)}</title>
         <style>
           * { box-sizing: border-box; }
           body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 32px; color: #1e293b; background: #fff; }
@@ -2093,9 +2103,9 @@ export default function NorthernWaterSystemApp() {
 
           <div class="billto">
             <div class="label">Account</div>
-            <div class="name">${customer.name}</div>
-            ${customer.location ? `<div class="sub">${customer.location}</div>` : ''}
-            ${customer.phone ? `<div class="sub">Tel: ${customer.phone}</div>` : ''}
+            <div class="name">${escapeHtml(customer.name)}</div>
+            ${customer.location ? `<div class="sub">${escapeHtml(customer.location)}</div>` : ''}
+            ${customer.phone ? `<div class="sub">Tel: ${escapeHtml(customer.phone)}</div>` : ''}
           </div>
 
           ${entries.length === 0 && !hasRange ? `<div class="empty">No transactions on record for this account.</div>` : entries.length === 0 ? `<div class="empty">No transactions in this period. Opening balance carried: KES ${fmt(opening)}.</div>` : `
