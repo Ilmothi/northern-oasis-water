@@ -482,14 +482,12 @@ export default function NorthernWaterSystemApp() {
       return;
     }
     const saveInventory = async () => {
-      try {
-        await supabase.from('inventory_state').upsert([
-          { id: 'rawMaterials', data: state.rawMaterials, updated_at: new Date().toISOString() },
-          { id: 'finishedGoods', data: state.finishedGoods, updated_at: new Date().toISOString() }
-        ]);
-      } catch (e) {
-        console.error('❌ Error saving inventory:', e);
-      }
+      // supabase returns errors rather than throwing — check the result.
+      const { error } = await supabase.from('inventory_state').upsert([
+        { id: 'rawMaterials', data: state.rawMaterials, updated_at: new Date().toISOString() },
+        { id: 'finishedGoods', data: state.finishedGoods, updated_at: new Date().toISOString() }
+      ]);
+      if (error) console.error('❌ Error saving inventory:', error);
     };
     saveInventory();
   }, [state.rawMaterials, state.finishedGoods]);
@@ -871,20 +869,26 @@ export default function NorthernWaterSystemApp() {
       phone: formData.phone || '',
       active: formData.active !== false,
     };
-    try {
-      if (editingEmployee) {
-        await supabase.from('employees').update(payload).eq('id', editingEmployee.id);
-        setEmployees(employees.map(e => e.id === editingEmployee.id ? { ...e, ...payload } : e));
-      } else {
-        const { data } = await supabase.from('employees').insert([payload]).select();
-        if (data && data[0]) setEmployees([...employees, data[0]]);
+    // supabase returns errors rather than throwing — check them explicitly.
+    if (editingEmployee) {
+      const { error } = await supabase.from('employees').update(payload).eq('id', editingEmployee.id);
+      if (error) {
+        console.error('❌ Error updating employee:', error);
+        alert('Could not save this employee — nothing was changed. Please try again.\n\n' + (error.message || 'Unknown error'));
+        return;
       }
-      setShowModal(false);
-      setEditingEmployee(null);
-    } catch (err) {
-      console.error('❌ Error saving employee:', err);
-      alert('Error saving employee. Please try again.');
+      setEmployees(employees.map(e => e.id === editingEmployee.id ? { ...e, ...payload } : e));
+    } else {
+      const { data, error } = await supabase.from('employees').insert([payload]).select();
+      if (error || !data || !data[0]) {
+        console.error('❌ Error saving employee:', error);
+        alert('Could not save this employee — nothing was recorded. Please try again.\n\n' + (error?.message || 'Unknown error'));
+        return;
+      }
+      setEmployees([...employees, data[0]]);
     }
+    setShowModal(false);
+    setEditingEmployee(null);
   };
 
   const handleDeleteEmployee = async (id) => {
@@ -898,33 +902,36 @@ export default function NorthernWaterSystemApp() {
     setEmployees(employees.filter(e => e.id !== id));
   };
 
+  // supabase-js returns errors rather than throwing, so both cost-settings
+  // saves check the result explicitly — previously they alerted success even
+  // when the UPDATE was rejected.
   const handleSaveCasualRate = async () => {
-    try {
-      const merged = { ...cartonCosts, casual_rate: casualRate };
-      await supabase.from('cost_settings').update({
-        costs: merged,
-        updated_at: new Date().toISOString()
-      }).eq('id', 1);
-      setCartonCosts(merged);
-      alert('Casual rate saved');
-    } catch (error) {
+    const merged = { ...cartonCosts, casual_rate: casualRate };
+    const { error } = await supabase.from('cost_settings').update({
+      costs: merged,
+      updated_at: new Date().toISOString()
+    }).eq('id', 1);
+    if (error) {
       console.error('❌ Error saving casual rate:', error);
-      alert('Error saving casual rate.');
+      alert('Error saving casual rate — it was NOT saved. Please try again.\n\n' + (error.message || 'Unknown error'));
+      return;
     }
+    setCartonCosts(merged);
+    alert('Casual rate saved');
   };
 
   const handleSaveCartonCosts = async () => {
-    try {
-      await supabase.from('cost_settings').update({
-        costs: cartonCosts,
-        updated_at: new Date().toISOString()
-      }).eq('id', 1);
-      console.log('✅ Carton costs saved to Supabase');
-      alert('Costs saved successfully');
-    } catch (error) {
+    const { error } = await supabase.from('cost_settings').update({
+      costs: cartonCosts,
+      updated_at: new Date().toISOString()
+    }).eq('id', 1);
+    if (error) {
       console.error('❌ Error saving costs:', error);
-      alert('Error saving costs. Please try again.');
+      alert('Error saving costs — they were NOT saved. Please try again.\n\n' + (error.message || 'Unknown error'));
+      return;
     }
+    console.log('✅ Carton costs saved to Supabase');
+    alert('Costs saved successfully');
   };
 
   // ===== STOCK ADJUSTMENT (admin only) =====
@@ -957,7 +964,7 @@ export default function NorthernWaterSystemApp() {
     return items;
   };
 
-  const handleStockAdjustment = () => {
+  const handleStockAdjustment = async () => {
     const { itemId, newQty, reason } = formData;
     if (!itemId || newQty === '' || newQty == null) {
       alert('Please select an item and enter a new quantity');
@@ -994,25 +1001,25 @@ export default function NorthernWaterSystemApp() {
       label = `Finished Goods ${size}`;
     }
 
+    // Persist the audit-trail record FIRST; only apply the stock change (which
+    // auto-persists) once the log is confirmed, so no adjustment can happen
+    // without a record behind it.
+    const { error: logError } = await supabase.from('stock_adjustments').insert([{
+      item: label,
+      old_qty: oldQty,
+      new_qty: qty,
+      reason: reason || '',
+      adjusted_by: userProfile?.email || '',
+      date: new Date().toISOString()
+    }]);
+    if (logError) {
+      console.error('❌ Error saving adjustment:', logError);
+      alert('Could not record this adjustment — stock was NOT changed. Please try again.\n\n' + (logError.message || 'Unknown error'));
+      return;
+    }
+    console.log('✅ Stock adjustment saved');
+
     setState({ ...state, rawMaterials: updatedRaw, finishedGoods: updatedFG });
-
-    // Log the adjustment to Supabase
-    (async () => {
-      try {
-        await supabase.from('stock_adjustments').insert([{
-          item: label,
-          old_qty: oldQty,
-          new_qty: qty,
-          reason: reason || '',
-          adjusted_by: userProfile?.email || '',
-          date: new Date().toISOString()
-        }]);
-        console.log('✅ Stock adjustment saved');
-      } catch (e) {
-        console.error('❌ Error saving adjustment:', e);
-      }
-    })();
-
     setShowModal(false);
     alert(`Updated ${label}: ${oldQty} → ${qty}`);
   };
@@ -2864,24 +2871,23 @@ export default function NorthernWaterSystemApp() {
     }
 
     if (editingCustomer) {
+      // Persist FIRST — only reflect the edit locally once the database
+      // accepts it (supabase returns errors rather than throwing).
+      const { error: updError } = await supabase
+        .from('customers')
+        .update(formData)
+        .eq('id', editingCustomer.id);
+      if (updError) {
+        console.error('❌ Error updating customer:', updError);
+        alert('Could not update this customer — nothing was changed. Please try again.\n\n' + (updError.message || 'Unknown error'));
+        return;
+      }
+
       const updatedCustomers = state.customers.map(c =>
         c.id === editingCustomer.id ? { ...c, ...formData } : c
       );
       setState({ ...state, customers: updatedCustomers });
-
-      // Save to Supabase
-      const saveToSupabase = async () => {
-        try {
-          await supabase
-            .from('customers')
-            .update(formData)
-            .eq('id', editingCustomer.id);
-          console.log('✅ Customer updated in Supabase');
-        } catch (error) {
-          console.error('❌ Error updating customer:', error);
-        }
-      };
-      saveToSupabase();
+      console.log('✅ Customer updated in Supabase');
     } else {
       const newCustomer = {
         ...formData,
