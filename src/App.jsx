@@ -826,8 +826,17 @@ export default function NorthernWaterSystemApp() {
       console.error('❌ Error recording casual payroll rows:', payError);
       alert('Expense saved but the payroll records failed — please check HR.');
     }
+    let flagFailures = 0;
     for (const runId of paidRunIds) {
-      await supabase.from('production_logs').update({ casual_paid: true, casual_expense_id: expenseId }).eq('id', runId);
+      const { error: flagError } = await supabase.from('production_logs')
+        .update({ casual_paid: true, casual_expense_id: expenseId }).eq('id', runId);
+      if (flagError) {
+        flagFailures++;
+        console.error('❌ Error marking production run paid:', runId, flagError);
+      }
+    }
+    if (flagFailures > 0) {
+      alert(`Payout recorded, but ${flagFailures} production run(s) could not be marked as paid — they may show as "Pay Due" again. Do NOT record a second payout for this range; please report this.`);
     }
 
     setState({ ...state, expenses: [...state.expenses, savedExpense], productionLogs: updatedLogs });
@@ -878,16 +887,15 @@ export default function NorthernWaterSystemApp() {
     }
   };
 
-  const handleDeleteEmployee = (id) => {
+  const handleDeleteEmployee = async (id) => {
     if (!confirm('Remove this employee?')) return;
+    const { error } = await supabase.from('employees').delete().eq('id', id);
+    if (error) {
+      console.error('❌ Error deleting employee:', error);
+      alert('Could not remove this employee — nothing was changed. Please try again.\n\n' + (error.message || 'Unknown error'));
+      return;
+    }
     setEmployees(employees.filter(e => e.id !== id));
-    (async () => {
-      try {
-        await supabase.from('employees').delete().eq('id', id);
-      } catch (err) {
-        console.error('❌ Error deleting employee:', err);
-      }
-    })();
   };
 
   const handleSaveCasualRate = async () => {
@@ -1081,10 +1089,20 @@ export default function NorthernWaterSystemApp() {
     setShowModal(false);
   };
 
-  const handleDeletePurchase = (id) => {
+  // Persist-first: the purchase row is deleted (and the result checked) before
+  // the raw-material reversal is applied, so a rejected delete can't strip
+  // stock while the purchase record survives.
+  const handleDeletePurchase = async (id) => {
     const purchase = state.purchases.find(p => p.id === id);
     if (!purchase) return;
     if (!confirm('Delete this purchase? The materials it added will be removed from inventory. This cannot be undone.')) return;
+
+    const { error: delError } = await supabase.from('purchases').delete().eq('id', id);
+    if (delError) {
+      console.error('❌ Error deleting purchase:', delError);
+      alert('Could not delete this purchase — nothing was changed. Please try again.\n\n' + (delError.message || 'Unknown error'));
+      return;
+    }
 
     // Reverse the inventory that this purchase added
     const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
@@ -1095,16 +1113,7 @@ export default function NorthernWaterSystemApp() {
       purchases: state.purchases.filter(p => p.id !== id),
       rawMaterials: updatedRawMaterials
     });
-
-    // Remove from Supabase
-    (async () => {
-      try {
-        await supabase.from('purchases').delete().eq('id', id);
-        console.log('✅ Purchase deleted and inventory reversed');
-      } catch (error) {
-        console.error('❌ Error deleting purchase:', error);
-      }
-    })();
+    console.log('✅ Purchase deleted and inventory reversed');
   };
 
   // Report Generators
@@ -2191,46 +2200,63 @@ export default function NorthernWaterSystemApp() {
     setShowModal(false);
   };
 
-  const handleDeleteExpense = (id) => {
-    if (confirm('Delete this expense?')) {
-      // If this expense was created by a payroll payment, remove those payment
-      // records too, so salary "Paid" status and casual history stay accurate.
-      const linkedPayments = payrollPayments.filter(p => p.expense_id === id);
-      if (linkedPayments.length > 0) {
-        setPayrollPayments(payrollPayments.filter(p => p.expense_id !== id));
-      }
-      // If this was a casual payout, un-flag the production runs it paid for,
-      // so they return to "Pay Due".
-      const runsToUnflag = state.productionLogs.filter(log => log.casual_expense_id === id).map(log => log.id);
-      const updatedLogs = runsToUnflag.length > 0
-        ? state.productionLogs.map(log => log.casual_expense_id === id ? { ...log, casual_paid: false, casual_expense_id: null } : log)
-        : state.productionLogs;
+  // Persist-first: the expense row is deleted (and the result checked) before
+  // any local change. Only after a confirmed delete are the linked payroll
+  // records removed and production runs un-flagged — previously a rejected
+  // expense delete could still un-flag runs, showing casual pay as due again
+  // and inviting a double payout.
+  const handleDeleteExpense = async (id) => {
+    if (!confirm('Delete this expense?')) return;
 
-      setState({
-        ...state,
-        expenses: state.expenses.filter(e => e.id !== id),
-        productionLogs: updatedLogs
-      });
-      // Remove from Supabase
-      (async () => {
-        try {
-          await supabase.from('expenses').delete().eq('id', id);
-          if (linkedPayments.length > 0) {
-            await supabase.from('payroll_payments').delete().eq('expense_id', id);
-          }
-          for (const runId of runsToUnflag) {
-            await supabase.from('production_logs').update({ casual_paid: false, casual_expense_id: null }).eq('id', runId);
-          }
-          console.log('✅ Expense deleted from Supabase');
-        } catch (error) {
-          console.error('❌ Error deleting expense:', error);
-        }
-      })();
+    const { error: delError } = await supabase.from('expenses').delete().eq('id', id);
+    if (delError) {
+      console.error('❌ Error deleting expense:', delError);
+      alert('Could not delete this expense — nothing was changed. Please try again.\n\n' + (delError.message || 'Unknown error'));
+      return;
     }
+
+    // If this expense was created by a payroll payment, remove those payment
+    // records too, so salary "Paid" status and casual history stay accurate.
+    const linkedPayments = payrollPayments.filter(p => p.expense_id === id);
+    // If this was a casual payout, un-flag the production runs it paid for,
+    // so they return to "Pay Due".
+    const runsToUnflag = state.productionLogs.filter(log => log.casual_expense_id === id).map(log => log.id);
+    const updatedLogs = runsToUnflag.length > 0
+      ? state.productionLogs.map(log => log.casual_expense_id === id ? { ...log, casual_paid: false, casual_expense_id: null } : log)
+      : state.productionLogs;
+
+    if (linkedPayments.length > 0) {
+      setPayrollPayments(payrollPayments.filter(p => p.expense_id !== id));
+      const { error: payDelError } = await supabase.from('payroll_payments').delete().eq('expense_id', id);
+      if (payDelError) {
+        console.error('❌ Error deleting linked payroll records:', payDelError);
+        alert('Expense deleted, but its payroll records could not be removed — the HR "Paid" status may be wrong. Please check HR.');
+      }
+    }
+    for (const runId of runsToUnflag) {
+      const { error: unflagError } = await supabase.from('production_logs')
+        .update({ casual_paid: false, casual_expense_id: null }).eq('id', runId);
+      if (unflagError) {
+        console.error('❌ Error un-flagging production run:', unflagError);
+        alert('Expense deleted, but a production run could not be returned to "Pay Due". Please check the Casual Pay view.');
+      }
+    }
+
+    setState({
+      ...state,
+      expenses: state.expenses.filter(e => e.id !== id),
+      productionLogs: updatedLogs
+    });
+    console.log('✅ Expense deleted from Supabase');
   };
 
-  // Delete Sale — reverses inventory deduction and customer debt
-  const handleDeleteSale = (id) => {
+  // Delete Sale — reverses inventory deduction and customer debt.
+  // Persist-first: nothing is changed locally (and no side effect that
+  // auto-persists is applied) until the database confirms each delete —
+  // supabase-js returns errors rather than throwing, so every result is
+  // checked explicitly. An RLS denial or network failure aborts with an
+  // alert instead of silently corrupting balances and stock.
+  const handleDeleteSale = async (id) => {
     const sale = state.sales.find(s => s.id === id);
     if (!sale) return;
 
@@ -2242,7 +2268,50 @@ export default function NorthernWaterSystemApp() {
     confirmMsg += '. This cannot be undone.';
     if (!confirm(confirmMsg)) return;
 
-    // 1. Return cartons to finished goods
+    // 1. Remove linked payments first (they reference the sale). Abort on
+    //    failure — nothing has changed yet.
+    const { error: payDelError } = await supabase.from('payments').delete().eq('saleId', id);
+    if (payDelError) {
+      console.error('❌ Error deleting linked payments:', payDelError);
+      alert('Could not delete this sale — nothing was changed. Please try again.\n\n' + (payDelError.message || 'Unknown error'));
+      return;
+    }
+
+    // 2. Remove the sale itself.
+    const { error: saleDelError } = await supabase.from('sales').delete().eq('id', id);
+    if (saleDelError) {
+      console.error('❌ Error deleting sale:', saleDelError);
+      // The payments are already gone but the sale remains. Reconcile to the
+      // "payments deleted" state so the books stay coherent: the sale's paid
+      // drops by the removed payments and the customer owes that amount again.
+      const paidViaPayments = linkedPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+      if (paidViaPayments > 0) {
+        const newPaid = (sale.paid || 0) - paidViaPayments;
+        const newStatus = newPaid >= sale.total ? 'paid' : newPaid > 0 ? 'partial' : 'pending';
+        const { error: saleUpdError } = await supabase.from('sales')
+          .update({ paid: newPaid, status: newStatus }).eq('id', id);
+        if (saleUpdError) console.error('❌ Error reconciling sale after failed delete:', saleUpdError);
+        const cust = state.customers.find(c => c.id === sale.customerId);
+        if (cust) {
+          const { error: custUpdError } = await supabase.from('customers')
+            .update({ balance: cust.balance - paidViaPayments }).eq('id', cust.id);
+          if (custUpdError) console.error('❌ Error reconciling balance after failed delete:', custUpdError);
+        }
+        setState({
+          ...state,
+          payments: state.payments.filter(p => p.saleId !== id),
+          sales: state.sales.map(s => s.id === id ? { ...s, paid: newPaid, status: newStatus } : s),
+          customers: state.customers.map(c => c.id === sale.customerId ? { ...c, balance: c.balance - paidViaPayments } : c)
+        });
+        alert('The sale could not be deleted, but its linked payments were already removed. The sale now shows as unpaid/partial again. Please retry the delete or re-enter the payments.\n\n' + (saleDelError.message || 'Unknown error'));
+      } else {
+        alert('Could not delete this sale — nothing was changed. Please try again.\n\n' + (saleDelError.message || 'Unknown error'));
+      }
+      return;
+    }
+
+    // 3. Both deletes confirmed — now reverse the local effects.
+    //    Return cartons to finished goods (auto-persists via the inventory effect).
     const updatedFinishedGoods = { ...state.finishedGoods };
     sale.items.forEach(item => {
       if (updatedFinishedGoods[item.size]) {
@@ -2253,16 +2322,8 @@ export default function NorthernWaterSystemApp() {
       }
     });
 
-    // 2. Reverse customer balance:
-    //    Original sale reduced balance by the unpaid amount (debt).
-    //    Payments later increased the balance back. Net effect to undo:
-    //    add back the debt (total - paid) that is still outstanding,
-    //    and remove the effect of the payments too.
-    //    Simplest correct approach: undo the net = -(total) + (paid)
-    //    i.e. balance should increase by (total - paid) when we remove the sale,
-    //    then removing payments would subtract (paid). Net: +total - paid - paid... 
-    //    To avoid confusion we recompute: removing the sale cancels the original
-    //    debit of (total - originalPaidAtCreation) AND we remove all linked payments
+    //    Reverse customer balance: removing the sale cancels the original
+    //    debit of (total - paidAtCreation) AND removes all linked payments
     //    which had credited (sum of payments). Net balance change = +(total - paid).
     const outstanding = sale.total - sale.paid;
     const updatedCustomers = state.customers.map(c =>
@@ -2271,39 +2332,42 @@ export default function NorthernWaterSystemApp() {
         : c
     );
 
-    // 3. Remove the sale and any linked payments from state
-    const updatedSales = state.sales.filter(s => s.id !== id);
-    const updatedPayments = state.payments.filter(p => p.saleId !== id);
-
     setState({
       ...state,
-      sales: updatedSales,
-      payments: updatedPayments,
+      sales: state.sales.filter(s => s.id !== id),
+      payments: state.payments.filter(p => p.saleId !== id),
       finishedGoods: updatedFinishedGoods,
       customers: updatedCustomers
     });
 
-    // 4. Reflect all of this in Supabase
-    (async () => {
-      try {
-        await supabase.from('payments').delete().eq('saleId', id);
-        await supabase.from('sales').delete().eq('id', id);
-        const cust = updatedCustomers.find(c => c.id === sale.customerId);
-        if (cust) {
-          await supabase.from('customers').update({ balance: cust.balance }).eq('id', cust.id);
-        }
-        console.log('✅ Sale deleted and reversed in Supabase');
-      } catch (error) {
-        console.error('❌ Error deleting sale:', error);
+    // 4. Persist the balance reversal; warn if it fails (sale is already gone).
+    const cust = updatedCustomers.find(c => c.id === sale.customerId);
+    if (cust) {
+      const { error: custError } = await supabase.from('customers')
+        .update({ balance: cust.balance }).eq('id', cust.id);
+      if (custError) {
+        console.error('❌ Error updating customer balance after sale delete:', custError);
+        alert('Sale deleted, but the customer balance could not be updated. Please check this customer\'s balance.');
       }
-    })();
+    }
+    console.log('✅ Sale deleted and reversed in Supabase');
   };
 
-  // Delete Production Log — returns finished goods and restores raw materials
-  const handleDeleteProduction = (id) => {
+  // Delete Production Log — returns finished goods and restores raw materials.
+  // Persist-first: the log row is deleted (and the result checked) before the
+  // inventory reversal is applied, so a rejected delete can't leave stock
+  // reversed with the production record still on the books.
+  const handleDeleteProduction = async (id) => {
     const log = state.productionLogs.find(p => p.id === id);
     if (!log) return;
     if (!confirm('Delete this production log? This will reverse the raw materials used and the finished goods produced. This cannot be undone.')) return;
+
+    const { error: delError } = await supabase.from('production_logs').delete().eq('id', id);
+    if (delError) {
+      console.error('❌ Error deleting production log:', delError);
+      alert('Could not delete this production log — nothing was changed. Please try again.\n\n' + (delError.message || 'Unknown error'));
+      return;
+    }
 
     const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
     const updatedFinishedGoods = JSON.parse(JSON.stringify(state.finishedGoods));
@@ -2368,15 +2432,7 @@ export default function NorthernWaterSystemApp() {
       rawMaterials: updatedRawMaterials,
       finishedGoods: updatedFinishedGoods
     });
-
-    (async () => {
-      try {
-        await supabase.from('production_logs').delete().eq('id', id);
-        console.log('✅ Production log deleted and reversed in Supabase');
-      } catch (error) {
-        console.error('❌ Error deleting production log:', error);
-      }
-    })();
+    console.log('✅ Production log deleted and reversed in Supabase');
   };
 
   // Add Sale
@@ -2592,7 +2648,7 @@ export default function NorthernWaterSystemApp() {
   // Delete Payment — reverses a mistakenly-entered payment.
   // Mirrors handleSavePayment in reverse: rolls back the sale's paid/status
   // and the customer's balance, then removes the payment record.
-  const handleDeletePayment = (id) => {
+  const handleDeletePayment = async (id) => {
     const payment = state.payments.find(p => p.id === id);
     if (!payment) return;
 
@@ -2605,6 +2661,15 @@ export default function NorthernWaterSystemApp() {
     if (sale) confirmMsg += ` on invoice ${sale.invoiceNumber}`;
     confirmMsg += ' and reduce cash collected. This cannot be undone.';
     if (!confirm(confirmMsg)) return;
+
+    // Persist-first: delete the payment row and check the result before any
+    // local change — a rejected delete must not shift balances.
+    const { error: delError } = await supabase.from('payments').delete().eq('id', id);
+    if (delError) {
+      console.error('❌ Error deleting payment:', delError);
+      alert('Could not delete this payment — nothing was changed. Please try again.\n\n' + (delError.message || 'Unknown error'));
+      return;
+    }
 
     // 1. Reverse the sale's paid amount and status (if the sale still exists)
     const updatedSales = state.sales.map(s => {
@@ -2627,35 +2692,35 @@ export default function NorthernWaterSystemApp() {
     );
 
     // 3. Remove the payment from state
-    const updatedPayments = state.payments.filter(p => p.id !== id);
-
     setState({
       ...state,
-      payments: updatedPayments,
+      payments: state.payments.filter(p => p.id !== id),
       sales: updatedSales,
       customers: updatedCustomers
     });
 
-    // 4. Reflect all of this in Supabase
-    (async () => {
-      try {
-        await supabase.from('payments').delete().eq('id', id);
-        if (sale) {
-          const updatedSale = updatedSales.find(s => s.id === payment.saleId);
-          await supabase
-            .from('sales')
-            .update({ paid: updatedSale.paid, status: updatedSale.status })
-            .eq('id', updatedSale.id);
-        }
-        if (customer) {
-          const updatedCust = updatedCustomers.find(c => c.id === payment.customerId);
-          await supabase.from('customers').update({ balance: updatedCust.balance }).eq('id', updatedCust.id);
-        }
-        console.log('✅ Payment deleted and reversed in Supabase');
-      } catch (error) {
-        console.error('❌ Error deleting payment:', error);
+    // 4. Persist the reversals; warn on failure (the payment is already gone).
+    if (sale) {
+      const updatedSale = updatedSales.find(s => s.id === payment.saleId);
+      const { error: saleUpdError } = await supabase
+        .from('sales')
+        .update({ paid: updatedSale.paid, status: updatedSale.status })
+        .eq('id', updatedSale.id);
+      if (saleUpdError) {
+        console.error('❌ Error updating sale after payment delete:', saleUpdError);
+        alert(`Payment deleted, but invoice ${sale.invoiceNumber} could not be updated to show the restored balance. Please check it.`);
       }
-    })();
+    }
+    if (customer) {
+      const updatedCust = updatedCustomers.find(c => c.id === payment.customerId);
+      const { error: custUpdError } = await supabase.from('customers')
+        .update({ balance: updatedCust.balance }).eq('id', updatedCust.id);
+      if (custUpdError) {
+        console.error('❌ Error updating customer after payment delete:', custUpdError);
+        alert(`Payment deleted, but ${customer.name}'s balance could not be updated. Please check it.`);
+      }
+    }
+    console.log('✅ Payment deleted and reversed in Supabase');
   };
 
   // Production
@@ -3344,12 +3409,15 @@ export default function NorthernWaterSystemApp() {
                             >
                               <Edit2 className="w-3 h-3 text-slate-500" />
                             </button>
-                            <button
-                              onClick={() => handleDeletePurchase(purchase.id)}
-                              className="p-1 hover:bg-rose-50 rounded transition"
-                            >
-                              <Trash2 className="w-3 h-3 text-rose-600" />
-                            </button>
+                            {/* RLS only permits admin to delete purchases. */}
+                            {role === 'admin' && (
+                              <button
+                                onClick={() => handleDeletePurchase(purchase.id)}
+                                className="p-1 hover:bg-rose-50 rounded transition"
+                              >
+                                <Trash2 className="w-3 h-3 text-rose-600" />
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -3972,7 +4040,8 @@ export default function NorthernWaterSystemApp() {
                         ))}
                       </div>
                       {log.notes && <p className="text-slate-500 text-xs italic">{log.notes}</p>}
-                      {(role === 'admin' || role === 'manager') && (
+                      {/* RLS only permits admin to delete production logs. */}
+                      {role === 'admin' && (
                         <div className="flex justify-end pt-2 mt-2 border-t border-slate-100">
                           <button
                             onClick={() => handleDeleteProduction(log.id)}
@@ -4113,7 +4182,9 @@ export default function NorthernWaterSystemApp() {
                           >
                             <Download className="w-3 h-3" /> Invoice PDF
                           </button>
-                          {(role === 'admin' || role === 'manager') && (
+                          {/* RLS only permits admin to delete sales — showing the
+                              button to managers produced silent failures. */}
+                          {role === 'admin' && (
                             <button
                               onClick={() => handleDeleteSale(sale.id)}
                               className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded transition"
@@ -4408,7 +4479,8 @@ export default function NorthernWaterSystemApp() {
                               <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">N/A</span>
                             )}
                             {payment.reference && <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">Ref: {payment.reference}</span>}
-                            {(role === 'admin' || role === 'manager') && (
+                            {/* RLS only permits admin to delete payments. */}
+                            {role === 'admin' && (
                               <button
                                 onClick={() => handleDeletePayment(payment.id)}
                                 className="flex items-center gap-1 text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded transition ml-auto"
@@ -4540,12 +4612,15 @@ export default function NorthernWaterSystemApp() {
                             >
                               <Edit2 className="w-3 h-3 text-slate-500" />
                             </button>
-                            <button
-                              onClick={() => handleDeleteExpense(expense.id)}
-                              className="p-1 hover:bg-rose-50 rounded transition"
-                            >
-                              <Trash2 className="w-3 h-3 text-rose-600" />
-                            </button>
+                            {/* RLS only permits admin to delete expenses. */}
+                            {role === 'admin' && (
+                              <button
+                                onClick={() => handleDeleteExpense(expense.id)}
+                                className="p-1 hover:bg-rose-50 rounded transition"
+                              >
+                                <Trash2 className="w-3 h-3 text-rose-600" />
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
