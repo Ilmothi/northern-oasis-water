@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, Calendar, ShoppingCart, Wallet, Search, Filter, ChevronRight, ChevronDown } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, ShoppingCart, Wallet, Search, Filter, ChevronRight, ChevronDown } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import { OASIS_LOGO } from './oasisLogo';
 
@@ -398,7 +398,7 @@ export default function NorthernWaterSystemApp() {
       if (error) {
         setLoginError(error.message);
       }
-    } catch (error) {
+    } catch {
       setLoginError('Login failed. Please try again.');
     } finally {
       setLoggingIn(false);
@@ -439,11 +439,6 @@ export default function NorthernWaterSystemApp() {
     : myLocation
       ? state.payments.filter(p => customerInMyLocation(p.customerId))
       : state.payments.filter(p => p.created_by === myUserId);
-
-  // Expenses aren't tied to a customer/location, so keep them as own-records for sales
-  const visibleExpenses = role === 'sales'
-    ? state.expenses.filter(e => e.created_by === myUserId)
-    : state.expenses;
 
   // Customers visible to a sales user (for the debts list): their location only,
   // or all of their own debtors if no location set. Admin/manager see all.
@@ -719,16 +714,9 @@ export default function NorthernWaterSystemApp() {
   const isSalaryPaid = (empId, month) =>
     payrollPayments.some(p => p.type === 'salary' && p.employee_id === empId && p.period_label === month);
 
-  // Does a casual date range overlap any already-paid casual period?
-  const casualRangeOverlaps = (range) => {
-    if (!range.start || !range.end) return false;
-    return payrollPayments.some(p =>
-      p.type === 'casual' && p.period_start && p.period_end &&
-      !(range.end < p.period_start || range.start > p.period_end)
-    );
-  };
-
   // Record a permanent salary payment: logs it AND creates a Salary expense.
+  // (Double-payment of casuals is prevented per production run via the
+  // casual_paid flag, not by comparing payout date ranges.)
   const recordSalaryPayment = async (emp, month, netAmount) => {
     if (netAmount <= 0) { alert('Nothing to pay for this month.'); return; }
     if (isSalaryPaid(emp.id, month)) { alert('Salary already recorded for this employee this month.'); return; }
@@ -1789,7 +1777,7 @@ export default function NorthernWaterSystemApp() {
     };
     // Fallback in case onload doesn't fire
     setTimeout(() => {
-      try { printWindow.focus(); printWindow.print(); } catch (e) {}
+      try { printWindow.focus(); printWindow.print(); } catch { /* window already closed */ }
     }, 500);
   };
 
@@ -1916,7 +1904,7 @@ export default function NorthernWaterSystemApp() {
     printWindow.document.close();
     printWindow.onload = () => { printWindow.focus(); printWindow.print(); };
     setTimeout(() => {
-      try { printWindow.focus(); printWindow.print(); } catch (e) {}
+      try { printWindow.focus(); printWindow.print(); } catch { /* window already closed */ }
     }, 500);
   };
 
@@ -2128,7 +2116,7 @@ export default function NorthernWaterSystemApp() {
     printWindow.document.close();
     printWindow.onload = () => { printWindow.focus(); printWindow.print(); };
     setTimeout(() => {
-      try { printWindow.focus(); printWindow.print(); } catch (e) {}
+      try { printWindow.focus(); printWindow.print(); } catch { /* window already closed */ }
     }, 500);
   };
 
@@ -2470,8 +2458,6 @@ export default function NorthernWaterSystemApp() {
       alert('Please enter a price for every item with a quantity.');
       return;
     }
-
-    const customer = state.customers.find(c => c.id === parseInt(formData.customerId));
 
     // Use prices as entered manually - NO auto-pricing
     const validItems = formData.items.filter(i => i.quantity > 0).map(item => ({
