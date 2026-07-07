@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, Calendar, ShoppingCart, Wallet, Search, Filter, ChevronRight, ChevronDown } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, ShoppingCart, Wallet, Search, Filter, ChevronRight, ChevronDown } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import { OASIS_LOGO } from './oasisLogo';
 
@@ -10,6 +10,27 @@ const COMPANY = {
   phone: '0718662867',
   kraPin: 'P052211072N',
 };
+
+// Today's date in LOCAL time as YYYY-MM-DD. Record dates and "this month"
+// filters must use local time (Kenya, UTC+3), not toISOString() (UTC) —
+// otherwise entries between midnight and 3 a.m. are dated to the previous
+// day, and on the 1st of the month booked to the previous month.
+// DB timestamps (updated_at etc.) still use toISOString(), which is correct.
+const localDateString = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+// Current month in LOCAL time as YYYY-MM, for month-to-date filters.
+const localMonthPrefix = () => localDateString().slice(0, 7);
+
+// Escape user-entered text (names, descriptions, references) before it is
+// interpolated into the printable-HTML documents opened via document.write —
+// otherwise a value containing markup would render (or run) in that window.
+const escapeHtml = (v) => String(v ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
 
 // Group a date-sorted transaction list into one bucket per day.
 // Input order is preserved (callers pass already-sorted lists), so the
@@ -129,40 +150,16 @@ const initialState = {
     '18.9L_refill': { quantity: 60, bottlesPerCarton: 1 }
   },
 
-  customers: [
-    { id: 1, name: 'Loglogo Store', location: 'Loglogo', phone: '0712345678', balance: 5000, isActive: true },
-    { id: 2, name: 'Marsabit Market', location: 'Marsabit', phone: '0723456789', balance: -2000, isActive: true },
-    { id: 3, name: 'Laisamis Mini Shop', location: 'Laisamis', phone: '0734567890', balance: 0, isActive: true },
-  ],
-
-  sales: [
-    { id: 1, customerId: 1, date: '2025-04-15', items: [{ size: '0.5L', quantity: 24, price: 100, subtotal: 2400 }], total: 2400, paid: 2400, status: 'paid', invoiceNumber: 'INV-001' },
-    { id: 2, customerId: 2, date: '2025-05-01', items: [{ size: '5L', quantity: 4, price: 350, subtotal: 1400 }], total: 1400, paid: 0, status: 'pending', invoiceNumber: 'INV-002' },
-    { id: 3, customerId: 1, date: '2025-05-05', items: [{ size: '1.5L', quantity: 12, price: 150, subtotal: 1800 }], total: 1800, paid: 1800, status: 'paid', invoiceNumber: 'INV-003' },
-    { id: 4, customerId: 3, date: '2025-05-08', items: [{ size: '0.5L', quantity: 24, price: 100, subtotal: 2400 }], total: 2400, paid: 1200, status: 'partial', invoiceNumber: 'INV-004' },
-  ],
-
-  payments: [
-    { id: 1, saleId: 1, customerId: 1, date: '2025-04-15', amount: 2400, method: 'cash', reference: 'CASH-001' },
-    { id: 2, saleId: 3, customerId: 1, date: '2025-05-05', amount: 1800, method: 'bank_transfer', reference: 'TRF-12345' },
-    { id: 3, saleId: 4, customerId: 3, date: '2025-05-08', amount: 1200, method: 'cash', reference: 'CASH-002' },
-  ],
-
-  productionLogs: [
-    { id: 1, date: '2025-04-25', items: { '0.5L': 576, '1.5L': 360, '5L': 40 }, unit: 'bottles', notes: 'Morning shift' },
-    { id: 2, date: '2025-04-27', items: { '0.5L': 480, '1.5L': 240, '18.9L_disposable': 5 }, unit: 'bottles', notes: 'Afternoon shift' },
-  ],
-
-  purchases: [
-    { id: 1, date: '2025-04-25', supplier: 'Kenya Bottle Co', items: [{ material: 'emptyBottles_0.5L', description: 'Empty Bottles 0.5L', quantity: 2000, unitPrice: 4, total: 8000 }], totalAmount: 8000, status: 'received' },
-    { id: 2, date: '2025-04-28', supplier: 'Packaging Ltd', items: [{ material: 'overwraps', description: 'Overwraps', quantity: 5000, unitPrice: 1, total: 5000 }], totalAmount: 5000, status: 'received' },
-  ],
-
-  expenses: [
-    { id: 1, date: '2025-04-20', category: 'Raw Materials', subcategory: 'Empty Bottles', description: 'Bulk order 0.5L bottles', amount: 5000 },
-    { id: 2, date: '2025-04-22', category: 'Labour', subcategory: 'Salaries', description: 'Monthly salaries - April', amount: 25000 },
-    { id: 3, date: '2025-04-25', category: 'Operations', subcategory: 'Electricity', description: 'Electricity bill', amount: 3500 },
-  ],
+  // Transactional records start EMPTY and are filled from Supabase on login.
+  // (These used to hold hardcoded demo rows — "Loglogo Store", INV-001, fake
+  // balances — which showed as if they were real whenever a fetch returned no
+  // rows. Real records only, always.)
+  customers: [],
+  sales: [],
+  payments: [],
+  productionLogs: [],
+  purchases: [],
+  expenses: [],
 
   locations: ['Loglogo', 'Marsabit', 'Laisamis', 'Korr', 'Merille'],
 
@@ -331,7 +328,7 @@ export default function NorthernWaterSystemApp() {
   const [employees, setEmployees] = useState([]);
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [hrView, setHrView] = useState('registry');
-  const [hrMonth, setHrMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [hrMonth, setHrMonth] = useState(localMonthPrefix());
   const [casualRange, setCasualRange] = useState({ start: '', end: '' });
   const [casualRate, setCasualRate] = useState(0);
   const [payrollPayments, setPayrollPayments] = useState([]);
@@ -401,7 +398,7 @@ export default function NorthernWaterSystemApp() {
       if (error) {
         setLoginError(error.message);
       }
-    } catch (error) {
+    } catch {
       setLoginError('Login failed. Please try again.');
     } finally {
       setLoggingIn(false);
@@ -443,11 +440,6 @@ export default function NorthernWaterSystemApp() {
       ? state.payments.filter(p => customerInMyLocation(p.customerId))
       : state.payments.filter(p => p.created_by === myUserId);
 
-  // Expenses aren't tied to a customer/location, so keep them as own-records for sales
-  const visibleExpenses = role === 'sales'
-    ? state.expenses.filter(e => e.created_by === myUserId)
-    : state.expenses;
-
   // Customers visible to a sales user (for the debts list): their location only,
   // or all of their own debtors if no location set. Admin/manager see all.
   const visibleCustomers = role !== 'sales'
@@ -482,14 +474,12 @@ export default function NorthernWaterSystemApp() {
       return;
     }
     const saveInventory = async () => {
-      try {
-        await supabase.from('inventory_state').upsert([
-          { id: 'rawMaterials', data: state.rawMaterials, updated_at: new Date().toISOString() },
-          { id: 'finishedGoods', data: state.finishedGoods, updated_at: new Date().toISOString() }
-        ]);
-      } catch (e) {
-        console.error('❌ Error saving inventory:', e);
-      }
+      // supabase returns errors rather than throwing — check the result.
+      const { error } = await supabase.from('inventory_state').upsert([
+        { id: 'rawMaterials', data: state.rawMaterials, updated_at: new Date().toISOString() },
+        { id: 'finishedGoods', data: state.finishedGoods, updated_at: new Date().toISOString() }
+      ]);
+      if (error) console.error('❌ Error saving inventory:', error);
     };
     saveInventory();
   }, [state.rawMaterials, state.finishedGoods]);
@@ -510,11 +500,14 @@ export default function NorthernWaterSystemApp() {
         supabase.from('payments').select('*'),
       ]);
 
+      // Replace state whenever the fetch SUCCEEDED (data is an array, possibly
+      // empty) — keying off length left stale/default records showing when a
+      // table was genuinely empty. On a failed fetch data is null: keep prev.
       setState(prev => ({
         ...prev,
-        ...(customersData?.length > 0 && { customers: customersData }),
-        ...(salesData?.length > 0 && { sales: salesData }),
-        ...(paymentsData?.length > 0 && { payments: paymentsData }),
+        ...(customersData && { customers: customersData }),
+        ...(salesData && { sales: salesData }),
+        ...(paymentsData && { payments: paymentsData }),
       }));
 
       // Tier 2: admin + manager — operational records, fetched in parallel
@@ -529,8 +522,8 @@ export default function NorthernWaterSystemApp() {
 
         setState(prev => ({
           ...prev,
-          ...(expensesData?.length > 0 && { expenses: expensesData }),
-          ...(purchasesData?.length > 0 && { purchases: purchasesData }),
+          ...(expensesData && { expenses: expensesData }),
+          ...(purchasesData && { purchases: purchasesData }),
         }));
       }
 
@@ -540,7 +533,7 @@ export default function NorthernWaterSystemApp() {
       const { data: prodData } = await supabase.from('production_logs').select('*');
       setState(prev => ({
         ...prev,
-        ...(prodData?.length > 0 && { productionLogs: prodData }),
+        ...(prodData && { productionLogs: prodData }),
       }));
 
       // Employees — all roles (RLS filters sales to casual employees only; needed for production log)
@@ -649,7 +642,7 @@ export default function NorthernWaterSystemApp() {
   // Expenses-tab summary cards are month-to-date, matching the dashboard.
   // Full history stays available in the records list and the Expense Report.
   const getMonthExpensesByCategory = () => {
-    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const monthPrefix = localMonthPrefix();
     const totals = {};
     state.expenses.forEach(exp => {
       if ((exp.date || '').slice(0, 7) !== monthPrefix) return;
@@ -659,7 +652,7 @@ export default function NorthernWaterSystemApp() {
   };
 
   const getMonthExpenses = () => {
-    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const monthPrefix = localMonthPrefix();
     return state.expenses
       .filter(exp => (exp.date || '').slice(0, 7) === monthPrefix)
       .reduce((sum, exp) => sum + exp.amount, 0);
@@ -668,7 +661,7 @@ export default function NorthernWaterSystemApp() {
   // Purchases-tab summary cards are month-to-date, matching the dashboard.
   // Full history stays available in the purchases list below them.
   const getMonthPurchasesList = () => {
-    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const monthPrefix = localMonthPrefix();
     return state.purchases.filter(p => (p.date || '').slice(0, 7) === monthPrefix);
   };
 
@@ -677,7 +670,7 @@ export default function NorthernWaterSystemApp() {
     setEditingPurchase(null);
     setModalType('purchase');
     setFormData({
-      date: new Date().toISOString().split('T')[0],
+      date: localDateString(),
       supplier: '',
       items: [{ material: '', description: '', quantity: 0, unitPrice: 0, total: 0 }]
     });
@@ -721,22 +714,15 @@ export default function NorthernWaterSystemApp() {
   const isSalaryPaid = (empId, month) =>
     payrollPayments.some(p => p.type === 'salary' && p.employee_id === empId && p.period_label === month);
 
-  // Does a casual date range overlap any already-paid casual period?
-  const casualRangeOverlaps = (range) => {
-    if (!range.start || !range.end) return false;
-    return payrollPayments.some(p =>
-      p.type === 'casual' && p.period_start && p.period_end &&
-      !(range.end < p.period_start || range.start > p.period_end)
-    );
-  };
-
   // Record a permanent salary payment: logs it AND creates a Salary expense.
+  // (Double-payment of casuals is prevented per production run via the
+  // casual_paid flag, not by comparing payout date ranges.)
   const recordSalaryPayment = async (emp, month, netAmount) => {
     if (netAmount <= 0) { alert('Nothing to pay for this month.'); return; }
     if (isSalaryPaid(emp.id, month)) { alert('Salary already recorded for this employee this month.'); return; }
     if (!confirm(`Record salary payment of KES ${netAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} for ${emp.name} (${month})? This also creates a Salary expense.`)) return;
 
-    const datePaid = new Date().toISOString().split('T')[0];
+    const datePaid = localDateString();
     const newExpense = {
       date: datePaid,
       category: 'operating',
@@ -781,7 +767,7 @@ export default function NorthernWaterSystemApp() {
     if (total <= 0) { alert('No unpaid casual pay to record for this range.'); return; }
     if (!confirm(`Record casual payout of KES ${total.toLocaleString('en-US', { minimumFractionDigits: 2 })} for ${range.start} to ${range.end}? This also creates a Casual Labour expense.`)) return;
 
-    const datePaid = new Date().toISOString().split('T')[0];
+    const datePaid = localDateString();
     const rangeLabel = `${range.start} to ${range.end}`;
     const newExpense = {
       date: datePaid,
@@ -826,8 +812,17 @@ export default function NorthernWaterSystemApp() {
       console.error('❌ Error recording casual payroll rows:', payError);
       alert('Expense saved but the payroll records failed — please check HR.');
     }
+    let flagFailures = 0;
     for (const runId of paidRunIds) {
-      await supabase.from('production_logs').update({ casual_paid: true, casual_expense_id: expenseId }).eq('id', runId);
+      const { error: flagError } = await supabase.from('production_logs')
+        .update({ casual_paid: true, casual_expense_id: expenseId }).eq('id', runId);
+      if (flagError) {
+        flagFailures++;
+        console.error('❌ Error marking production run paid:', runId, flagError);
+      }
+    }
+    if (flagFailures > 0) {
+      alert(`Payout recorded, but ${flagFailures} production run(s) could not be marked as paid — they may show as "Pay Due" again. Do NOT record a second payout for this range; please report this.`);
     }
 
     setState({ ...state, expenses: [...state.expenses, savedExpense], productionLogs: updatedLogs });
@@ -862,61 +857,69 @@ export default function NorthernWaterSystemApp() {
       phone: formData.phone || '',
       active: formData.active !== false,
     };
-    try {
-      if (editingEmployee) {
-        await supabase.from('employees').update(payload).eq('id', editingEmployee.id);
-        setEmployees(employees.map(e => e.id === editingEmployee.id ? { ...e, ...payload } : e));
-      } else {
-        const { data } = await supabase.from('employees').insert([payload]).select();
-        if (data && data[0]) setEmployees([...employees, data[0]]);
+    // supabase returns errors rather than throwing — check them explicitly.
+    if (editingEmployee) {
+      const { error } = await supabase.from('employees').update(payload).eq('id', editingEmployee.id);
+      if (error) {
+        console.error('❌ Error updating employee:', error);
+        alert('Could not save this employee — nothing was changed. Please try again.\n\n' + (error.message || 'Unknown error'));
+        return;
       }
-      setShowModal(false);
-      setEditingEmployee(null);
-    } catch (err) {
-      console.error('❌ Error saving employee:', err);
-      alert('Error saving employee. Please try again.');
+      setEmployees(employees.map(e => e.id === editingEmployee.id ? { ...e, ...payload } : e));
+    } else {
+      const { data, error } = await supabase.from('employees').insert([payload]).select();
+      if (error || !data || !data[0]) {
+        console.error('❌ Error saving employee:', error);
+        alert('Could not save this employee — nothing was recorded. Please try again.\n\n' + (error?.message || 'Unknown error'));
+        return;
+      }
+      setEmployees([...employees, data[0]]);
     }
+    setShowModal(false);
+    setEditingEmployee(null);
   };
 
-  const handleDeleteEmployee = (id) => {
+  const handleDeleteEmployee = async (id) => {
     if (!confirm('Remove this employee?')) return;
+    const { error } = await supabase.from('employees').delete().eq('id', id);
+    if (error) {
+      console.error('❌ Error deleting employee:', error);
+      alert('Could not remove this employee — nothing was changed. Please try again.\n\n' + (error.message || 'Unknown error'));
+      return;
+    }
     setEmployees(employees.filter(e => e.id !== id));
-    (async () => {
-      try {
-        await supabase.from('employees').delete().eq('id', id);
-      } catch (err) {
-        console.error('❌ Error deleting employee:', err);
-      }
-    })();
   };
 
+  // supabase-js returns errors rather than throwing, so both cost-settings
+  // saves check the result explicitly — previously they alerted success even
+  // when the UPDATE was rejected.
   const handleSaveCasualRate = async () => {
-    try {
-      const merged = { ...cartonCosts, casual_rate: casualRate };
-      await supabase.from('cost_settings').update({
-        costs: merged,
-        updated_at: new Date().toISOString()
-      }).eq('id', 1);
-      setCartonCosts(merged);
-      alert('Casual rate saved');
-    } catch (error) {
+    const merged = { ...cartonCosts, casual_rate: casualRate };
+    const { error } = await supabase.from('cost_settings').update({
+      costs: merged,
+      updated_at: new Date().toISOString()
+    }).eq('id', 1);
+    if (error) {
       console.error('❌ Error saving casual rate:', error);
-      alert('Error saving casual rate.');
+      alert('Error saving casual rate — it was NOT saved. Please try again.\n\n' + (error.message || 'Unknown error'));
+      return;
     }
+    setCartonCosts(merged);
+    alert('Casual rate saved');
   };
 
   const handleSaveCartonCosts = async () => {
-    try {
-      await supabase.from('cost_settings').update({
-        costs: cartonCosts,
-        updated_at: new Date().toISOString()
-      }).eq('id', 1);
-      console.log('✅ Carton costs saved to Supabase');
-      alert('Costs saved successfully');
-    } catch (error) {
+    const { error } = await supabase.from('cost_settings').update({
+      costs: cartonCosts,
+      updated_at: new Date().toISOString()
+    }).eq('id', 1);
+    if (error) {
       console.error('❌ Error saving costs:', error);
-      alert('Error saving costs. Please try again.');
+      alert('Error saving costs — they were NOT saved. Please try again.\n\n' + (error.message || 'Unknown error'));
+      return;
     }
+    console.log('✅ Carton costs saved to Supabase');
+    alert('Costs saved successfully');
   };
 
   // ===== STOCK ADJUSTMENT (admin only) =====
@@ -949,7 +952,7 @@ export default function NorthernWaterSystemApp() {
     return items;
   };
 
-  const handleStockAdjustment = () => {
+  const handleStockAdjustment = async () => {
     const { itemId, newQty, reason } = formData;
     if (!itemId || newQty === '' || newQty == null) {
       alert('Please select an item and enter a new quantity');
@@ -986,25 +989,25 @@ export default function NorthernWaterSystemApp() {
       label = `Finished Goods ${size}`;
     }
 
+    // Persist the audit-trail record FIRST; only apply the stock change (which
+    // auto-persists) once the log is confirmed, so no adjustment can happen
+    // without a record behind it.
+    const { error: logError } = await supabase.from('stock_adjustments').insert([{
+      item: label,
+      old_qty: oldQty,
+      new_qty: qty,
+      reason: reason || '',
+      adjusted_by: userProfile?.email || '',
+      date: new Date().toISOString()
+    }]);
+    if (logError) {
+      console.error('❌ Error saving adjustment:', logError);
+      alert('Could not record this adjustment — stock was NOT changed. Please try again.\n\n' + (logError.message || 'Unknown error'));
+      return;
+    }
+    console.log('✅ Stock adjustment saved');
+
     setState({ ...state, rawMaterials: updatedRaw, finishedGoods: updatedFG });
-
-    // Log the adjustment to Supabase
-    (async () => {
-      try {
-        await supabase.from('stock_adjustments').insert([{
-          item: label,
-          old_qty: oldQty,
-          new_qty: qty,
-          reason: reason || '',
-          adjusted_by: userProfile?.email || '',
-          date: new Date().toISOString()
-        }]);
-        console.log('✅ Stock adjustment saved');
-      } catch (e) {
-        console.error('❌ Error saving adjustment:', e);
-      }
-    })();
-
     setShowModal(false);
     alert(`Updated ${label}: ${oldQty} → ${qty}`);
   };
@@ -1081,10 +1084,20 @@ export default function NorthernWaterSystemApp() {
     setShowModal(false);
   };
 
-  const handleDeletePurchase = (id) => {
+  // Persist-first: the purchase row is deleted (and the result checked) before
+  // the raw-material reversal is applied, so a rejected delete can't strip
+  // stock while the purchase record survives.
+  const handleDeletePurchase = async (id) => {
     const purchase = state.purchases.find(p => p.id === id);
     if (!purchase) return;
     if (!confirm('Delete this purchase? The materials it added will be removed from inventory. This cannot be undone.')) return;
+
+    const { error: delError } = await supabase.from('purchases').delete().eq('id', id);
+    if (delError) {
+      console.error('❌ Error deleting purchase:', delError);
+      alert('Could not delete this purchase — nothing was changed. Please try again.\n\n' + (delError.message || 'Unknown error'));
+      return;
+    }
 
     // Reverse the inventory that this purchase added
     const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
@@ -1095,16 +1108,7 @@ export default function NorthernWaterSystemApp() {
       purchases: state.purchases.filter(p => p.id !== id),
       rawMaterials: updatedRawMaterials
     });
-
-    // Remove from Supabase
-    (async () => {
-      try {
-        await supabase.from('purchases').delete().eq('id', id);
-        console.log('✅ Purchase deleted and inventory reversed');
-      } catch (error) {
-        console.error('❌ Error deleting purchase:', error);
-      }
-    })();
+    console.log('✅ Purchase deleted and inventory reversed');
   };
 
   // Report Generators
@@ -1154,7 +1158,7 @@ export default function NorthernWaterSystemApp() {
   const generateSalesReport = () => {
     // With no date range selected, default to the current month (not all time),
     // matching the Cash Collected report and the dashboard cards.
-    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const monthPrefix = localMonthPrefix();
     const filteredSales = (dateRange.start && dateRange.end)
       ? state.sales.filter(s => s.date >= dateRange.start && s.date <= dateRange.end)
       : state.sales.filter(s => (s.date || '').slice(0, 7) === monthPrefix);
@@ -1210,7 +1214,7 @@ export default function NorthernWaterSystemApp() {
   const generateCashCollectedReport = () => {
     // With no date range selected, default to the current month (not all time)
     // so the summary cards and the day lists below them stay in sync.
-    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const monthPrefix = localMonthPrefix();
     const inPeriod = (d) => {
       if (!dateRange.start || !dateRange.end) return (d || '').slice(0, 7) === monthPrefix;
       return d >= dateRange.start && d <= dateRange.end;
@@ -1275,7 +1279,7 @@ export default function NorthernWaterSystemApp() {
 
   const generateExpenseReport = () => {
     // With no date range selected, default to the current month (not all time).
-    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const monthPrefix = localMonthPrefix();
     const filtered = (dateRange.start && dateRange.end)
       ? state.expenses.filter(e => e.date >= dateRange.start && e.date <= dateRange.end)
       : state.expenses.filter(e => (e.date || '').slice(0, 7) === monthPrefix);
@@ -1314,7 +1318,7 @@ export default function NorthernWaterSystemApp() {
 
   const generateProfitLossReport = () => {
     // With no date range selected, default to the current month (not all time).
-    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const monthPrefix = localMonthPrefix();
     const inPeriod = (d) => {
       if (!dateRange.start || !dateRange.end) return (d || '').slice(0, 7) === monthPrefix;
       return d >= dateRange.start && d <= dateRange.end;
@@ -1492,7 +1496,7 @@ export default function NorthernWaterSystemApp() {
         .sort((a, b) => b[1].total - a[1].total)
         .forEach(([location, group]) => {
           htmlContent += `
-            <h2>${location} — KES ${group.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</h2>
+            <h2>${escapeHtml(location)} — KES ${group.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</h2>
             <table>
               <thead>
                 <tr>
@@ -1507,10 +1511,10 @@ export default function NorthernWaterSystemApp() {
           group.debtors.forEach(d => {
             htmlContent += `
               <tr>
-                <td>${d.name}</td>
+                <td>${escapeHtml(d.name)}</td>
                 <td>KES ${d.debt.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                 <td>${d.daysOverdue}</td>
-                <td>${d.phone || '-'}</td>
+                <td>${escapeHtml(d.phone || '-')}</td>
               </tr>
             `;
           });
@@ -1540,7 +1544,7 @@ export default function NorthernWaterSystemApp() {
       Object.entries(reportData.salesByLocation).forEach(([location, amount]) => {
         htmlContent += `
               <tr>
-                <td>${location}</td>
+                <td>${escapeHtml(location)}</td>
                 <td>KES ${amount.toLocaleString()}</td>
               </tr>
         `;
@@ -1587,7 +1591,7 @@ export default function NorthernWaterSystemApp() {
         overallCartons += locTotal;
         htmlContent += `
               <tr>
-                <td>${location}</td>
+                <td>${escapeHtml(location)}</td>
                 <td>${locTotal} cartons</td>
               </tr>
         `;
@@ -1641,7 +1645,7 @@ export default function NorthernWaterSystemApp() {
       groupByDay(reportData.cashSalesList).forEach(g => {
         htmlContent += `<tr class="daytotal"><td>${g.date}</td><td colspan="3">${g.items.length} ${g.items.length === 1 ? 'sale' : 'sales'}</td><td>KES ${g.total.toLocaleString()}</td></tr>`;
         g.items.forEach(c => {
-          htmlContent += `<tr><td></td><td class="detail">${c.invoice}</td><td>${c.customer}</td><td>${c.method || ''}</td><td>KES ${c.amount.toLocaleString()}</td></tr>`;
+          htmlContent += `<tr><td></td><td class="detail">${escapeHtml(c.invoice)}</td><td>${escapeHtml(c.customer)}</td><td>${escapeHtml(c.method || '')}</td><td>KES ${c.amount.toLocaleString()}</td></tr>`;
         });
       });
       htmlContent += `
@@ -1658,7 +1662,7 @@ export default function NorthernWaterSystemApp() {
       groupByDay(reportData.debtPaymentsList).forEach(g => {
         htmlContent += `<tr class="daytotal"><td>${g.date}</td><td colspan="2">${g.items.length} ${g.items.length === 1 ? 'payment' : 'payments'}</td><td>KES ${g.total.toLocaleString()}</td></tr>`;
         g.items.forEach(p => {
-          htmlContent += `<tr><td></td><td class="detail">${p.customer}</td><td>${p.method}</td><td>KES ${p.amount.toLocaleString()}</td></tr>`;
+          htmlContent += `<tr><td></td><td class="detail">${escapeHtml(p.customer)}</td><td>${escapeHtml(p.method)}</td><td>KES ${p.amount.toLocaleString()}</td></tr>`;
         });
       });
       htmlContent += `
@@ -1689,7 +1693,7 @@ export default function NorthernWaterSystemApp() {
       Object.entries(reportData.byCategory).forEach(([type, amount]) => {
         htmlContent += `
               <tr>
-                <td><strong>${type}</strong></td>
+                <td><strong>${escapeHtml(type)}</strong></td>
                 <td>${EXPENSE_TREATMENT[type] || 'operating'}</td>
                 <td><strong>KES ${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong></td>
               </tr>
@@ -1697,7 +1701,7 @@ export default function NorthernWaterSystemApp() {
         (reportData.entriesByType[type] || []).forEach(e => {
           htmlContent += `
               <tr>
-                <td style="padding-left:20px;color:#64748b;">${e.date}${e.description ? ' · ' + e.description : ''}</td>
+                <td style="padding-left:20px;color:#64748b;">${escapeHtml(e.date)}${e.description ? ' · ' + escapeHtml(e.description) : ''}</td>
                 <td></td>
                 <td style="color:#64748b;">KES ${e.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
               </tr>
@@ -1712,7 +1716,7 @@ export default function NorthernWaterSystemApp() {
     } else if (reportType === 'profitloss') {
       let opRows = '';
       Object.entries(reportData.operatingBreakdown).forEach(([k, v]) => {
-        opRows += `<tr><td style="padding-left:20px;">${k}</td><td>KES ${v.toLocaleString()}</td></tr>`;
+        opRows += `<tr><td style="padding-left:20px;">${escapeHtml(k)}</td><td>KES ${v.toLocaleString()}</td></tr>`;
       });
       htmlContent += `
         <div class="section">
@@ -1773,7 +1777,7 @@ export default function NorthernWaterSystemApp() {
     };
     // Fallback in case onload doesn't fire
     setTimeout(() => {
-      try { printWindow.focus(); printWindow.print(); } catch (e) {}
+      try { printWindow.focus(); printWindow.print(); } catch { /* window already closed */ }
     }, 500);
   };
 
@@ -1804,7 +1808,7 @@ export default function NorthernWaterSystemApp() {
       <html>
       <head>
         <meta charset="UTF-8">
-        <title>Invoice ${sale.invoiceNumber}</title>
+        <title>Invoice ${escapeHtml(sale.invoiceNumber)}</title>
         <style>
           * { box-sizing: border-box; }
           body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 32px; color: #1e293b; background: #fff; }
@@ -1856,14 +1860,14 @@ export default function NorthernWaterSystemApp() {
 
           <div class="title">
             <h2>INVOICE</h2>
-            <div class="meta"><strong>${sale.invoiceNumber}</strong> &nbsp;•&nbsp; ${sale.date}</div>
+            <div class="meta"><strong>${escapeHtml(sale.invoiceNumber)}</strong> &nbsp;•&nbsp; ${escapeHtml(sale.date)}</div>
           </div>
 
           <div class="billto">
             <div class="label">Bill To</div>
-            <div class="name">${customer?.name || 'Walk-in Customer'}</div>
-            ${customer?.location ? `<div class="sub">${customer.location}</div>` : ''}
-            ${customer?.phone ? `<div class="sub">Tel: ${customer.phone}</div>` : ''}
+            <div class="name">${escapeHtml(customer?.name || 'Walk-in Customer')}</div>
+            ${customer?.location ? `<div class="sub">${escapeHtml(customer.location)}</div>` : ''}
+            ${customer?.phone ? `<div class="sub">Tel: ${escapeHtml(customer.phone)}</div>` : ''}
           </div>
 
           <table>
@@ -1900,7 +1904,7 @@ export default function NorthernWaterSystemApp() {
     printWindow.document.close();
     printWindow.onload = () => { printWindow.focus(); printWindow.print(); };
     setTimeout(() => {
-      try { printWindow.focus(); printWindow.print(); } catch (e) {}
+      try { printWindow.focus(); printWindow.print(); } catch { /* window already closed */ }
     }, 500);
   };
 
@@ -1989,9 +1993,9 @@ export default function NorthernWaterSystemApp() {
       running += e.debit - e.credit;
       return `
         <tr>
-          <td>${e.date || '—'}</td>
-          <td>${e.ref || '—'}</td>
-          <td>${e.desc}</td>
+          <td>${escapeHtml(e.date || '—')}</td>
+          <td>${escapeHtml(e.ref || '—')}</td>
+          <td>${escapeHtml(e.desc)}</td>
           <td style="text-align:right;">${e.debit ? fmt(e.debit) : '—'}</td>
           <td style="text-align:right;color:#059669;">${e.credit ? fmt(e.credit) : '—'}</td>
           <td style="text-align:right;font-weight:bold;">${fmt(running)}</td>
@@ -2009,7 +2013,7 @@ export default function NorthernWaterSystemApp() {
       <html>
       <head>
         <meta charset="UTF-8">
-        <title>Statement - ${customer.name}</title>
+        <title>Statement - ${escapeHtml(customer.name)}</title>
         <style>
           * { box-sizing: border-box; }
           body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 32px; color: #1e293b; background: #fff; }
@@ -2066,9 +2070,9 @@ export default function NorthernWaterSystemApp() {
 
           <div class="billto">
             <div class="label">Account</div>
-            <div class="name">${customer.name}</div>
-            ${customer.location ? `<div class="sub">${customer.location}</div>` : ''}
-            ${customer.phone ? `<div class="sub">Tel: ${customer.phone}</div>` : ''}
+            <div class="name">${escapeHtml(customer.name)}</div>
+            ${customer.location ? `<div class="sub">${escapeHtml(customer.location)}</div>` : ''}
+            ${customer.phone ? `<div class="sub">Tel: ${escapeHtml(customer.phone)}</div>` : ''}
           </div>
 
           ${entries.length === 0 && !hasRange ? `<div class="empty">No transactions on record for this account.</div>` : entries.length === 0 ? `<div class="empty">No transactions in this period. Opening balance carried: KES ${fmt(opening)}.</div>` : `
@@ -2112,7 +2116,7 @@ export default function NorthernWaterSystemApp() {
     printWindow.document.close();
     printWindow.onload = () => { printWindow.focus(); printWindow.print(); };
     setTimeout(() => {
-      try { printWindow.focus(); printWindow.print(); } catch (e) {}
+      try { printWindow.focus(); printWindow.print(); } catch { /* window already closed */ }
     }, 500);
   };
 
@@ -2121,7 +2125,7 @@ export default function NorthernWaterSystemApp() {
     setEditingExpense(null);
     setModalType('expense');
     setFormData({ 
-      date: new Date().toISOString().split('T')[0],
+      date: localDateString(),
       category: 'Raw Materials',
       subcategory: '',
       description: '',
@@ -2139,31 +2143,31 @@ export default function NorthernWaterSystemApp() {
     const advanceId = formData.advanceEmployeeId ? parseInt(formData.advanceEmployeeId) : null;
 
     if (editingExpense) {
+      // Persist FIRST — only reflect the edit locally once the database
+      // accepts it (supabase returns errors rather than throwing).
+      const { error: updError } = await supabase
+        .from('expenses')
+        .update({
+          date: formData.date,
+          category: formData.category,
+          subcategory: formData.subcategory,
+          description: formData.description || '',
+          amount: parseFloat(formData.amount),
+          advance_employee_id: advanceId
+        })
+        .eq('id', editingExpense.id);
+      if (updError) {
+        console.error('❌ Error updating expense:', updError);
+        alert('Could not update this expense — it has NOT been changed. Please try again.\n\n' + (updError.message || 'Unknown error'));
+        return;
+      }
+
       const updated = { ...editingExpense, ...formData, amount: parseFloat(formData.amount), advance_employee_id: advanceId };
       const updatedExpenses = state.expenses.map(e =>
         e.id === editingExpense.id ? updated : e
       );
       setState({ ...state, expenses: updatedExpenses });
-
-      const saveToSupabase = async () => {
-        try {
-          await supabase
-            .from('expenses')
-            .update({
-              date: formData.date,
-              category: formData.category,
-              subcategory: formData.subcategory,
-              description: formData.description || '',
-              amount: parseFloat(formData.amount),
-              advance_employee_id: advanceId
-            })
-            .eq('id', editingExpense.id);
-          console.log('✅ Expense updated in Supabase');
-        } catch (error) {
-          console.error('❌ Error updating expense:', error);
-        }
-      };
-      saveToSupabase();
+      console.log('✅ Expense updated in Supabase');
     } else {
       const newExpense = {
         date: formData.date,
@@ -2191,46 +2195,63 @@ export default function NorthernWaterSystemApp() {
     setShowModal(false);
   };
 
-  const handleDeleteExpense = (id) => {
-    if (confirm('Delete this expense?')) {
-      // If this expense was created by a payroll payment, remove those payment
-      // records too, so salary "Paid" status and casual history stay accurate.
-      const linkedPayments = payrollPayments.filter(p => p.expense_id === id);
-      if (linkedPayments.length > 0) {
-        setPayrollPayments(payrollPayments.filter(p => p.expense_id !== id));
-      }
-      // If this was a casual payout, un-flag the production runs it paid for,
-      // so they return to "Pay Due".
-      const runsToUnflag = state.productionLogs.filter(log => log.casual_expense_id === id).map(log => log.id);
-      const updatedLogs = runsToUnflag.length > 0
-        ? state.productionLogs.map(log => log.casual_expense_id === id ? { ...log, casual_paid: false, casual_expense_id: null } : log)
-        : state.productionLogs;
+  // Persist-first: the expense row is deleted (and the result checked) before
+  // any local change. Only after a confirmed delete are the linked payroll
+  // records removed and production runs un-flagged — previously a rejected
+  // expense delete could still un-flag runs, showing casual pay as due again
+  // and inviting a double payout.
+  const handleDeleteExpense = async (id) => {
+    if (!confirm('Delete this expense?')) return;
 
-      setState({
-        ...state,
-        expenses: state.expenses.filter(e => e.id !== id),
-        productionLogs: updatedLogs
-      });
-      // Remove from Supabase
-      (async () => {
-        try {
-          await supabase.from('expenses').delete().eq('id', id);
-          if (linkedPayments.length > 0) {
-            await supabase.from('payroll_payments').delete().eq('expense_id', id);
-          }
-          for (const runId of runsToUnflag) {
-            await supabase.from('production_logs').update({ casual_paid: false, casual_expense_id: null }).eq('id', runId);
-          }
-          console.log('✅ Expense deleted from Supabase');
-        } catch (error) {
-          console.error('❌ Error deleting expense:', error);
-        }
-      })();
+    const { error: delError } = await supabase.from('expenses').delete().eq('id', id);
+    if (delError) {
+      console.error('❌ Error deleting expense:', delError);
+      alert('Could not delete this expense — nothing was changed. Please try again.\n\n' + (delError.message || 'Unknown error'));
+      return;
     }
+
+    // If this expense was created by a payroll payment, remove those payment
+    // records too, so salary "Paid" status and casual history stay accurate.
+    const linkedPayments = payrollPayments.filter(p => p.expense_id === id);
+    // If this was a casual payout, un-flag the production runs it paid for,
+    // so they return to "Pay Due".
+    const runsToUnflag = state.productionLogs.filter(log => log.casual_expense_id === id).map(log => log.id);
+    const updatedLogs = runsToUnflag.length > 0
+      ? state.productionLogs.map(log => log.casual_expense_id === id ? { ...log, casual_paid: false, casual_expense_id: null } : log)
+      : state.productionLogs;
+
+    if (linkedPayments.length > 0) {
+      setPayrollPayments(payrollPayments.filter(p => p.expense_id !== id));
+      const { error: payDelError } = await supabase.from('payroll_payments').delete().eq('expense_id', id);
+      if (payDelError) {
+        console.error('❌ Error deleting linked payroll records:', payDelError);
+        alert('Expense deleted, but its payroll records could not be removed — the HR "Paid" status may be wrong. Please check HR.');
+      }
+    }
+    for (const runId of runsToUnflag) {
+      const { error: unflagError } = await supabase.from('production_logs')
+        .update({ casual_paid: false, casual_expense_id: null }).eq('id', runId);
+      if (unflagError) {
+        console.error('❌ Error un-flagging production run:', unflagError);
+        alert('Expense deleted, but a production run could not be returned to "Pay Due". Please check the Casual Pay view.');
+      }
+    }
+
+    setState({
+      ...state,
+      expenses: state.expenses.filter(e => e.id !== id),
+      productionLogs: updatedLogs
+    });
+    console.log('✅ Expense deleted from Supabase');
   };
 
-  // Delete Sale — reverses inventory deduction and customer debt
-  const handleDeleteSale = (id) => {
+  // Delete Sale — reverses inventory deduction and customer debt.
+  // Persist-first: nothing is changed locally (and no side effect that
+  // auto-persists is applied) until the database confirms each delete —
+  // supabase-js returns errors rather than throwing, so every result is
+  // checked explicitly. An RLS denial or network failure aborts with an
+  // alert instead of silently corrupting balances and stock.
+  const handleDeleteSale = async (id) => {
     const sale = state.sales.find(s => s.id === id);
     if (!sale) return;
 
@@ -2242,7 +2263,50 @@ export default function NorthernWaterSystemApp() {
     confirmMsg += '. This cannot be undone.';
     if (!confirm(confirmMsg)) return;
 
-    // 1. Return cartons to finished goods
+    // 1. Remove linked payments first (they reference the sale). Abort on
+    //    failure — nothing has changed yet.
+    const { error: payDelError } = await supabase.from('payments').delete().eq('saleId', id);
+    if (payDelError) {
+      console.error('❌ Error deleting linked payments:', payDelError);
+      alert('Could not delete this sale — nothing was changed. Please try again.\n\n' + (payDelError.message || 'Unknown error'));
+      return;
+    }
+
+    // 2. Remove the sale itself.
+    const { error: saleDelError } = await supabase.from('sales').delete().eq('id', id);
+    if (saleDelError) {
+      console.error('❌ Error deleting sale:', saleDelError);
+      // The payments are already gone but the sale remains. Reconcile to the
+      // "payments deleted" state so the books stay coherent: the sale's paid
+      // drops by the removed payments and the customer owes that amount again.
+      const paidViaPayments = linkedPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+      if (paidViaPayments > 0) {
+        const newPaid = (sale.paid || 0) - paidViaPayments;
+        const newStatus = newPaid >= sale.total ? 'paid' : newPaid > 0 ? 'partial' : 'pending';
+        const { error: saleUpdError } = await supabase.from('sales')
+          .update({ paid: newPaid, status: newStatus }).eq('id', id);
+        if (saleUpdError) console.error('❌ Error reconciling sale after failed delete:', saleUpdError);
+        const cust = state.customers.find(c => c.id === sale.customerId);
+        if (cust) {
+          const { error: custUpdError } = await supabase.from('customers')
+            .update({ balance: cust.balance - paidViaPayments }).eq('id', cust.id);
+          if (custUpdError) console.error('❌ Error reconciling balance after failed delete:', custUpdError);
+        }
+        setState({
+          ...state,
+          payments: state.payments.filter(p => p.saleId !== id),
+          sales: state.sales.map(s => s.id === id ? { ...s, paid: newPaid, status: newStatus } : s),
+          customers: state.customers.map(c => c.id === sale.customerId ? { ...c, balance: c.balance - paidViaPayments } : c)
+        });
+        alert('The sale could not be deleted, but its linked payments were already removed. The sale now shows as unpaid/partial again. Please retry the delete or re-enter the payments.\n\n' + (saleDelError.message || 'Unknown error'));
+      } else {
+        alert('Could not delete this sale — nothing was changed. Please try again.\n\n' + (saleDelError.message || 'Unknown error'));
+      }
+      return;
+    }
+
+    // 3. Both deletes confirmed — now reverse the local effects.
+    //    Return cartons to finished goods (auto-persists via the inventory effect).
     const updatedFinishedGoods = { ...state.finishedGoods };
     sale.items.forEach(item => {
       if (updatedFinishedGoods[item.size]) {
@@ -2253,16 +2317,8 @@ export default function NorthernWaterSystemApp() {
       }
     });
 
-    // 2. Reverse customer balance:
-    //    Original sale reduced balance by the unpaid amount (debt).
-    //    Payments later increased the balance back. Net effect to undo:
-    //    add back the debt (total - paid) that is still outstanding,
-    //    and remove the effect of the payments too.
-    //    Simplest correct approach: undo the net = -(total) + (paid)
-    //    i.e. balance should increase by (total - paid) when we remove the sale,
-    //    then removing payments would subtract (paid). Net: +total - paid - paid... 
-    //    To avoid confusion we recompute: removing the sale cancels the original
-    //    debit of (total - originalPaidAtCreation) AND we remove all linked payments
+    //    Reverse customer balance: removing the sale cancels the original
+    //    debit of (total - paidAtCreation) AND removes all linked payments
     //    which had credited (sum of payments). Net balance change = +(total - paid).
     const outstanding = sale.total - sale.paid;
     const updatedCustomers = state.customers.map(c =>
@@ -2271,39 +2327,42 @@ export default function NorthernWaterSystemApp() {
         : c
     );
 
-    // 3. Remove the sale and any linked payments from state
-    const updatedSales = state.sales.filter(s => s.id !== id);
-    const updatedPayments = state.payments.filter(p => p.saleId !== id);
-
     setState({
       ...state,
-      sales: updatedSales,
-      payments: updatedPayments,
+      sales: state.sales.filter(s => s.id !== id),
+      payments: state.payments.filter(p => p.saleId !== id),
       finishedGoods: updatedFinishedGoods,
       customers: updatedCustomers
     });
 
-    // 4. Reflect all of this in Supabase
-    (async () => {
-      try {
-        await supabase.from('payments').delete().eq('saleId', id);
-        await supabase.from('sales').delete().eq('id', id);
-        const cust = updatedCustomers.find(c => c.id === sale.customerId);
-        if (cust) {
-          await supabase.from('customers').update({ balance: cust.balance }).eq('id', cust.id);
-        }
-        console.log('✅ Sale deleted and reversed in Supabase');
-      } catch (error) {
-        console.error('❌ Error deleting sale:', error);
+    // 4. Persist the balance reversal; warn if it fails (sale is already gone).
+    const cust = updatedCustomers.find(c => c.id === sale.customerId);
+    if (cust) {
+      const { error: custError } = await supabase.from('customers')
+        .update({ balance: cust.balance }).eq('id', cust.id);
+      if (custError) {
+        console.error('❌ Error updating customer balance after sale delete:', custError);
+        alert('Sale deleted, but the customer balance could not be updated. Please check this customer\'s balance.');
       }
-    })();
+    }
+    console.log('✅ Sale deleted and reversed in Supabase');
   };
 
-  // Delete Production Log — returns finished goods and restores raw materials
-  const handleDeleteProduction = (id) => {
+  // Delete Production Log — returns finished goods and restores raw materials.
+  // Persist-first: the log row is deleted (and the result checked) before the
+  // inventory reversal is applied, so a rejected delete can't leave stock
+  // reversed with the production record still on the books.
+  const handleDeleteProduction = async (id) => {
     const log = state.productionLogs.find(p => p.id === id);
     if (!log) return;
     if (!confirm('Delete this production log? This will reverse the raw materials used and the finished goods produced. This cannot be undone.')) return;
+
+    const { error: delError } = await supabase.from('production_logs').delete().eq('id', id);
+    if (delError) {
+      console.error('❌ Error deleting production log:', delError);
+      alert('Could not delete this production log — nothing was changed. Please try again.\n\n' + (delError.message || 'Unknown error'));
+      return;
+    }
 
     const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
     const updatedFinishedGoods = JSON.parse(JSON.stringify(state.finishedGoods));
@@ -2342,8 +2401,11 @@ export default function NorthernWaterSystemApp() {
         updatedRawMaterials.overwraps[size] += cartonsProduced;
       }
 
-      // Restore KRA stamps
-      updatedRawMaterials.kraStamps += cartonsProduced;
+      // Restore KRA stamps (per bottle, mirroring the production deduction).
+      // Note: logs recorded BEFORE the per-bottle rule only deducted one stamp
+      // per carton, so deleting one of those old logs over-restores stamps —
+      // correct with a stock adjustment if it happens.
+      updatedRawMaterials.kraStamps += bottlesProduced;
 
       // Restore RO chemical
       updatedRawMaterials.roChemical += (bottlesProduced / 1000);
@@ -2368,15 +2430,7 @@ export default function NorthernWaterSystemApp() {
       rawMaterials: updatedRawMaterials,
       finishedGoods: updatedFinishedGoods
     });
-
-    (async () => {
-      try {
-        await supabase.from('production_logs').delete().eq('id', id);
-        console.log('✅ Production log deleted and reversed in Supabase');
-      } catch (error) {
-        console.error('❌ Error deleting production log:', error);
-      }
-    })();
+    console.log('✅ Production log deleted and reversed in Supabase');
   };
 
   // Add Sale
@@ -2386,7 +2440,7 @@ export default function NorthernWaterSystemApp() {
     setFormData({
       customerId: '',
       items: [{ size: '0.5L', quantity: 0, price: 0 }],
-      date: new Date().toISOString().split('T')[0],
+      date: localDateString(),
       // null = "paid in full": the Amount Paid input tracks the running total
       // until the cashier types an amount themselves (partial/credit sale).
       amountPaid: null,
@@ -2407,8 +2461,6 @@ export default function NorthernWaterSystemApp() {
       alert('Please enter a price for every item with a quantity.');
       return;
     }
-
-    const customer = state.customers.find(c => c.id === parseInt(formData.customerId));
 
     // Use prices as entered manually - NO auto-pricing
     const validItems = formData.items.filter(i => i.quantity > 0).map(item => ({
@@ -2503,7 +2555,7 @@ export default function NorthernWaterSystemApp() {
     }
     setModalType('payment');
     setPaymentSaleSearch('');
-    setFormData({ saleId: '', amount: 0, method: 'cash', reference: '', date: new Date().toISOString().split('T')[0] });
+    setFormData({ saleId: '', amount: 0, method: 'cash', reference: '', date: localDateString() });
     setShowModal(true);
   };
 
@@ -2592,7 +2644,7 @@ export default function NorthernWaterSystemApp() {
   // Delete Payment — reverses a mistakenly-entered payment.
   // Mirrors handleSavePayment in reverse: rolls back the sale's paid/status
   // and the customer's balance, then removes the payment record.
-  const handleDeletePayment = (id) => {
+  const handleDeletePayment = async (id) => {
     const payment = state.payments.find(p => p.id === id);
     if (!payment) return;
 
@@ -2605,6 +2657,15 @@ export default function NorthernWaterSystemApp() {
     if (sale) confirmMsg += ` on invoice ${sale.invoiceNumber}`;
     confirmMsg += ' and reduce cash collected. This cannot be undone.';
     if (!confirm(confirmMsg)) return;
+
+    // Persist-first: delete the payment row and check the result before any
+    // local change — a rejected delete must not shift balances.
+    const { error: delError } = await supabase.from('payments').delete().eq('id', id);
+    if (delError) {
+      console.error('❌ Error deleting payment:', delError);
+      alert('Could not delete this payment — nothing was changed. Please try again.\n\n' + (delError.message || 'Unknown error'));
+      return;
+    }
 
     // 1. Reverse the sale's paid amount and status (if the sale still exists)
     const updatedSales = state.sales.map(s => {
@@ -2627,41 +2688,41 @@ export default function NorthernWaterSystemApp() {
     );
 
     // 3. Remove the payment from state
-    const updatedPayments = state.payments.filter(p => p.id !== id);
-
     setState({
       ...state,
-      payments: updatedPayments,
+      payments: state.payments.filter(p => p.id !== id),
       sales: updatedSales,
       customers: updatedCustomers
     });
 
-    // 4. Reflect all of this in Supabase
-    (async () => {
-      try {
-        await supabase.from('payments').delete().eq('id', id);
-        if (sale) {
-          const updatedSale = updatedSales.find(s => s.id === payment.saleId);
-          await supabase
-            .from('sales')
-            .update({ paid: updatedSale.paid, status: updatedSale.status })
-            .eq('id', updatedSale.id);
-        }
-        if (customer) {
-          const updatedCust = updatedCustomers.find(c => c.id === payment.customerId);
-          await supabase.from('customers').update({ balance: updatedCust.balance }).eq('id', updatedCust.id);
-        }
-        console.log('✅ Payment deleted and reversed in Supabase');
-      } catch (error) {
-        console.error('❌ Error deleting payment:', error);
+    // 4. Persist the reversals; warn on failure (the payment is already gone).
+    if (sale) {
+      const updatedSale = updatedSales.find(s => s.id === payment.saleId);
+      const { error: saleUpdError } = await supabase
+        .from('sales')
+        .update({ paid: updatedSale.paid, status: updatedSale.status })
+        .eq('id', updatedSale.id);
+      if (saleUpdError) {
+        console.error('❌ Error updating sale after payment delete:', saleUpdError);
+        alert(`Payment deleted, but invoice ${sale.invoiceNumber} could not be updated to show the restored balance. Please check it.`);
       }
-    })();
+    }
+    if (customer) {
+      const updatedCust = updatedCustomers.find(c => c.id === payment.customerId);
+      const { error: custUpdError } = await supabase.from('customers')
+        .update({ balance: updatedCust.balance }).eq('id', updatedCust.id);
+      if (custUpdError) {
+        console.error('❌ Error updating customer after payment delete:', custUpdError);
+        alert(`Payment deleted, but ${customer.name}'s balance could not be updated. Please check it.`);
+      }
+    }
+    console.log('✅ Payment deleted and reversed in Supabase');
   };
 
   // Production
   const handleAddProduction = () => {
     setModalType('production');
-    setFormData({ items: {}, date: new Date().toISOString().split('T')[0], notes: '', unit: 'cartons', casuals: [] });
+    setFormData({ items: {}, date: localDateString(), notes: '', unit: 'cartons', casuals: [] });
     setShowModal(true);
   };
 
@@ -2738,8 +2799,10 @@ export default function NorthernWaterSystemApp() {
         updatedRawMaterials.overwraps[size] -= cartonsProduced;
       }
 
-      // ===== DEDUCT KRA STAMPS (per carton) =====
-      updatedRawMaterials.kraStamps -= cartonsProduced;
+      // ===== DEDUCT KRA STAMPS (per BOTTLE — every bottle carries a stamp) =====
+      // For 18.9L sizes bottlesNeeded equals cartonsProduced (1 bottle/carton),
+      // so this only changes the 0.5L / 1.5L / 5L consumption.
+      updatedRawMaterials.kraStamps -= bottlesNeeded;
 
       // ===== DEDUCT RO CHEMICAL (based on bottles) =====
       updatedRawMaterials.roChemical -= (bottlesNeeded / 1000);
@@ -2799,24 +2862,23 @@ export default function NorthernWaterSystemApp() {
     }
 
     if (editingCustomer) {
+      // Persist FIRST — only reflect the edit locally once the database
+      // accepts it (supabase returns errors rather than throwing).
+      const { error: updError } = await supabase
+        .from('customers')
+        .update(formData)
+        .eq('id', editingCustomer.id);
+      if (updError) {
+        console.error('❌ Error updating customer:', updError);
+        alert('Could not update this customer — nothing was changed. Please try again.\n\n' + (updError.message || 'Unknown error'));
+        return;
+      }
+
       const updatedCustomers = state.customers.map(c =>
         c.id === editingCustomer.id ? { ...c, ...formData } : c
       );
       setState({ ...state, customers: updatedCustomers });
-
-      // Save to Supabase
-      const saveToSupabase = async () => {
-        try {
-          await supabase
-            .from('customers')
-            .update(formData)
-            .eq('id', editingCustomer.id);
-          console.log('✅ Customer updated in Supabase');
-        } catch (error) {
-          console.error('❌ Error updating customer:', error);
-        }
-      };
-      saveToSupabase();
+      console.log('✅ Customer updated in Supabase');
     } else {
       const newCustomer = {
         ...formData,
@@ -2842,13 +2904,36 @@ export default function NorthernWaterSystemApp() {
     setShowModal(false);
   };
 
-  const handleDeleteCustomer = (id) => {
-    if (confirm('Delete this customer?')) {
-      setState({
-        ...state,
-        customers: state.customers.filter(c => c.id !== id)
-      });
+  // Delete a customer — admin only (matches RLS), and only when the account
+  // has no financial history: a non-zero balance or any sales/payments on
+  // record must stay visible in Debtors and the reports, so those accounts
+  // are deactivated instead of deleted. Previously this only filtered local
+  // state (no Supabase call at all) and the customer reappeared on reload.
+  const handleDeleteCustomer = async (id) => {
+    const customer = state.customers.find(c => c.id === id);
+    if (!customer) return;
+
+    const hasHistory =
+      state.sales.some(s => s.customerId === id) ||
+      state.payments.some(p => p.customerId === id);
+    if (customer.balance !== 0 || hasHistory) {
+      alert(`${customer.name} has a balance or sales/payment history and cannot be deleted — that would break the Debtors report and the audit trail. Edit the customer and mark them inactive instead.`);
+      return;
     }
+
+    if (!confirm(`Delete ${customer.name}? This cannot be undone.`)) return;
+
+    const { error } = await supabase.from('customers').delete().eq('id', id);
+    if (error) {
+      console.error('❌ Error deleting customer:', error);
+      alert('Could not delete this customer — nothing was changed. Please try again.\n\n' + (error.message || 'Unknown error'));
+      return;
+    }
+
+    setState({
+      ...state,
+      customers: state.customers.filter(c => c.id !== id)
+    });
   };
 
   // ===== LOADING SCREEN =====
@@ -3087,8 +3172,7 @@ export default function NorthernWaterSystemApp() {
         {/* Sales person's Home dashboard (location-scoped) */}
         {activeTab === 'salesdashboard' && role === 'sales' && (() => {
           const REFILL_KEYS = ['refill_10L', 'refill_15L', 'refill_20L'];
-          const now = new Date();
-          const monthPrefix = now.toISOString().slice(0, 7); // YYYY-MM
+          const monthPrefix = localMonthPrefix();
           const monthSales = visibleSales.filter(s => (s.date || '').slice(0, 7) === monthPrefix);
 
           const cartonsBySize = {};
@@ -3194,7 +3278,7 @@ export default function NorthernWaterSystemApp() {
         {activeTab === 'dashboard' && (() => {
           // Sales and costs cards show month-to-date, not all-time (customers
           // and debts are point-in-time balances, so they stay as-is).
-          const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+          const monthPrefix = localMonthPrefix();
           const inMonth = (d) => (d || '').slice(0, 7) === monthPrefix;
           const monthSalesTotal = state.sales.filter(s => inMonth(s.date)).reduce((sum, s) => sum + s.total, 0);
           const monthCostsTotal = state.expenses.filter(e => inMonth(e.date)).reduce((sum, e) => sum + e.amount, 0)
@@ -3344,12 +3428,15 @@ export default function NorthernWaterSystemApp() {
                             >
                               <Edit2 className="w-3 h-3 text-slate-500" />
                             </button>
-                            <button
-                              onClick={() => handleDeletePurchase(purchase.id)}
-                              className="p-1 hover:bg-rose-50 rounded transition"
-                            >
-                              <Trash2 className="w-3 h-3 text-rose-600" />
-                            </button>
+                            {/* RLS only permits admin to delete purchases. */}
+                            {role === 'admin' && (
+                              <button
+                                onClick={() => handleDeletePurchase(purchase.id)}
+                                className="p-1 hover:bg-rose-50 rounded transition"
+                              >
+                                <Trash2 className="w-3 h-3 text-rose-600" />
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -3972,7 +4059,8 @@ export default function NorthernWaterSystemApp() {
                         ))}
                       </div>
                       {log.notes && <p className="text-slate-500 text-xs italic">{log.notes}</p>}
-                      {(role === 'admin' || role === 'manager') && (
+                      {/* RLS only permits admin to delete production logs. */}
+                      {role === 'admin' && (
                         <div className="flex justify-end pt-2 mt-2 border-t border-slate-100">
                           <button
                             onClick={() => handleDeleteProduction(log.id)}
@@ -4040,10 +4128,19 @@ export default function NorthernWaterSystemApp() {
                   .filter(s => !salesFilterDate || s.date === salesFilterDate)
                   .filter(matchesSearch);
 
-                // Day summary: cash collected vs debt (handles partial payments)
+                // Day summary: cash taken at the point of sale that day vs what
+                // went to debt. Uses paid-at-sale (sale.paid minus linked debt
+                // repayments, same formula as the Cash Collected report) — raw
+                // sale.paid also includes repayments received on LATER dates,
+                // which overstated the day's cash as old debts were settled.
                 if (salesFilterDate) {
                   const dayTotal = filtered.reduce((sum, s) => sum + s.total, 0);
-                  const dayCash = filtered.reduce((sum, s) => sum + (s.paid || 0), 0);
+                  const dayCash = filtered.reduce((sum, s) => {
+                    const paidViaPayments = state.payments
+                      .filter(p => p.saleId === s.id)
+                      .reduce((pSum, p) => pSum + (p.amount || 0), 0);
+                    return sum + Math.max(0, (s.paid || 0) - paidViaPayments);
+                  }, 0);
                   const dayDebt = dayTotal - dayCash;
                   return (
                     <div className="grid grid-cols-3 gap-2 mb-4">
@@ -4113,7 +4210,9 @@ export default function NorthernWaterSystemApp() {
                           >
                             <Download className="w-3 h-3" /> Invoice PDF
                           </button>
-                          {(role === 'admin' || role === 'manager') && (
+                          {/* RLS only permits admin to delete sales — showing the
+                              button to managers produced silent failures. */}
+                          {role === 'admin' && (
                             <button
                               onClick={() => handleDeleteSale(sale.id)}
                               className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded transition"
@@ -4162,7 +4261,7 @@ export default function NorthernWaterSystemApp() {
               />
               <StatCard
                 label="Received This Month"
-                value={`KES ${visiblePayments.filter(p => (p.date || '').slice(0, 7) === new Date().toISOString().slice(0, 7)).reduce((sum, p) => sum + p.amount, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                value={`KES ${visiblePayments.filter(p => (p.date || '').slice(0, 7) === localMonthPrefix()).reduce((sum, p) => sum + p.amount, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                 icon={DollarSign}
                 accent="sky"
                 sub="debt payments this month"
@@ -4408,7 +4507,8 @@ export default function NorthernWaterSystemApp() {
                               <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">N/A</span>
                             )}
                             {payment.reference && <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">Ref: {payment.reference}</span>}
-                            {(role === 'admin' || role === 'manager') && (
+                            {/* RLS only permits admin to delete payments. */}
+                            {role === 'admin' && (
                               <button
                                 onClick={() => handleDeletePayment(payment.id)}
                                 className="flex items-center gap-1 text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded transition ml-auto"
@@ -4533,19 +4633,26 @@ export default function NorthernWaterSystemApp() {
                               onClick={() => {
                                 setEditingExpense(expense);
                                 setModalType('expense');
-                                setFormData(expense);
+                                // Map the stored advance link into the form field the
+                                // modal and save handler use — without this, editing an
+                                // advance expense silently cleared advance_employee_id
+                                // and the advance stopped being deducted from salary.
+                                setFormData({ ...expense, advanceEmployeeId: expense.advance_employee_id ?? '' });
                                 setShowModal(true);
                               }}
                               className="p-1 hover:bg-slate-100 rounded transition"
                             >
                               <Edit2 className="w-3 h-3 text-slate-500" />
                             </button>
-                            <button
-                              onClick={() => handleDeleteExpense(expense.id)}
-                              className="p-1 hover:bg-rose-50 rounded transition"
-                            >
-                              <Trash2 className="w-3 h-3 text-rose-600" />
-                            </button>
+                            {/* RLS only permits admin to delete expenses. */}
+                            {role === 'admin' && (
+                              <button
+                                onClick={() => handleDeleteExpense(expense.id)}
+                                className="p-1 hover:bg-rose-50 rounded transition"
+                              >
+                                <Trash2 className="w-3 h-3 text-rose-600" />
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -4687,9 +4794,12 @@ export default function NorthernWaterSystemApp() {
                           <button onClick={() => openEdit(customer)} className="p-2 hover:bg-slate-100 rounded-lg transition" title="Edit">
                             <Edit2 className="w-4 h-4 text-slate-500" />
                           </button>
-                          <button onClick={() => handleDeleteCustomer(customer.id)} className="p-2 hover:bg-rose-50 rounded-lg transition" title="Delete">
-                            <Trash2 className="w-4 h-4 text-rose-600" />
-                          </button>
+                          {/* RLS only permits admin to delete customers. */}
+                          {role === 'admin' && (
+                            <button onClick={() => handleDeleteCustomer(customer.id)} className="p-2 hover:bg-rose-50 rounded-lg transition" title="Delete">
+                              <Trash2 className="w-4 h-4 text-rose-600" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -4715,9 +4825,11 @@ export default function NorthernWaterSystemApp() {
                         <button onClick={() => openEdit(customer)} className="p-2 hover:bg-slate-100 rounded-lg transition">
                           <Edit2 className="w-4 h-4 text-slate-500" />
                         </button>
-                        <button onClick={() => handleDeleteCustomer(customer.id)} className="p-2 hover:bg-rose-50 rounded-lg transition">
-                          <Trash2 className="w-4 h-4 text-rose-600" />
-                        </button>
+                        {role === 'admin' && (
+                          <button onClick={() => handleDeleteCustomer(customer.id)} className="p-2 hover:bg-rose-50 rounded-lg transition">
+                            <Trash2 className="w-4 h-4 text-rose-600" />
+                          </button>
+                        )}
                       </div>
                     </div>
                     <div className="flex items-center justify-between pt-3 mt-3 border-t border-slate-100">
@@ -5179,7 +5291,7 @@ export default function NorthernWaterSystemApp() {
         {/* Dashboard Card Breakdown Modal */}
         {breakdownCard && (() => {
           // Sales and costs breakdowns are month-to-date, matching the cards.
-          const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+          const monthPrefix = localMonthPrefix();
           const inMonth = (d) => (d || '').slice(0, 7) === monthPrefix;
           const monthSales = state.sales.filter(s => inMonth(s.date));
           const monthExpenses = state.expenses.filter(e => inMonth(e.date));

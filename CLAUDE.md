@@ -32,7 +32,7 @@ React + TypeScript + Vite + Tailwind CSS 4 + Supabase (PostgreSQL + Auth). Deplo
 
 ## Architecture
 
-**The entire application lives in `src/App.jsx`** (~5 000 lines). There is no component splitting — all business logic, UI, and state management are in this one file. `src/supabaseClient.js` exports the Supabase client. `src/main.jsx` is the entry point.
+**The entire application lives in `src/App.jsx`** (~6 000 lines). There is no component splitting — all business logic, UI, and state management are in this one file. `src/supabaseClient.js` exports the Supabase client. `src/main.jsx` is the entry point.
 
 ### Navigation
 
@@ -40,9 +40,7 @@ Tab-based SPA with no router library. An `activeTab` state value controls which 
 
 ### State management
 
-All state lives in `useState` hooks inside `App.jsx`. The central `state` object holds customers, sales, payments, expenses, purchases, production logs, and employees. On app start, data is loaded from Supabase and merged into this object. Inventory changes are auto-persisted on mutation; other records are written to Supabase on form submit.
-
-A `useRef` guard (`isEditingRef`) prevents Supabase subscription callbacks from overwriting form fields the user is actively editing.
+All state lives in `useState` hooks inside `App.jsx`. The central `state` object holds customers, sales, payments, expenses, purchases, production logs, and employees. Data is loaded from Supabase **once per login** — there is no realtime subscription and no periodic refresh, so two concurrently logged-in users do not see each other's changes until they log in again. Inventory changes are auto-persisted on mutation (last-write-wins on a shared `inventory_state` row); other records are written to Supabase on form submit, persist-first (local state only updates after the database confirms the write).
 
 ### Authentication & roles
 
@@ -50,9 +48,9 @@ Supabase Auth (email/password). On login, the user's row in the `profiles` table
 
 | Role | Access |
 |------|--------|
-| `admin` | Everything |
-| `manager` | Sales, Inventory, Customers, Reports — no Expenses, no HR |
-| `sales` | Own sales & payments, customers at their location, limited inventory |
+| `admin` | Everything, including all deletes (RLS DELETE policies are admin-only on every financial table) |
+| `manager` | Sales, Inventory, Purchases, Expenses, Customers, Reports — no HR, no Cost Settings, no Stock Adjustments, **no deletes** |
+| `sales` | Own/location sales & payments, customers at their location, limited inventory, production logging |
 
 Sales-role users have their customer and sales views filtered to `userProfile.location`.
 
@@ -60,16 +58,9 @@ Sales-role users have their customer and sales views filtered to `userProfile.lo
 
 `profiles`, `customers`, `sales`, `payments`, `expenses`, `purchases`, `production_logs`, `employees`, `payroll_payments`, `inventory_state`, `cost_settings`, `stock_adjustments`
 
-### Pricing (hardcoded in App.jsx)
+### Pricing
 
-| Size | Unit price (KES) |
-|------|-----------------|
-| 0.5 L | 100 |
-| 1.5 L | 150 |
-| 5 L | 350 |
-| 18.9 L | 650 |
-
-Carton costs and casual-labour rate per carton are configurable and stored in `cost_settings`.
+Sale prices are **not** hardcoded — staff enter the unit price manually on every sale line, so it can vary by customer/order. Carton costs (used to value finished goods and compute P&L COGS) and the casual-labour rate per carton are configurable and stored in `cost_settings`.
 
 ### Environment variables
 
