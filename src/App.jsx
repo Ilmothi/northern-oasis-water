@@ -2907,13 +2907,36 @@ export default function NorthernWaterSystemApp() {
     setShowModal(false);
   };
 
-  const handleDeleteCustomer = (id) => {
-    if (confirm('Delete this customer?')) {
-      setState({
-        ...state,
-        customers: state.customers.filter(c => c.id !== id)
-      });
+  // Delete a customer — admin only (matches RLS), and only when the account
+  // has no financial history: a non-zero balance or any sales/payments on
+  // record must stay visible in Debtors and the reports, so those accounts
+  // are deactivated instead of deleted. Previously this only filtered local
+  // state (no Supabase call at all) and the customer reappeared on reload.
+  const handleDeleteCustomer = async (id) => {
+    const customer = state.customers.find(c => c.id === id);
+    if (!customer) return;
+
+    const hasHistory =
+      state.sales.some(s => s.customerId === id) ||
+      state.payments.some(p => p.customerId === id);
+    if (customer.balance !== 0 || hasHistory) {
+      alert(`${customer.name} has a balance or sales/payment history and cannot be deleted — that would break the Debtors report and the audit trail. Edit the customer and mark them inactive instead.`);
+      return;
     }
+
+    if (!confirm(`Delete ${customer.name}? This cannot be undone.`)) return;
+
+    const { error } = await supabase.from('customers').delete().eq('id', id);
+    if (error) {
+      console.error('❌ Error deleting customer:', error);
+      alert('Could not delete this customer — nothing was changed. Please try again.\n\n' + (error.message || 'Unknown error'));
+      return;
+    }
+
+    setState({
+      ...state,
+      customers: state.customers.filter(c => c.id !== id)
+    });
   };
 
   // ===== LOADING SCREEN =====
@@ -4766,9 +4789,12 @@ export default function NorthernWaterSystemApp() {
                           <button onClick={() => openEdit(customer)} className="p-2 hover:bg-slate-100 rounded-lg transition" title="Edit">
                             <Edit2 className="w-4 h-4 text-slate-500" />
                           </button>
-                          <button onClick={() => handleDeleteCustomer(customer.id)} className="p-2 hover:bg-rose-50 rounded-lg transition" title="Delete">
-                            <Trash2 className="w-4 h-4 text-rose-600" />
-                          </button>
+                          {/* RLS only permits admin to delete customers. */}
+                          {role === 'admin' && (
+                            <button onClick={() => handleDeleteCustomer(customer.id)} className="p-2 hover:bg-rose-50 rounded-lg transition" title="Delete">
+                              <Trash2 className="w-4 h-4 text-rose-600" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -4794,9 +4820,11 @@ export default function NorthernWaterSystemApp() {
                         <button onClick={() => openEdit(customer)} className="p-2 hover:bg-slate-100 rounded-lg transition">
                           <Edit2 className="w-4 h-4 text-slate-500" />
                         </button>
-                        <button onClick={() => handleDeleteCustomer(customer.id)} className="p-2 hover:bg-rose-50 rounded-lg transition">
-                          <Trash2 className="w-4 h-4 text-rose-600" />
-                        </button>
+                        {role === 'admin' && (
+                          <button onClick={() => handleDeleteCustomer(customer.id)} className="p-2 hover:bg-rose-50 rounded-lg transition">
+                            <Trash2 className="w-4 h-4 text-rose-600" />
+                          </button>
+                        )}
                       </div>
                     </div>
                     <div className="flex items-center justify-between pt-3 mt-3 border-t border-slate-100">
