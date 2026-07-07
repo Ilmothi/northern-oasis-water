@@ -150,40 +150,16 @@ const initialState = {
     '18.9L_refill': { quantity: 60, bottlesPerCarton: 1 }
   },
 
-  customers: [
-    { id: 1, name: 'Loglogo Store', location: 'Loglogo', phone: '0712345678', balance: 5000, isActive: true },
-    { id: 2, name: 'Marsabit Market', location: 'Marsabit', phone: '0723456789', balance: -2000, isActive: true },
-    { id: 3, name: 'Laisamis Mini Shop', location: 'Laisamis', phone: '0734567890', balance: 0, isActive: true },
-  ],
-
-  sales: [
-    { id: 1, customerId: 1, date: '2025-04-15', items: [{ size: '0.5L', quantity: 24, price: 100, subtotal: 2400 }], total: 2400, paid: 2400, status: 'paid', invoiceNumber: 'INV-001' },
-    { id: 2, customerId: 2, date: '2025-05-01', items: [{ size: '5L', quantity: 4, price: 350, subtotal: 1400 }], total: 1400, paid: 0, status: 'pending', invoiceNumber: 'INV-002' },
-    { id: 3, customerId: 1, date: '2025-05-05', items: [{ size: '1.5L', quantity: 12, price: 150, subtotal: 1800 }], total: 1800, paid: 1800, status: 'paid', invoiceNumber: 'INV-003' },
-    { id: 4, customerId: 3, date: '2025-05-08', items: [{ size: '0.5L', quantity: 24, price: 100, subtotal: 2400 }], total: 2400, paid: 1200, status: 'partial', invoiceNumber: 'INV-004' },
-  ],
-
-  payments: [
-    { id: 1, saleId: 1, customerId: 1, date: '2025-04-15', amount: 2400, method: 'cash', reference: 'CASH-001' },
-    { id: 2, saleId: 3, customerId: 1, date: '2025-05-05', amount: 1800, method: 'bank_transfer', reference: 'TRF-12345' },
-    { id: 3, saleId: 4, customerId: 3, date: '2025-05-08', amount: 1200, method: 'cash', reference: 'CASH-002' },
-  ],
-
-  productionLogs: [
-    { id: 1, date: '2025-04-25', items: { '0.5L': 576, '1.5L': 360, '5L': 40 }, unit: 'bottles', notes: 'Morning shift' },
-    { id: 2, date: '2025-04-27', items: { '0.5L': 480, '1.5L': 240, '18.9L_disposable': 5 }, unit: 'bottles', notes: 'Afternoon shift' },
-  ],
-
-  purchases: [
-    { id: 1, date: '2025-04-25', supplier: 'Kenya Bottle Co', items: [{ material: 'emptyBottles_0.5L', description: 'Empty Bottles 0.5L', quantity: 2000, unitPrice: 4, total: 8000 }], totalAmount: 8000, status: 'received' },
-    { id: 2, date: '2025-04-28', supplier: 'Packaging Ltd', items: [{ material: 'overwraps', description: 'Overwraps', quantity: 5000, unitPrice: 1, total: 5000 }], totalAmount: 5000, status: 'received' },
-  ],
-
-  expenses: [
-    { id: 1, date: '2025-04-20', category: 'Raw Materials', subcategory: 'Empty Bottles', description: 'Bulk order 0.5L bottles', amount: 5000 },
-    { id: 2, date: '2025-04-22', category: 'Labour', subcategory: 'Salaries', description: 'Monthly salaries - April', amount: 25000 },
-    { id: 3, date: '2025-04-25', category: 'Operations', subcategory: 'Electricity', description: 'Electricity bill', amount: 3500 },
-  ],
+  // Transactional records start EMPTY and are filled from Supabase on login.
+  // (These used to hold hardcoded demo rows — "Loglogo Store", INV-001, fake
+  // balances — which showed as if they were real whenever a fetch returned no
+  // rows. Real records only, always.)
+  customers: [],
+  sales: [],
+  payments: [],
+  productionLogs: [],
+  purchases: [],
+  expenses: [],
 
   locations: ['Loglogo', 'Marsabit', 'Laisamis', 'Korr', 'Merille'],
 
@@ -529,11 +505,14 @@ export default function NorthernWaterSystemApp() {
         supabase.from('payments').select('*'),
       ]);
 
+      // Replace state whenever the fetch SUCCEEDED (data is an array, possibly
+      // empty) — keying off length left stale/default records showing when a
+      // table was genuinely empty. On a failed fetch data is null: keep prev.
       setState(prev => ({
         ...prev,
-        ...(customersData?.length > 0 && { customers: customersData }),
-        ...(salesData?.length > 0 && { sales: salesData }),
-        ...(paymentsData?.length > 0 && { payments: paymentsData }),
+        ...(customersData && { customers: customersData }),
+        ...(salesData && { sales: salesData }),
+        ...(paymentsData && { payments: paymentsData }),
       }));
 
       // Tier 2: admin + manager — operational records, fetched in parallel
@@ -548,8 +527,8 @@ export default function NorthernWaterSystemApp() {
 
         setState(prev => ({
           ...prev,
-          ...(expensesData?.length > 0 && { expenses: expensesData }),
-          ...(purchasesData?.length > 0 && { purchases: purchasesData }),
+          ...(expensesData && { expenses: expensesData }),
+          ...(purchasesData && { purchases: purchasesData }),
         }));
       }
 
@@ -559,7 +538,7 @@ export default function NorthernWaterSystemApp() {
       const { data: prodData } = await supabase.from('production_logs').select('*');
       setState(prev => ({
         ...prev,
-        ...(prodData?.length > 0 && { productionLogs: prodData }),
+        ...(prodData && { productionLogs: prodData }),
       }));
 
       // Employees — all roles (RLS filters sales to casual employees only; needed for production log)
