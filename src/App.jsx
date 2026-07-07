@@ -2401,8 +2401,11 @@ export default function NorthernWaterSystemApp() {
         updatedRawMaterials.overwraps[size] += cartonsProduced;
       }
 
-      // Restore KRA stamps
-      updatedRawMaterials.kraStamps += cartonsProduced;
+      // Restore KRA stamps (per bottle, mirroring the production deduction).
+      // Note: logs recorded BEFORE the per-bottle rule only deducted one stamp
+      // per carton, so deleting one of those old logs over-restores stamps —
+      // correct with a stock adjustment if it happens.
+      updatedRawMaterials.kraStamps += bottlesProduced;
 
       // Restore RO chemical
       updatedRawMaterials.roChemical += (bottlesProduced / 1000);
@@ -2796,8 +2799,10 @@ export default function NorthernWaterSystemApp() {
         updatedRawMaterials.overwraps[size] -= cartonsProduced;
       }
 
-      // ===== DEDUCT KRA STAMPS (per carton) =====
-      updatedRawMaterials.kraStamps -= cartonsProduced;
+      // ===== DEDUCT KRA STAMPS (per BOTTLE — every bottle carries a stamp) =====
+      // For 18.9L sizes bottlesNeeded equals cartonsProduced (1 bottle/carton),
+      // so this only changes the 0.5L / 1.5L / 5L consumption.
+      updatedRawMaterials.kraStamps -= bottlesNeeded;
 
       // ===== DEDUCT RO CHEMICAL (based on bottles) =====
       updatedRawMaterials.roChemical -= (bottlesNeeded / 1000);
