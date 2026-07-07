@@ -11,6 +11,17 @@ const COMPANY = {
   kraPin: 'P052211072N',
 };
 
+// Today's date in LOCAL time as YYYY-MM-DD. Record dates and "this month"
+// filters must use local time (Kenya, UTC+3), not toISOString() (UTC) —
+// otherwise entries between midnight and 3 a.m. are dated to the previous
+// day, and on the 1st of the month booked to the previous month.
+// DB timestamps (updated_at etc.) still use toISOString(), which is correct.
+const localDateString = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+// Current month in LOCAL time as YYYY-MM, for month-to-date filters.
+const localMonthPrefix = () => localDateString().slice(0, 7);
+
 // Group a date-sorted transaction list into one bucket per day.
 // Input order is preserved (callers pass already-sorted lists), so the
 // returned groups stay in the same date order. Pure display helper — it
@@ -331,7 +342,7 @@ export default function NorthernWaterSystemApp() {
   const [employees, setEmployees] = useState([]);
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [hrView, setHrView] = useState('registry');
-  const [hrMonth, setHrMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [hrMonth, setHrMonth] = useState(localMonthPrefix());
   const [casualRange, setCasualRange] = useState({ start: '', end: '' });
   const [casualRate, setCasualRate] = useState(0);
   const [payrollPayments, setPayrollPayments] = useState([]);
@@ -647,7 +658,7 @@ export default function NorthernWaterSystemApp() {
   // Expenses-tab summary cards are month-to-date, matching the dashboard.
   // Full history stays available in the records list and the Expense Report.
   const getMonthExpensesByCategory = () => {
-    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const monthPrefix = localMonthPrefix();
     const totals = {};
     state.expenses.forEach(exp => {
       if ((exp.date || '').slice(0, 7) !== monthPrefix) return;
@@ -657,7 +668,7 @@ export default function NorthernWaterSystemApp() {
   };
 
   const getMonthExpenses = () => {
-    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const monthPrefix = localMonthPrefix();
     return state.expenses
       .filter(exp => (exp.date || '').slice(0, 7) === monthPrefix)
       .reduce((sum, exp) => sum + exp.amount, 0);
@@ -666,7 +677,7 @@ export default function NorthernWaterSystemApp() {
   // Purchases-tab summary cards are month-to-date, matching the dashboard.
   // Full history stays available in the purchases list below them.
   const getMonthPurchasesList = () => {
-    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const monthPrefix = localMonthPrefix();
     return state.purchases.filter(p => (p.date || '').slice(0, 7) === monthPrefix);
   };
 
@@ -675,7 +686,7 @@ export default function NorthernWaterSystemApp() {
     setEditingPurchase(null);
     setModalType('purchase');
     setFormData({
-      date: new Date().toISOString().split('T')[0],
+      date: localDateString(),
       supplier: '',
       items: [{ material: '', description: '', quantity: 0, unitPrice: 0, total: 0 }]
     });
@@ -734,7 +745,7 @@ export default function NorthernWaterSystemApp() {
     if (isSalaryPaid(emp.id, month)) { alert('Salary already recorded for this employee this month.'); return; }
     if (!confirm(`Record salary payment of KES ${netAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} for ${emp.name} (${month})? This also creates a Salary expense.`)) return;
 
-    const datePaid = new Date().toISOString().split('T')[0];
+    const datePaid = localDateString();
     const newExpense = {
       date: datePaid,
       category: 'operating',
@@ -779,7 +790,7 @@ export default function NorthernWaterSystemApp() {
     if (total <= 0) { alert('No unpaid casual pay to record for this range.'); return; }
     if (!confirm(`Record casual payout of KES ${total.toLocaleString('en-US', { minimumFractionDigits: 2 })} for ${range.start} to ${range.end}? This also creates a Casual Labour expense.`)) return;
 
-    const datePaid = new Date().toISOString().split('T')[0];
+    const datePaid = localDateString();
     const rangeLabel = `${range.start} to ${range.end}`;
     const newExpense = {
       date: datePaid,
@@ -1170,7 +1181,7 @@ export default function NorthernWaterSystemApp() {
   const generateSalesReport = () => {
     // With no date range selected, default to the current month (not all time),
     // matching the Cash Collected report and the dashboard cards.
-    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const monthPrefix = localMonthPrefix();
     const filteredSales = (dateRange.start && dateRange.end)
       ? state.sales.filter(s => s.date >= dateRange.start && s.date <= dateRange.end)
       : state.sales.filter(s => (s.date || '').slice(0, 7) === monthPrefix);
@@ -1226,7 +1237,7 @@ export default function NorthernWaterSystemApp() {
   const generateCashCollectedReport = () => {
     // With no date range selected, default to the current month (not all time)
     // so the summary cards and the day lists below them stay in sync.
-    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const monthPrefix = localMonthPrefix();
     const inPeriod = (d) => {
       if (!dateRange.start || !dateRange.end) return (d || '').slice(0, 7) === monthPrefix;
       return d >= dateRange.start && d <= dateRange.end;
@@ -1291,7 +1302,7 @@ export default function NorthernWaterSystemApp() {
 
   const generateExpenseReport = () => {
     // With no date range selected, default to the current month (not all time).
-    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const monthPrefix = localMonthPrefix();
     const filtered = (dateRange.start && dateRange.end)
       ? state.expenses.filter(e => e.date >= dateRange.start && e.date <= dateRange.end)
       : state.expenses.filter(e => (e.date || '').slice(0, 7) === monthPrefix);
@@ -1330,7 +1341,7 @@ export default function NorthernWaterSystemApp() {
 
   const generateProfitLossReport = () => {
     // With no date range selected, default to the current month (not all time).
-    const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const monthPrefix = localMonthPrefix();
     const inPeriod = (d) => {
       if (!dateRange.start || !dateRange.end) return (d || '').slice(0, 7) === monthPrefix;
       return d >= dateRange.start && d <= dateRange.end;
@@ -2137,7 +2148,7 @@ export default function NorthernWaterSystemApp() {
     setEditingExpense(null);
     setModalType('expense');
     setFormData({ 
-      date: new Date().toISOString().split('T')[0],
+      date: localDateString(),
       category: 'Raw Materials',
       subcategory: '',
       description: '',
@@ -2449,7 +2460,7 @@ export default function NorthernWaterSystemApp() {
     setFormData({
       customerId: '',
       items: [{ size: '0.5L', quantity: 0, price: 0 }],
-      date: new Date().toISOString().split('T')[0],
+      date: localDateString(),
       // null = "paid in full": the Amount Paid input tracks the running total
       // until the cashier types an amount themselves (partial/credit sale).
       amountPaid: null,
@@ -2566,7 +2577,7 @@ export default function NorthernWaterSystemApp() {
     }
     setModalType('payment');
     setPaymentSaleSearch('');
-    setFormData({ saleId: '', amount: 0, method: 'cash', reference: '', date: new Date().toISOString().split('T')[0] });
+    setFormData({ saleId: '', amount: 0, method: 'cash', reference: '', date: localDateString() });
     setShowModal(true);
   };
 
@@ -2733,7 +2744,7 @@ export default function NorthernWaterSystemApp() {
   // Production
   const handleAddProduction = () => {
     setModalType('production');
-    setFormData({ items: {}, date: new Date().toISOString().split('T')[0], notes: '', unit: 'cartons', casuals: [] });
+    setFormData({ items: {}, date: localDateString(), notes: '', unit: 'cartons', casuals: [] });
     setShowModal(true);
   };
 
@@ -3181,8 +3192,7 @@ export default function NorthernWaterSystemApp() {
         {/* Sales person's Home dashboard (location-scoped) */}
         {activeTab === 'salesdashboard' && role === 'sales' && (() => {
           const REFILL_KEYS = ['refill_10L', 'refill_15L', 'refill_20L'];
-          const now = new Date();
-          const monthPrefix = now.toISOString().slice(0, 7); // YYYY-MM
+          const monthPrefix = localMonthPrefix();
           const monthSales = visibleSales.filter(s => (s.date || '').slice(0, 7) === monthPrefix);
 
           const cartonsBySize = {};
@@ -3288,7 +3298,7 @@ export default function NorthernWaterSystemApp() {
         {activeTab === 'dashboard' && (() => {
           // Sales and costs cards show month-to-date, not all-time (customers
           // and debts are point-in-time balances, so they stay as-is).
-          const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+          const monthPrefix = localMonthPrefix();
           const inMonth = (d) => (d || '').slice(0, 7) === monthPrefix;
           const monthSalesTotal = state.sales.filter(s => inMonth(s.date)).reduce((sum, s) => sum + s.total, 0);
           const monthCostsTotal = state.expenses.filter(e => inMonth(e.date)).reduce((sum, e) => sum + e.amount, 0)
@@ -4262,7 +4272,7 @@ export default function NorthernWaterSystemApp() {
               />
               <StatCard
                 label="Received This Month"
-                value={`KES ${visiblePayments.filter(p => (p.date || '').slice(0, 7) === new Date().toISOString().slice(0, 7)).reduce((sum, p) => sum + p.amount, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                value={`KES ${visiblePayments.filter(p => (p.date || '').slice(0, 7) === localMonthPrefix()).reduce((sum, p) => sum + p.amount, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                 icon={DollarSign}
                 accent="sky"
                 sub="debt payments this month"
@@ -5292,7 +5302,7 @@ export default function NorthernWaterSystemApp() {
         {/* Dashboard Card Breakdown Modal */}
         {breakdownCard && (() => {
           // Sales and costs breakdowns are month-to-date, matching the cards.
-          const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
+          const monthPrefix = localMonthPrefix();
           const inMonth = (d) => (d || '').slice(0, 7) === monthPrefix;
           const monthSales = state.sales.filter(s => inMonth(s.date));
           const monthExpenses = state.expenses.filter(e => inMonth(e.date));
