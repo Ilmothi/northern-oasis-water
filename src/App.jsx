@@ -4148,10 +4148,19 @@ export default function NorthernWaterSystemApp() {
                   .filter(s => !salesFilterDate || s.date === salesFilterDate)
                   .filter(matchesSearch);
 
-                // Day summary: cash collected vs debt (handles partial payments)
+                // Day summary: cash taken at the point of sale that day vs what
+                // went to debt. Uses paid-at-sale (sale.paid minus linked debt
+                // repayments, same formula as the Cash Collected report) — raw
+                // sale.paid also includes repayments received on LATER dates,
+                // which overstated the day's cash as old debts were settled.
                 if (salesFilterDate) {
                   const dayTotal = filtered.reduce((sum, s) => sum + s.total, 0);
-                  const dayCash = filtered.reduce((sum, s) => sum + (s.paid || 0), 0);
+                  const dayCash = filtered.reduce((sum, s) => {
+                    const paidViaPayments = state.payments
+                      .filter(p => p.saleId === s.id)
+                      .reduce((pSum, p) => pSum + (p.amount || 0), 0);
+                    return sum + Math.max(0, (s.paid || 0) - paidViaPayments);
+                  }, 0);
                   const dayDebt = dayTotal - dayCash;
                   return (
                     <div className="grid grid-cols-3 gap-2 mb-4">
