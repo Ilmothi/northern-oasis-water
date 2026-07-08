@@ -312,6 +312,7 @@ export default function NorthernWaterSystemApp() {
   const toggleDay = (key) => setExpandedDays(prev => ({ ...prev, [key]: !prev[key] }));
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [debtorsLocation, setDebtorsLocation] = useState('all'); // 'all' or a location name — filters the Debtors report
+  const [reportCustomerId, setReportCustomerId] = useState(''); // selected customer for the per-customer reports (Revenue Over Time, Product Mix)
   const [customerSearch, setCustomerSearch] = useState('');
   const [customerStatusFilter, setCustomerStatusFilter] = useState('all'); // all | active | inactive
   const [saleCustomerSearch, setSaleCustomerSearch] = useState('');
@@ -1385,6 +1386,164 @@ export default function NorthernWaterSystemApp() {
     };
   };
 
+  // Format a 'YYYY-MM' key as e.g. "Jul 2026" for the customer trend report.
+  const monthLabel = (m) => m
+    ? new Date(m + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+    : '—';
+
+  // Top Customers — ranks customers by invoiced revenue (Σ sale.total) over the
+  // period. Defaults to the current month (like Sales/Cash), overridable by date
+  // range. Paid/outstanding are shown as columns but ranking is on invoiced.
+  const generateTopCustomersReport = () => {
+    const hasRange = dateRange.start && dateRange.end;
+    const monthPrefix = localMonthPrefix();
+    const inPeriod = (d) => hasRange
+      ? (d >= dateRange.start && d <= dateRange.end)
+      : (d || '').slice(0, 7) === monthPrefix;
+    const periodSales = state.sales.filter(s => inPeriod(s.date));
+
+    // Keyed by the customer's native id (Map avoids id-type coercion issues).
+    const byCustomer = new Map();
+    periodSales.forEach(s => {
+      let row = byCustomer.get(s.customerId);
+      if (!row) {
+        const customer = state.customers.find(c => c.id === s.customerId);
+        row = { name: customer?.name || 'Unknown', location: customer?.location || '—', invoiced: 0, paid: 0, invoices: 0 };
+        byCustomer.set(s.customerId, row);
+      }
+      row.invoiced += s.total;
+      row.paid += (s.paid || 0);
+      row.invoices += 1;
+    });
+
+    const totalInvoiced = periodSales.reduce((sum, s) => sum + s.total, 0);
+    const rows = [...byCustomer.values()]
+      .map(r => ({ ...r, outstanding: r.invoiced - r.paid, pct: totalInvoiced > 0 ? (r.invoiced / totalInvoiced) * 100 : 0 }))
+      .sort((a, b) => b.invoiced - a.invoiced);
+
+    return {
+      title: 'Top Customers',
+      date: new Date().toLocaleDateString(),
+      period: hasRange ? `${dateRange.start} to ${dateRange.end}` : `This Month (${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })})`,
+      rows,
+      totalInvoiced
+    };
+  };
+
+  // Customer Sales Summary — the whole book at a glance. Per-period invoiced/paid
+  // per customer plus their current outstanding balance and last purchase date.
+  // Defaults to all-time (no range) so last-purchase and the ledger read fully.
+  const generateCustomerSalesSummaryReport = () => {
+    const hasRange = dateRange.start && dateRange.end;
+    const inPeriod = (d) => hasRange ? (d >= dateRange.start && d <= dateRange.end) : true;
+    const periodSales = state.sales.filter(s => inPeriod(s.date));
+
+    const byCustomer = new Map();
+    periodSales.forEach(s => {
+      let row = byCustomer.get(s.customerId);
+      if (!row) { row = { invoiced: 0, paid: 0, invoices: 0, lastPurchase: '' }; byCustomer.set(s.customerId, row); }
+      row.invoiced += s.total;
+      row.paid += (s.paid || 0);
+      row.invoices += 1;
+      if (!row.lastPurchase || s.date > row.lastPurchase) row.lastPurchase = s.date;
+    });
+
+    const rows = state.customers.map(c => {
+      const r = byCustomer.get(c.id) || { invoiced: 0, paid: 0, invoices: 0, lastPurchase: '' };
+      return {
+        name: c.name,
+        location: c.location || '—',
+        invoiced: r.invoiced,
+        paid: r.paid,
+        invoices: r.invoices,
+        outstanding: Math.max(0, -(c.balance || 0)),
+        lastPurchase: r.lastPurchase || '—'
+      };
+    })
+      .filter(r => r.invoices > 0 || r.outstanding > 0)   // skip dormant, zero-balance customers
+      .sort((a, b) => b.invoiced - a.invoiced);
+
+    return {
+      title: 'Customer Sales Summary',
+      date: new Date().toLocaleDateString(),
+      period: hasRange ? `${dateRange.start} to ${dateRange.end}` : 'All time',
+      rows,
+      totalInvoiced: rows.reduce((s, r) => s + r.invoiced, 0),
+      totalPaid: rows.reduce((s, r) => s + r.paid, 0),
+      totalOutstanding: rows.reduce((s, r) => s + r.outstanding, 0)
+    };
+  };
+
+  // Customer Revenue Over Time — one customer's invoiced revenue by month.
+  // Defaults to all-time so the trend is visible; date range narrows it.
+  const generateCustomerRevenueReport = (customerId = reportCustomerId) => {
+    const customer = state.customers.find(c => String(c.id) === String(customerId));
+    if (!customer) {
+      return { title: 'Customer Revenue Over Time', date: new Date().toLocaleDateString(), period: '—', noCustomer: true, months: [], totalRevenue: 0, maxRevenue: 0 };
+    }
+    const hasRange = dateRange.start && dateRange.end;
+    const inPeriod = (d) => hasRange ? (d >= dateRange.start && d <= dateRange.end) : true;
+    const custSales = state.sales.filter(s => s.customerId === customer.id && inPeriod(s.date));
+
+    const byMonth = {};
+    custSales.forEach(s => {
+      const m = (s.date || '').slice(0, 7);
+      const row = byMonth[m] || (byMonth[m] = { revenue: 0, invoices: 0 });
+      row.revenue += s.total;
+      row.invoices += 1;
+    });
+    const months = Object.entries(byMonth)
+      .map(([month, r]) => ({ month, revenue: r.revenue, invoices: r.invoices }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+
+    return {
+      title: 'Customer Revenue Over Time',
+      date: new Date().toLocaleDateString(),
+      period: hasRange ? `${dateRange.start} to ${dateRange.end}` : 'All time',
+      customerName: customer.name,
+      customerLocation: customer.location || '—',
+      months,
+      totalRevenue: months.reduce((s, m) => s + m.revenue, 0),
+      maxRevenue: months.reduce((mx, m) => Math.max(mx, m.revenue), 0)
+    };
+  };
+
+  // Product Mix by Customer — one customer's purchases broken down by size,
+  // in quantity and revenue. Refills counted in bottles, bottled in cartons.
+  const generateProductMixReport = (customerId = reportCustomerId) => {
+    const customer = state.customers.find(c => String(c.id) === String(customerId));
+    if (!customer) {
+      return { title: 'Product Mix by Customer', date: new Date().toLocaleDateString(), period: '—', noCustomer: true, rows: [], totalRevenue: 0, totalQuantity: 0 };
+    }
+    const REFILL_KEYS = ['refill_10L', 'refill_15L', 'refill_20L'];
+    const hasRange = dateRange.start && dateRange.end;
+    const inPeriod = (d) => hasRange ? (d >= dateRange.start && d <= dateRange.end) : true;
+    const custSales = state.sales.filter(s => s.customerId === customer.id && inPeriod(s.date));
+
+    const bySize = {};
+    custSales.forEach(s => {
+      s.items.forEach(item => {
+        const row = bySize[item.size] || (bySize[item.size] = { quantity: 0, revenue: 0, isRefill: REFILL_KEYS.includes(item.size) });
+        row.quantity += item.quantity;
+        row.revenue += item.total ?? item.subtotal ?? (item.quantity * (item.price || 0));
+      });
+    });
+    const rows = Object.entries(bySize)
+      .map(([size, r]) => ({ size, label: SIZE_LABELS[size] || size, quantity: r.quantity, revenue: r.revenue, isRefill: r.isRefill }))
+      .sort((a, b) => b.revenue - a.revenue);
+
+    return {
+      title: 'Product Mix by Customer',
+      date: new Date().toLocaleDateString(),
+      period: hasRange ? `${dateRange.start} to ${dateRange.end}` : 'All time',
+      customerName: customer.name,
+      customerLocation: customer.location || '—',
+      rows,
+      totalRevenue: rows.reduce((s, r) => s + r.revenue, 0),
+      totalQuantity: rows.reduce((s, r) => s + r.quantity, 0)
+    };
+  };
+
   const handleGenerateReport = (type) => {
     let data;
     if (type === 'aging') {
@@ -1397,6 +1556,14 @@ export default function NorthernWaterSystemApp() {
       data = generateExpenseReport();
     } else if (type === 'profitloss') {
       data = generateProfitLossReport();
+    } else if (type === 'topcustomers') {
+      data = generateTopCustomersReport();
+    } else if (type === 'customersummary') {
+      data = generateCustomerSalesSummaryReport();
+    } else if (type === 'customerrevenue') {
+      data = generateCustomerRevenueReport();
+    } else if (type === 'productmix') {
+      data = generateProductMixReport();
     }
     setReportData(data);
     setReportType(type);
@@ -1747,6 +1914,72 @@ export default function NorthernWaterSystemApp() {
           <p style="font-size:11px;color:#666;margin-top:10px;">COGS is based on cartons sold × cost per carton (raw materials only). Casual labour is an operating expense, not part of COGS. Raw material purchases are not counted again as operating expenses.</p>
         </div>
       `;
+    } else if (reportType === 'topcustomers') {
+      let rows = '';
+      reportData.rows.forEach((r, i) => {
+        rows += `<tr><td>${i + 1}</td><td>${escapeHtml(r.name)}<br/><span style="color:#666;font-size:11px;">${escapeHtml(r.location)}</span></td><td>KES ${r.invoiced.toLocaleString()}</td><td>KES ${r.paid.toLocaleString()}</td><td>KES ${r.outstanding.toLocaleString()}</td><td>${r.invoices}</td><td>${r.pct.toFixed(1)}%</td></tr>`;
+      });
+      htmlContent += `
+        <div class="section">
+          <div class="summary">Period: ${reportData.period} · Total Invoiced: KES ${reportData.totalInvoiced.toLocaleString()}</div>
+          <table>
+            <tr><th>#</th><th>Customer</th><th>Invoiced</th><th>Paid</th><th>Outstanding</th><th>Invoices</th><th>Share</th></tr>
+            ${rows || '<tr><td colspan="7">No sales in this period</td></tr>'}
+          </table>
+          <p style="font-size:11px;color:#666;">Ranked by invoiced revenue.</p>
+        </div>
+      `;
+    } else if (reportType === 'customersummary') {
+      let rows = '';
+      reportData.rows.forEach(r => {
+        rows += `<tr><td>${escapeHtml(r.name)}<br/><span style="color:#666;font-size:11px;">${escapeHtml(r.location)} · ${r.invoices} inv.</span></td><td>KES ${r.invoiced.toLocaleString()}</td><td>KES ${r.paid.toLocaleString()}</td><td>KES ${r.outstanding.toLocaleString()}</td><td>${escapeHtml(r.lastPurchase)}</td></tr>`;
+      });
+      htmlContent += `
+        <div class="section">
+          <div class="summary">Period: ${reportData.period}<br/>Invoiced: KES ${reportData.totalInvoiced.toLocaleString()} · Paid: KES ${reportData.totalPaid.toLocaleString()} · Outstanding: KES ${reportData.totalOutstanding.toLocaleString()}</div>
+          <table>
+            <tr><th>Customer</th><th>Invoiced</th><th>Paid</th><th>Outstanding</th><th>Last purchase</th></tr>
+            ${rows || '<tr><td colspan="5">No customer activity</td></tr>'}
+          </table>
+        </div>
+      `;
+    } else if (reportType === 'customerrevenue') {
+      if (reportData.noCustomer) {
+        htmlContent += `<div class="section"><p>No customer selected.</p></div>`;
+      } else {
+        let rows = '';
+        reportData.months.forEach(m => {
+          rows += `<tr><td>${escapeHtml(monthLabel(m.month))}</td><td>${m.invoices}</td><td>KES ${m.revenue.toLocaleString()}</td></tr>`;
+        });
+        htmlContent += `
+          <div class="section">
+            <div class="summary">${escapeHtml(reportData.customerName)} · ${escapeHtml(reportData.customerLocation)}<br/>Period: ${reportData.period} · Total Revenue: KES ${reportData.totalRevenue.toLocaleString()}</div>
+            <table>
+              <tr><th>Month</th><th>Invoices</th><th>Revenue</th></tr>
+              ${rows || '<tr><td colspan="3">No sales in the selected period</td></tr>'}
+            </table>
+          </div>
+        `;
+      }
+    } else if (reportType === 'productmix') {
+      if (reportData.noCustomer) {
+        htmlContent += `<div class="section"><p>No customer selected.</p></div>`;
+      } else {
+        let rows = '';
+        reportData.rows.forEach(r => {
+          const share = reportData.totalRevenue > 0 ? ((r.revenue / reportData.totalRevenue) * 100).toFixed(1) : '0.0';
+          rows += `<tr><td>${escapeHtml(r.label)}</td><td>${r.quantity.toLocaleString()} ${r.isRefill ? 'btls' : 'ctns'}</td><td>KES ${r.revenue.toLocaleString()}</td><td>${share}%</td></tr>`;
+        });
+        htmlContent += `
+          <div class="section">
+            <div class="summary">${escapeHtml(reportData.customerName)} · ${escapeHtml(reportData.customerLocation)}<br/>Period: ${reportData.period} · Total Revenue: KES ${reportData.totalRevenue.toLocaleString()}</div>
+            <table>
+              <tr><th>Product</th><th>Quantity</th><th>Revenue</th><th>Share</th></tr>
+              ${rows || '<tr><td colspan="4">No purchases in the selected period</td></tr>'}
+            </table>
+          </div>
+        `;
+      }
     }
 
     htmlContent += `
@@ -3577,6 +3810,10 @@ export default function NorthernWaterSystemApp() {
                 { id: 'cash', label: 'Cash Collected', icon: '💵' },
                 { id: 'expense', label: 'Expenses', icon: '💰' },
                 { id: 'profitloss', label: 'P&L', icon: '📉' },
+                { id: 'topcustomers', label: 'Top Customers', icon: '🏆' },
+                { id: 'customersummary', label: 'Customer Summary', icon: '👥' },
+                { id: 'customerrevenue', label: 'Customer Trend', icon: '📅' },
+                { id: 'productmix', label: 'Product Mix', icon: '🧴' },
               ].map(report => (
                 <button
                   key={report.id}
@@ -3617,8 +3854,30 @@ export default function NorthernWaterSystemApp() {
               </div>
             )}
 
+            {/* Customer picker — the per-customer reports only */}
+            {(reportType === 'customerrevenue' || reportType === 'productmix') && (
+              <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-3 md:p-4">
+                <label className="text-slate-500 text-xs md:text-sm block mb-1 md:mb-2">Customer</label>
+                <select
+                  value={reportCustomerId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setReportCustomerId(id);
+                    setReportData(reportType === 'customerrevenue' ? generateCustomerRevenueReport(id) : generateProductMixReport(id));
+                  }}
+                  className="w-full md:w-64 bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-2 md:px-4 py-1 md:py-2 text-sm"
+                >
+                  <option value="">Select a customer…</option>
+                  {state.customers.slice().sort((a, b) => a.name.localeCompare(b.name)).map(c => (
+                    <option key={c.id} value={c.id}>{c.name}{c.location ? ` · ${c.location}` : ''}</option>
+                  ))}
+                </select>
+                <p className="text-slate-500 text-xs mt-2">Pick a customer to see their {reportType === 'customerrevenue' ? 'revenue by month' : 'product mix'}. Set a date range below to narrow the period.</p>
+              </div>
+            )}
+
             {/* Date Range — applies to all event-based reports */}
-            {(reportType === 'sales' || reportType === 'cash' || reportType === 'expense' || reportType === 'profitloss') && (
+            {(reportType === 'sales' || reportType === 'cash' || reportType === 'expense' || reportType === 'profitloss' || reportType === 'topcustomers' || reportType === 'customersummary' || reportType === 'customerrevenue' || reportType === 'productmix') && (
               <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-3 md:p-4">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
                   <div>
@@ -3649,14 +3908,18 @@ export default function NorthernWaterSystemApp() {
                     <button
                       onClick={() => { setDateRange({ start: '', end: '' }); setTimeout(() => handleGenerateReport(reportType), 0); }}
                       className="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-2 md:px-3 py-1 md:py-2 rounded-lg transition text-xs"
-                      title="Clear dates (show current month)"
+                      title="Clear dates"
                     >
-                      This Month
+                      {['customersummary', 'customerrevenue', 'productmix'].includes(reportType) ? 'All Time' : 'This Month'}
                     </button>
                   </div>
                 </div>
                 <p className="text-slate-500 text-xs mt-2">
-                  {dateRange.start && dateRange.end ? `Showing: ${dateRange.start} to ${dateRange.end}` : `Showing: This Month (${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}) — set dates for another period`}
+                  {dateRange.start && dateRange.end
+                    ? `Showing: ${dateRange.start} to ${dateRange.end}`
+                    : ['customersummary', 'customerrevenue', 'productmix'].includes(reportType)
+                      ? 'Showing: All time — set dates for a specific period'
+                      : `Showing: This Month (${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}) — set dates for another period`}
                 </p>
               </div>
             )}
@@ -3998,6 +4261,181 @@ export default function NorthernWaterSystemApp() {
                     </div>
 
                     <p className="text-slate-500 text-xs">Note: COGS is based on cartons sold × cost per carton (raw materials only). Casual labour is an operating expense, not part of COGS. Raw material purchases are not counted again as operating expenses.</p>
+                  </div>
+                )}
+
+                {/* Top Customers Report */}
+                {reportType === 'topcustomers' && (
+                  <div className="space-y-3 md:space-y-4">
+                    <p className="text-slate-500 text-xs">Period: {reportData.period} · Ranked by invoiced revenue</p>
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 md:p-4 flex justify-between items-center">
+                      <span className="text-emerald-600 text-sm font-semibold">Total Invoiced</span>
+                      <span className="text-slate-900 font-bold">KES {reportData.totalInvoiced.toLocaleString()}</span>
+                    </div>
+                    {reportData.rows.length === 0 ? (
+                      <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No sales in this period</p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-left text-slate-500 border-b border-slate-200">
+                              <th className="py-2 pr-2">#</th>
+                              <th className="py-2 pr-2">Customer</th>
+                              <th className="py-2 pr-2 text-right">Invoiced</th>
+                              <th className="py-2 pr-2 text-right">Paid</th>
+                              <th className="py-2 pr-2 text-right">Outstanding</th>
+                              <th className="py-2 pr-2 text-right">Inv.</th>
+                              <th className="py-2 text-right">Share</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {reportData.rows.map((r, i) => (
+                              <tr key={i} className="border-b border-slate-100">
+                                <td className="py-2 pr-2 text-slate-400">{i + 1}</td>
+                                <td className="py-2 pr-2">
+                                  <p className="text-slate-900">{r.name}</p>
+                                  <p className="text-slate-400 text-xs">{r.location}</p>
+                                </td>
+                                <td className="py-2 pr-2 text-right text-slate-900 font-semibold">KES {r.invoiced.toLocaleString()}</td>
+                                <td className="py-2 pr-2 text-right text-emerald-600">KES {r.paid.toLocaleString()}</td>
+                                <td className="py-2 pr-2 text-right text-rose-600">KES {r.outstanding.toLocaleString()}</td>
+                                <td className="py-2 pr-2 text-right text-slate-600">{r.invoices}</td>
+                                <td className="py-2 text-right text-slate-600">{r.pct.toFixed(1)}%</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Customer Sales Summary Report */}
+                {reportType === 'customersummary' && (
+                  <div className="space-y-3 md:space-y-4">
+                    <p className="text-slate-500 text-xs">Period: {reportData.period}</p>
+                    <div className="grid grid-cols-3 gap-2 md:gap-3">
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                        <p className="text-emerald-600 text-xs">Invoiced</p>
+                        <p className="text-slate-900 font-bold text-sm md:text-base">KES {reportData.totalInvoiced.toLocaleString()}</p>
+                      </div>
+                      <div className="bg-sky-50 border border-sky-200 rounded-lg p-3">
+                        <p className="text-sky-600 text-xs">Paid</p>
+                        <p className="text-slate-900 font-bold text-sm md:text-base">KES {reportData.totalPaid.toLocaleString()}</p>
+                      </div>
+                      <div className="bg-rose-50 border border-rose-200 rounded-lg p-3">
+                        <p className="text-rose-600 text-xs">Outstanding</p>
+                        <p className="text-slate-900 font-bold text-sm md:text-base">KES {reportData.totalOutstanding.toLocaleString()}</p>
+                      </div>
+                    </div>
+                    {reportData.rows.length === 0 ? (
+                      <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No customer activity</p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-left text-slate-500 border-b border-slate-200">
+                              <th className="py-2 pr-2">Customer</th>
+                              <th className="py-2 pr-2 text-right">Invoiced</th>
+                              <th className="py-2 pr-2 text-right">Paid</th>
+                              <th className="py-2 pr-2 text-right">Outstanding</th>
+                              <th className="py-2 text-right">Last purchase</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {reportData.rows.map((r, i) => (
+                              <tr key={i} className="border-b border-slate-100">
+                                <td className="py-2 pr-2">
+                                  <p className="text-slate-900">{r.name}</p>
+                                  <p className="text-slate-400 text-xs">{r.location} · {r.invoices} inv.</p>
+                                </td>
+                                <td className="py-2 pr-2 text-right text-slate-900">KES {r.invoiced.toLocaleString()}</td>
+                                <td className="py-2 pr-2 text-right text-emerald-600">KES {r.paid.toLocaleString()}</td>
+                                <td className="py-2 pr-2 text-right text-rose-600">KES {r.outstanding.toLocaleString()}</td>
+                                <td className="py-2 text-right text-slate-600">{r.lastPurchase}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Customer Revenue Over Time Report */}
+                {reportType === 'customerrevenue' && (
+                  <div className="space-y-3 md:space-y-4">
+                    {reportData.noCustomer ? (
+                      <p className="text-slate-500 text-center py-4 md:py-8 text-sm">Select a customer above to see their revenue by month.</p>
+                    ) : (
+                      <>
+                        <p className="text-slate-500 text-xs">{reportData.customerName} · {reportData.customerLocation} · Period: {reportData.period}</p>
+                        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 md:p-4 flex justify-between items-center">
+                          <span className="text-emerald-600 text-sm font-semibold">Total Revenue</span>
+                          <span className="text-slate-900 font-bold">KES {reportData.totalRevenue.toLocaleString()}</span>
+                        </div>
+                        {reportData.months.length === 0 ? (
+                          <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No sales for this customer in the selected period</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {reportData.months.map(m => (
+                              <div key={m.month}>
+                                <div className="flex justify-between text-sm mb-1">
+                                  <span className="text-slate-600">{monthLabel(m.month)} · {m.invoices} inv.</span>
+                                  <span className="text-slate-900 font-semibold">KES {m.revenue.toLocaleString()}</span>
+                                </div>
+                                <div className="h-2 bg-slate-100 rounded">
+                                  <div className="h-2 bg-emerald-400 rounded" style={{ width: `${reportData.maxRevenue > 0 ? (m.revenue / reportData.maxRevenue) * 100 : 0}%` }} />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Product Mix by Customer Report */}
+                {reportType === 'productmix' && (
+                  <div className="space-y-3 md:space-y-4">
+                    {reportData.noCustomer ? (
+                      <p className="text-slate-500 text-center py-4 md:py-8 text-sm">Select a customer above to see their product mix.</p>
+                    ) : (
+                      <>
+                        <p className="text-slate-500 text-xs">{reportData.customerName} · {reportData.customerLocation} · Period: {reportData.period}</p>
+                        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 md:p-4 flex justify-between items-center">
+                          <span className="text-emerald-600 text-sm font-semibold">Total Revenue</span>
+                          <span className="text-slate-900 font-bold">KES {reportData.totalRevenue.toLocaleString()}</span>
+                        </div>
+                        {reportData.rows.length === 0 ? (
+                          <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No purchases for this customer in the selected period</p>
+                        ) : (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="text-left text-slate-500 border-b border-slate-200">
+                                  <th className="py-2 pr-2">Product</th>
+                                  <th className="py-2 pr-2 text-right">Quantity</th>
+                                  <th className="py-2 pr-2 text-right">Revenue</th>
+                                  <th className="py-2 text-right">Share</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {reportData.rows.map((r, i) => (
+                                  <tr key={i} className="border-b border-slate-100">
+                                    <td className="py-2 pr-2 text-slate-900">{r.label}</td>
+                                    <td className="py-2 pr-2 text-right text-slate-600">{r.quantity.toLocaleString()} {r.isRefill ? 'btls' : 'ctns'}</td>
+                                    <td className="py-2 pr-2 text-right text-slate-900 font-semibold">KES {r.revenue.toLocaleString()}</td>
+                                    <td className="py-2 text-right text-slate-600">{reportData.totalRevenue > 0 ? ((r.revenue / reportData.totalRevenue) * 100).toFixed(1) : '0.0'}%</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </>
+                    )}
                   </div>
                 )}
               </div>
