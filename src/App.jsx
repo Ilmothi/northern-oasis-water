@@ -160,6 +160,9 @@ const initialState = {
   productionLogs: [],
   purchases: [],
   expenses: [],
+  // Append-only ledger of stock moved between the plant and consignment shops.
+  // Stock on hand at a shop is derived by summing this (see getConsignmentOnHand).
+  consignmentMovements: [],
 
   locations: ['Loglogo', 'Marsabit', 'Laisamis', 'Korr', 'Merille'],
 
@@ -516,15 +519,18 @@ export default function NorthernWaterSystemApp() {
         const [
           { data: expensesData },
           { data: purchasesData },
+          { data: consignmentData },
         ] = await Promise.all([
           supabase.from('expenses').select('*'),
           supabase.from('purchases').select('*'),
+          supabase.from('consignment_movements').select('*'),
         ]);
 
         setState(prev => ({
           ...prev,
           ...(expensesData && { expenses: expensesData }),
           ...(purchasesData && { purchases: purchasesData }),
+          ...(consignmentData && { consignmentMovements: consignmentData }),
         }));
       }
 
@@ -2488,6 +2494,15 @@ export default function NorthernWaterSystemApp() {
     const sale = state.sales.find(s => s.id === id);
     if (!sale) return;
 
+    // Consignment sales must not be deleted through this flow: their stock was
+    // deducted at DELIVERY, not at the sale, so the normal reversal below would
+    // add cartons back that were never taken here — silently inflating stock.
+    // (Reconciliation credit notes are also consignment-linked.)
+    if (state.consignmentMovements.some(m => m.sale_id === id)) {
+      alert('This sale is linked to consignment stock and cannot be deleted here — deleting it would corrupt the consignment stock and finished-goods counts. Handle it from the Consignment view instead (record a return or an opposing entry).');
+      return;
+    }
+
     const linkedPayments = state.payments.filter(p => p.saleId === id);
     let confirmMsg = `Delete sale ${sale.invoiceNumber}? This will return the stock to inventory`;
     if (sale.paid > 0 || linkedPayments.length > 0) {
@@ -2777,6 +2792,305 @@ export default function NorthernWaterSystemApp() {
     if (custError) console.error('❌ Error updating customer balance after sale:', custError);
 
     setShowModal(false);
+  };
+
+  // ===== CONSIGNMENT =====
+  // Consignment shops hold OUR finished-goods stock. Delivering to a shop is a
+  // TRANSFER, not a sale — no revenue and no debt until the shop reports what it
+  // actually sold. Money always lives in `sales`; this ledger tracks stock only.
+  // See migration 008_consignment.sql.
+
+  const consignees = () => state.customers.filter(c => c.is_consignee);
+
+  // Cartons a shop currently holds, per size, derived from the movement ledger.
+  const getConsignmentOnHand = (shopId) => {
+    const onHand = {};
+    state.consignmentMovements
+      .filter(m => m.shop_id === shopId)
+      .forEach(m => {
+        const sign = (m.type === 'deliver' || m.type === 'reconcile') ? 1 : -1;
+        onHand[m.size] = (onHand[m.size] || 0) + sign * Number(m.quantity);
+      });
+    return onHand;
+  };
+
+  const openConsignment = (action, shopId) => {
+    const sizes = Object.keys(state.finishedGoods);
+    const lines = {}; const prices = {};
+    sizes.forEach(s => { lines[s] = ''; prices[s] = ''; });
+    setModalType('consignment');
+    setFormData({
+      consignAction: action,
+      shopId: shopId ? String(shopId) : '',
+      date: localDateString(),
+      lines, prices, amountPaid: '', method: 'cash', note: ''
+    });
+    setShowModal(true);
+  };
+
+  // Parse the per-size line inputs into [{ size, quantity, price }] (qty > 0 only).
+  const consignmentLines = () =>
+    Object.entries(formData.lines || {})
+      .map(([size, q]) => ({
+        size,
+        quantity: parseFloat(q) || 0,
+        price: parseFloat((formData.prices || {})[size]) || 0,
+      }))
+      .filter(l => l.quantity > 0);
+
+  // Deliver stock to a shop: plant finished goods DOWN, shop consignment UP. No money.
+  const handleConsignDeliver = async () => {
+    const shopId = parseInt(formData.shopId);
+    if (!shopId) { alert('Select a consignment shop'); return; }
+    const lines = consignmentLines();
+    if (lines.length === 0) { alert('Enter at least one quantity to deliver'); return; }
+
+    for (const l of lines) {
+      const avail = state.finishedGoods[l.size]?.quantity ?? 0;
+      if (l.quantity > avail) {
+        alert(`Not enough ${SIZE_LABELS[l.size] || l.size} in the plant — have ${avail}, trying to send ${l.quantity}.`);
+        return;
+      }
+    }
+
+    const rows = lines.map(l => ({
+      shop_id: shopId,
+      date: formData.date || localDateString(),
+      type: 'deliver',
+      size: l.size,
+      quantity: l.quantity,
+      note: formData.note || null,
+      created_by: session?.user?.id || null,
+    }));
+
+    // Persist the ledger FIRST — only move stock once the DB accepts the rows.
+    const { data: saved, error } = await supabase.from('consignment_movements').insert(rows).select();
+    if (error || !saved) {
+      console.error('❌ Error saving consignment delivery:', error);
+      alert('Could not record this delivery — nothing was changed. Please try again.\n\n' + (error?.message || 'Unknown error'));
+      return;
+    }
+
+    const updatedFG = JSON.parse(JSON.stringify(state.finishedGoods));
+    lines.forEach(l => { if (updatedFG[l.size]) updatedFG[l.size].quantity -= l.quantity; });
+
+    setState({
+      ...state,
+      finishedGoods: updatedFG, // auto-persists via the inventory effect
+      consignmentMovements: [...state.consignmentMovements, ...saved],
+    });
+    setShowModal(false);
+  };
+
+  // Take stock back from a shop: shop consignment DOWN, plant finished goods UP. No money.
+  const handleConsignReturn = async () => {
+    const shopId = parseInt(formData.shopId);
+    if (!shopId) { alert('Select a consignment shop'); return; }
+    const lines = consignmentLines();
+    if (lines.length === 0) { alert('Enter at least one quantity to take back'); return; }
+
+    const onHand = getConsignmentOnHand(shopId);
+    for (const l of lines) {
+      if (l.quantity > (onHand[l.size] || 0)) {
+        alert(`${SIZE_LABELS[l.size] || l.size}: the shop holds only ${onHand[l.size] || 0}, cannot take back ${l.quantity}.`);
+        return;
+      }
+    }
+
+    const rows = lines.map(l => ({
+      shop_id: shopId,
+      date: formData.date || localDateString(),
+      type: 'return',
+      size: l.size,
+      quantity: l.quantity,
+      note: formData.note || null,
+      created_by: session?.user?.id || null,
+    }));
+
+    const { data: saved, error } = await supabase.from('consignment_movements').insert(rows).select();
+    if (error || !saved) {
+      console.error('❌ Error saving consignment return:', error);
+      alert('Could not record this take-back — nothing was changed. Please try again.\n\n' + (error?.message || 'Unknown error'));
+      return;
+    }
+
+    const updatedFG = JSON.parse(JSON.stringify(state.finishedGoods));
+    lines.forEach(l => { if (updatedFG[l.size]) updatedFG[l.size].quantity += l.quantity; });
+
+    setState({
+      ...state,
+      finishedGoods: updatedFG,
+      consignmentMovements: [...state.consignmentMovements, ...saved],
+    });
+    setShowModal(false);
+  };
+
+  // Shop reports what it sold: creates a REAL sale (revenue + debt) and draws the
+  // stock down from consignment. Finished goods are NOT touched — already deducted
+  // at delivery. This is where money is finally recognised.
+  const handleConsignReportSold = async () => {
+    const shopId = parseInt(formData.shopId);
+    if (!shopId) { alert('Select a consignment shop'); return; }
+    const lines = consignmentLines();
+    if (lines.length === 0) { alert('Enter the quantities the shop sold'); return; }
+    if (lines.some(l => l.price <= 0)) { alert('Enter a unit price for every size sold'); return; }
+
+    const onHand = getConsignmentOnHand(shopId);
+    for (const l of lines) {
+      if (l.quantity > (onHand[l.size] || 0)) {
+        alert(`${SIZE_LABELS[l.size] || l.size}: the shop holds only ${onHand[l.size] || 0}, cannot report ${l.quantity} sold.`);
+        return;
+      }
+    }
+
+    const items = lines.map(l => ({ size: l.size, quantity: l.quantity, price: l.price }));
+    const total = items.reduce((s, i) => s + i.quantity * i.price, 0);
+    const amountPaid = formData.amountPaid === '' || formData.amountPaid == null ? 0 : (parseFloat(formData.amountPaid) || 0);
+    if (amountPaid < 0 || amountPaid > total) {
+      alert(`Amount paid must be between 0 and the total of KES ${total.toLocaleString()}`);
+      return;
+    }
+
+    const date = formData.date || localDateString();
+    const newSale = {
+      customerId: shopId,
+      date,
+      items,
+      total,
+      paid: amountPaid,
+      status: amountPaid >= total ? 'paid' : amountPaid > 0 ? 'partial' : 'pending',
+      method: amountPaid > 0 ? (formData.method || 'cash') : null,
+      created_by: session?.user?.id || null,
+    };
+
+    // Sale first — the consignment 'sold' rows reference its id.
+    const { data: savedSale, error: saleError } = await supabase.from('sales').insert([newSale]).select().single();
+    if (saleError || !savedSale) {
+      console.error('❌ Error saving consignment sale:', saleError);
+      alert('Could not record this sale — nothing was changed. Please try again.\n\n' + (saleError?.message || 'Unknown error'));
+      return;
+    }
+
+    const rows = lines.map(l => ({
+      shop_id: shopId,
+      date,
+      type: 'sold',
+      size: l.size,
+      quantity: l.quantity,
+      unit_price: l.price,
+      sale_id: savedSale.id,
+      created_by: session?.user?.id || null,
+    }));
+    const { data: savedMoves, error: moveError } = await supabase.from('consignment_movements').insert(rows).select();
+    if (moveError) {
+      // The sale saved but the stock ledger did not. The books are correct;
+      // the shop's stock will read high until this is fixed. Warn, don't hide it.
+      console.error('❌ Consignment sale saved but ledger update failed:', moveError);
+      alert('The sale was recorded, but the shop\'s consignment stock could NOT be updated. Ask the admin to reconcile this shop\'s stock.\n\n' + (moveError.message || 'Unknown error'));
+    }
+
+    const debtAmount = total - amountPaid;
+    const updatedCustomers = state.customers.map(c => c.id === shopId ? { ...c, balance: c.balance - debtAmount } : c);
+
+    setState({
+      ...state,
+      sales: [...state.sales, savedSale],
+      consignmentMovements: savedMoves ? [...state.consignmentMovements, ...savedMoves] : state.consignmentMovements,
+      customers: updatedCustomers,
+    });
+
+    const { error: custError } = await supabase.from('customers')
+      .update({ balance: updatedCustomers.find(c => c.id === shopId).balance }).eq('id', shopId);
+    if (custError) console.error('❌ Error updating shop balance after consignment sale:', custError);
+
+    setShowModal(false);
+  };
+
+  // Cutover reconciliation (admin): enter the stock a shop is PHYSICALLY holding
+  // that was previously (wrongly) booked as a credit sale. Seeds that as
+  // consignment stock and posts a credit-note sale (negative total + negative
+  // quantities) that reverses the over-recognised revenue AND cost of goods, and
+  // lifts the same value off the shop's debt.
+  const handleConsignReconcile = async () => {
+    const shopId = parseInt(formData.shopId);
+    if (!shopId) { alert('Select a consignment shop'); return; }
+    const lines = consignmentLines();
+    if (lines.length === 0) { alert('Enter the stock the shop is physically holding'); return; }
+    if (lines.some(l => l.price <= 0)) { alert('Enter the unit price each size was originally invoiced at'); return; }
+
+    const value = lines.reduce((s, l) => s + l.quantity * l.price, 0);
+    const cartons = lines.reduce((s, l) => s + l.quantity, 0);
+    const shop = state.customers.find(c => c.id === shopId);
+    if (!confirm(
+      `Reconcile ${shop?.name || 'shop'}:\n\n` +
+      `• Seed ${cartons} carton(s) as consignment stock they still hold.\n` +
+      `• Reverse KES ${value.toLocaleString()} of previously-booked revenue.\n` +
+      `• Reduce their debt by KES ${value.toLocaleString()}.\n\n` +
+      `A credit-note sale is created for the audit trail. Continue?`
+    )) return;
+
+    const date = formData.date || localDateString();
+    // Negative total reverses revenue; negative-quantity items reverse the COGS
+    // that was recognised on the original sale. status 'paid' (0 >= negative total).
+    const creditNote = {
+      customerId: shopId,
+      date,
+      items: lines.map(l => ({ size: l.size, quantity: -l.quantity, price: l.price })),
+      total: -value,
+      paid: 0,
+      status: 'paid',
+      method: null,
+      created_by: session?.user?.id || null,
+    };
+    const { data: savedSale, error: saleError } = await supabase.from('sales').insert([creditNote]).select().single();
+    if (saleError || !savedSale) {
+      console.error('❌ Error saving reconciliation credit note:', saleError);
+      alert('Could not record the reconciliation — nothing was changed. Please try again.\n\n' + (saleError?.message || 'Unknown error'));
+      return;
+    }
+
+    const rows = lines.map(l => ({
+      shop_id: shopId,
+      date,
+      type: 'reconcile',
+      size: l.size,
+      quantity: l.quantity,
+      unit_price: l.price,
+      sale_id: savedSale.id,
+      note: 'Cutover reconciliation',
+      created_by: session?.user?.id || null,
+    }));
+    const { data: savedMoves, error: moveError } = await supabase.from('consignment_movements').insert(rows).select();
+    if (moveError) {
+      console.error('❌ Reconciliation credit note saved but ledger seeding failed:', moveError);
+      alert('The credit note was recorded, but seeding the shop\'s stock failed. Please retry seeding via a delivery entry.\n\n' + (moveError.message || 'Unknown error'));
+    }
+
+    // Reduce debt: balance -= (total - paid) = balance -= (-value) = balance + value.
+    const updatedCustomers = state.customers.map(c => c.id === shopId ? { ...c, balance: c.balance - (creditNote.total - 0) } : c);
+
+    setState({
+      ...state,
+      sales: [...state.sales, savedSale],
+      consignmentMovements: savedMoves ? [...state.consignmentMovements, ...savedMoves] : state.consignmentMovements,
+      customers: updatedCustomers,
+    });
+
+    const { error: custError } = await supabase.from('customers')
+      .update({ balance: updatedCustomers.find(c => c.id === shopId).balance }).eq('id', shopId);
+    if (custError) console.error('❌ Error updating shop balance after reconciliation:', custError);
+
+    setShowModal(false);
+  };
+
+  const handleSaveConsignment = () => {
+    switch (formData.consignAction) {
+      case 'deliver': return handleConsignDeliver();
+      case 'return': return handleConsignReturn();
+      case 'sold': return handleConsignReportSold();
+      case 'reconcile': return handleConsignReconcile();
+      default: return;
+    }
   };
 
   // Add Payment
@@ -3334,6 +3648,7 @@ export default function NorthernWaterSystemApp() {
             { id: 'inventory', label: 'Raw Stock', roles: ['admin', 'manager', 'sales'] },
             { id: 'production', label: 'Production', roles: ['admin', 'manager', 'sales'] },
             { id: 'purchases', label: 'Purchases', roles: ['admin', 'manager'] },
+            { id: 'consignment', label: 'Consignment', roles: ['admin', 'manager'] },
             { id: 'costsettings', label: 'Cost Settings', roles: ['admin'] },
             { id: 'adjust', label: 'Stock Adjustments', roles: ['admin'] },
           ]},
@@ -3791,6 +4106,98 @@ export default function NorthernWaterSystemApp() {
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Consignment Tab */}
+        {activeTab === 'consignment' && (role === 'admin' || role === 'manager') && (
+          <div className="space-y-4 md:space-y-6">
+            <div>
+              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Consignment Shops</h2>
+              <p className="text-slate-500 text-sm mt-1">
+                Shops that hold our stock and pay after selling. Delivering stock is a transfer — no sale or debt is
+                recorded until you use <span className="font-medium">Report Sold</span>.
+              </p>
+            </div>
+
+            {consignees().length === 0 ? (
+              <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-6 text-center">
+                <p className="text-slate-500 text-sm">
+                  No consignment shops yet. Go to <span className="font-medium">Customers</span>, add or edit a shop, and
+                  tick <span className="font-medium">“Consignment shop”</span>.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-6">
+                {consignees().map(shop => {
+                  const onHand = getConsignmentOnHand(shop.id);
+                  const sizes = Object.keys(state.finishedGoods).filter(s => (onHand[s] || 0) !== 0);
+                  const totalCartons = Object.values(onHand).reduce((a, b) => a + b, 0);
+                  const debt = shop.balance < 0 ? Math.abs(shop.balance) : 0;
+                  return (
+                    <div key={shop.id} className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+                      <div className="flex justify-between items-start gap-2">
+                        <div>
+                          <h3 className="text-slate-900 font-semibold text-sm md:text-base">{shop.name}</h3>
+                          <p className="text-slate-500 text-xs">{shop.location}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs text-slate-500">Owes</p>
+                          <p className={`font-bold text-sm md:text-base ${debt > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
+                            KES {debt.toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 md:mt-4">
+                        <p className="text-slate-500 text-xs mb-2">Stock on hand ({totalCartons} cartons)</p>
+                        {sizes.length === 0 ? (
+                          <p className="text-slate-400 text-xs italic">None on consignment right now.</p>
+                        ) : (
+                          <div className="grid grid-cols-2 gap-2">
+                            {sizes.map(s => (
+                              <div key={s} className="flex justify-between items-center p-2 bg-slate-50 rounded-lg text-xs">
+                                <span className="text-slate-500">{SIZE_LABELS[s] || s}</span>
+                                <span className="text-slate-900 font-semibold">{onHand[s]}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 mt-4">
+                        <button
+                          onClick={() => openConsignment('deliver', shop.id)}
+                          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-sky-500 hover:bg-sky-600 text-white transition"
+                        >
+                          Deliver
+                        </button>
+                        <button
+                          onClick={() => openConsignment('sold', shop.id)}
+                          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white transition"
+                        >
+                          Report Sold
+                        </button>
+                        <button
+                          onClick={() => openConsignment('return', shop.id)}
+                          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition"
+                        >
+                          Take Back
+                        </button>
+                        {role === 'admin' && (
+                          <button
+                            onClick={() => openConsignment('reconcile', shop.id)}
+                            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 transition"
+                          >
+                            Reconcile
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -5860,6 +6267,10 @@ export default function NorthernWaterSystemApp() {
                 {modalType === 'expense' && (editingExpense ? 'Edit Expense' : 'New Expense')}
                 {modalType === 'customer' && (editingCustomer ? 'Edit' : 'New Customer')}
                 {modalType === 'adjust' && 'Adjust Stock'}
+                {modalType === 'consignment' && formData.consignAction === 'deliver' && 'Deliver to Shop'}
+                {modalType === 'consignment' && formData.consignAction === 'sold' && 'Report Stock Sold'}
+                {modalType === 'consignment' && formData.consignAction === 'return' && 'Take Stock Back'}
+                {modalType === 'consignment' && formData.consignAction === 'reconcile' && 'Reconcile Shop Stock'}
                 {modalType === 'employee' && (editingEmployee ? 'Edit Employee' : 'New Employee')}
               </h3>
               <button onClick={() => setShowModal(false)} className="text-slate-500 hover:text-slate-900">
@@ -6496,6 +6907,18 @@ export default function NorthernWaterSystemApp() {
                       placeholder="0712345678"
                     />
                   </div>
+                  <label className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={!!formData.is_consignee}
+                      onChange={(e) => setFormData({ ...formData, is_consignee: e.target.checked })}
+                      className="mt-0.5"
+                    />
+                    <span className="text-xs md:text-sm text-slate-700">
+                      <span className="font-medium text-amber-700">Consignment shop</span> — holds our stock and pays after selling.
+                      Stock is moved via the Consignment view (not recorded as a sale on delivery).
+                    </span>
+                  </label>
                 </>
               )}
 
@@ -6533,6 +6956,125 @@ export default function NorthernWaterSystemApp() {
                   </div>
                 </>
               )}
+
+              {modalType === 'consignment' && (() => {
+                const action = formData.consignAction;
+                const shopId = parseInt(formData.shopId);
+                const onHand = shopId ? getConsignmentOnHand(shopId) : {};
+                const showPrice = action === 'sold' || action === 'reconcile';
+                const showAvail = action !== 'deliver'; // show shop's current stock
+                const blurb = {
+                  deliver: 'Move stock from the plant to this shop. No sale or debt is recorded.',
+                  sold: 'Record what the shop actually sold. This creates a sale (revenue + debt) and draws the stock down.',
+                  return: 'Bring stock back from the shop to the plant. No money changes.',
+                  reconcile: 'Seed stock the shop already holds and reverse the revenue/debt it was wrongly booked at.',
+                }[action];
+                const lineTotal = Object.entries(formData.lines || {}).reduce((sum, [size, q]) => {
+                  const qty = parseFloat(q) || 0;
+                  const price = parseFloat((formData.prices || {})[size]) || 0;
+                  return sum + (showPrice ? qty * price : 0);
+                }, 0);
+                return (
+                  <>
+                    <div className={`rounded-lg p-3 text-xs md:text-sm ${action === 'reconcile' ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-slate-50 text-slate-600'}`}>
+                      {blurb}
+                    </div>
+                    <div>
+                      <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Shop</label>
+                      <select
+                        value={formData.shopId || ''}
+                        onChange={(e) => setFormData({ ...formData, shopId: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                      >
+                        <option value="">Select shop...</option>
+                        {consignees().map(c => (
+                          <option key={c.id} value={c.id}>{c.name} — {c.location}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Date</label>
+                      <input
+                        type="date"
+                        value={formData.date || ''}
+                        onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex text-xs text-slate-500 font-medium px-1">
+                        <span className="flex-1">Size</span>
+                        {showAvail && <span className="w-16 text-right">Held</span>}
+                        <span className="w-20 text-right">Cartons</span>
+                        {showPrice && <span className="w-24 text-right">Unit price</span>}
+                      </div>
+                      {Object.keys(state.finishedGoods).map(size => (
+                        <div key={size} className="flex items-center gap-2">
+                          <span className="flex-1 text-slate-700 text-xs md:text-sm">{SIZE_LABELS[size] || size}</span>
+                          {showAvail && (
+                            <span className="w-16 text-right text-slate-400 text-xs">{onHand[size] || 0}</span>
+                          )}
+                          <input
+                            type="number"
+                            min="0"
+                            value={(formData.lines || {})[size] ?? ''}
+                            onChange={(e) => setFormData({ ...formData, lines: { ...formData.lines, [size]: e.target.value } })}
+                            className="w-20 bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-2 py-1.5 text-sm text-right"
+                            placeholder="0"
+                          />
+                          {showPrice && (
+                            <input
+                              type="number"
+                              min="0"
+                              value={(formData.prices || {})[size] ?? ''}
+                              onChange={(e) => setFormData({ ...formData, prices: { ...formData.prices, [size]: e.target.value } })}
+                              className="w-24 bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-2 py-1.5 text-sm text-right"
+                              placeholder="KES"
+                            />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    {showPrice && (
+                      <div className="flex justify-between items-center px-1 text-sm">
+                        <span className="text-slate-500">{action === 'reconcile' ? 'Debt to reverse' : 'Sale total'}</span>
+                        <span className="font-bold text-slate-900">KES {lineTotal.toLocaleString()}</span>
+                      </div>
+                    )}
+
+                    {action === 'sold' && (
+                      <>
+                        <div>
+                          <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Amount paid now (leave 0 if paying later)</label>
+                          <input
+                            type="number"
+                            min="0"
+                            value={formData.amountPaid ?? ''}
+                            onChange={(e) => setFormData({ ...formData, amountPaid: e.target.value })}
+                            className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                            placeholder="0"
+                          />
+                        </div>
+                        {parseFloat(formData.amountPaid) > 0 && (
+                          <div>
+                            <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Payment method</label>
+                            <select
+                              value={formData.method || 'cash'}
+                              onChange={(e) => setFormData({ ...formData, method: e.target.value })}
+                              className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                            >
+                              <option value="cash">Cash</option>
+                              <option value="mpesa">M-Pesa</option>
+                              <option value="bank">Bank</option>
+                            </select>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </>
+                );
+              })()}
 
               {modalType === 'employee' && (
                 <>
@@ -6610,6 +7152,7 @@ export default function NorthernWaterSystemApp() {
                   else if (modalType === 'expense') handleSaveExpense();
                   else if (modalType === 'customer') handleSaveCustomer();
                   else if (modalType === 'adjust') handleStockAdjustment();
+                  else if (modalType === 'consignment') handleSaveConsignment();
                   else if (modalType === 'employee') handleSaveEmployee();
                 }}
                 className="flex-1 px-3 md:px-4 py-2 bg-sky-500 hover:bg-sky-600 text-white font-medium rounded-lg transition flex items-center justify-center gap-2 text-sm"
