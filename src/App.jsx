@@ -466,27 +466,54 @@ export default function NorthernWaterSystemApp() {
     }
   }, [userProfile]);
 
-  // Persist inventory (raw materials + finished goods) to Supabase whenever
-  // it changes — but only after the initial load, so we don't overwrite the
-  // saved data with the hardcoded defaults before it's loaded.
-  const inventorySaveReady = useRef(false);
-  useEffect(() => {
-    if (!hasLoadedData.current) return; // wait until initial load done
-    if (!inventorySaveReady.current) {
-      // skip the very first run right after load
-      inventorySaveReady.current = true;
-      return;
+  // True once the login-time inventory fetch actually returned rows. If the
+  // fetch fails/returns empty the session keeps the hardcoded demo defaults —
+  // safe for DELTA writes (they touch the DB's own value, not the client's),
+  // but NOT for the absolute stock-count correction, which is gated on this.
+  const inventoryLoaded = useRef(false);
+
+  // ===== ATOMIC INVENTORY PERSISTENCE (see migration 009) =====
+  // Stock is no longer saved by overwriting the whole blob. Instead each change
+  // is sent as a set of DELTAS and applied server-side under a row lock, so
+  // concurrent writers and stale sessions can't clobber one another. The RPC
+  // returns the fresh authoritative blobs, which callers write back to state so
+  // the session re-syncs to DB truth after every stock change.
+
+  // Walk two versions of an inventory blob and emit one {id,path,delta} per
+  // numeric leaf that changed. bottlesPerCarton never moves, so it drops out
+  // naturally (delta 0). This reuses each caller's existing per-item math —
+  // the delta is exactly the change the user made, independent of DB state.
+  const diffInventoryLeaves = (id, prev, next, path, out) => {
+    Object.keys(next || {}).forEach(key => {
+      const nv = next[key];
+      const pv = prev ? prev[key] : undefined;
+      if (typeof nv === 'number') {
+        const delta = nv - (typeof pv === 'number' ? pv : 0);
+        if (delta !== 0) out.push({ id, path: [...path, key], delta });
+      } else if (nv && typeof nv === 'object') {
+        diffInventoryLeaves(id, pv, nv, [...path, key], out);
+      }
+    });
+  };
+
+  // Persist a stock change as deltas. Pass the pre-change and post-change blobs;
+  // returns the fresh { rawMaterials, finishedGoods } from the server, or null
+  // on error (caller decides how to surface it). A no-op change returns the
+  // current state unchanged without a round-trip.
+  const persistInventoryDeltas = async (prev, next) => {
+    const changes = [];
+    diffInventoryLeaves('rawMaterials', prev.rawMaterials, next.rawMaterials, [], changes);
+    diffInventoryLeaves('finishedGoods', prev.finishedGoods, next.finishedGoods, [], changes);
+    if (changes.length === 0) {
+      return { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods };
     }
-    const saveInventory = async () => {
-      // supabase returns errors rather than throwing — check the result.
-      const { error } = await supabase.from('inventory_state').upsert([
-        { id: 'rawMaterials', data: state.rawMaterials, updated_at: new Date().toISOString() },
-        { id: 'finishedGoods', data: state.finishedGoods, updated_at: new Date().toISOString() }
-      ]);
-      if (error) console.error('❌ Error saving inventory:', error);
-    };
-    saveInventory();
-  }, [state.rawMaterials, state.finishedGoods]);
+    const { data, error } = await supabase.rpc('apply_inventory_deltas', { changes });
+    if (error || !data) {
+      console.error('❌ Error applying inventory deltas:', error);
+      return null;
+    }
+    return { rawMaterials: data.rawMaterials, finishedGoods: data.finishedGoods };
+  };
 
   const loadDataFromSupabase = async (role) => {
     const isAdminOrManager = role === 'admin' || role === 'manager';
@@ -579,6 +606,8 @@ export default function NorthernWaterSystemApp() {
             rawMaterials: rm?.data ?? prev.rawMaterials,
             finishedGoods: fg?.data ?? prev.finishedGoods,
           }));
+          // Real stock is loaded — the absolute stock-count correction is now safe.
+          inventoryLoaded.current = true;
         }
       } catch {
         console.log('No saved inventory yet');
@@ -971,34 +1000,46 @@ export default function NorthernWaterSystemApp() {
       return;
     }
 
-    const updatedRaw = JSON.parse(JSON.stringify(state.rawMaterials));
-    const updatedFG = JSON.parse(JSON.stringify(state.finishedGoods));
+    // A stock-count correction writes an ABSOLUTE quantity. If real stock never
+    // loaded this session, the on-screen number is the demo default — writing an
+    // absolute value from here would overwrite real stock. Block it. (Deltas from
+    // sales/production stay safe because they touch the DB's own value, not this.)
+    if (!inventoryLoaded.current) {
+      alert('Inventory has not loaded this session, so a stock correction is not safe right now. Please reload the page and try again.');
+      return;
+    }
+
+    // Resolve the item to the JSONB blob id + path used by set_inventory_value,
+    // and read the current on-screen quantity for the audit record.
+    let invId = '';
+    let path = [];
     let oldQty = 0;
     let label = '';
 
     if (itemId.startsWith('rm:')) {
       const parts = itemId.split(':');
+      invId = 'rawMaterials';
       if (parts.length === 3) {
         const [, cat, key] = parts;
-        oldQty = updatedRaw[cat][key];
-        updatedRaw[cat][key] = qty;
+        path = [cat, key];
+        oldQty = state.rawMaterials[cat][key];
         label = `${cat} ${key}`;
       } else {
         const [, simpleKey] = parts;
-        oldQty = updatedRaw[simpleKey];
-        updatedRaw[simpleKey] = qty;
+        path = [simpleKey];
+        oldQty = state.rawMaterials[simpleKey];
         label = simpleKey;
       }
     } else if (itemId.startsWith('fg:')) {
       const size = itemId.replace('fg:', '');
-      oldQty = updatedFG[size].quantity;
-      updatedFG[size].quantity = qty;
+      invId = 'finishedGoods';
+      path = [size, 'quantity'];
+      oldQty = state.finishedGoods[size].quantity;
       label = `Finished Goods ${size}`;
     }
 
-    // Persist the audit-trail record FIRST; only apply the stock change (which
-    // auto-persists) once the log is confirmed, so no adjustment can happen
-    // without a record behind it.
+    // Persist the audit-trail record FIRST; only apply the stock change once the
+    // log is confirmed, so no adjustment can happen without a record behind it.
     const { error: logError } = await supabase.from('stock_adjustments').insert([{
       item: label,
       old_qty: oldQty,
@@ -1012,9 +1053,19 @@ export default function NorthernWaterSystemApp() {
       alert('Could not record this adjustment — stock was NOT changed. Please try again.\n\n' + (logError.message || 'Unknown error'));
       return;
     }
+
+    // Set the absolute quantity server-side and re-sync state from the result.
+    const { data, error: rpcError } = await supabase.rpc('set_inventory_value', {
+      p_id: invId, p_path: path, p_value: qty
+    });
+    if (rpcError || !data) {
+      console.error('❌ Error setting stock value:', rpcError);
+      alert('The adjustment was logged, but the stock quantity could not be updated. Please retry the adjustment.\n\n' + (rpcError?.message || 'Unknown error'));
+      return;
+    }
     console.log('✅ Stock adjustment saved');
 
-    setState({ ...state, rawMaterials: updatedRaw, finishedGoods: updatedFG });
+    setState({ ...state, rawMaterials: data.rawMaterials, finishedGoods: data.finishedGoods });
     setShowModal(false);
     alert(`Updated ${label}: ${oldQty} → ${qty}`);
   };
@@ -1029,8 +1080,8 @@ export default function NorthernWaterSystemApp() {
     const totalAmount = validItems.reduce((sum, i) => sum + i.total, 0);
 
     if (editingPurchase) {
-      // Persist the edit FIRST; only adjust raw materials (which auto-persist)
-      // once the update is confirmed.
+      // Persist the edit FIRST; only adjust raw materials (via the atomic delta
+      // RPC) once the update is confirmed.
       const { error: updateError } = await supabase.from('purchases').update({
         date: formData.date,
         supplier: formData.supplier,
@@ -1050,10 +1101,21 @@ export default function NorthernWaterSystemApp() {
       applyPurchaseItemsToRawMaterials(updatedRawMaterials, editingPurchase.items, -1);
       applyPurchaseItemsToRawMaterials(updatedRawMaterials, validItems, +1);
 
+      const fresh = await persistInventoryDeltas(
+        { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
+        { rawMaterials: updatedRawMaterials, finishedGoods: state.finishedGoods }
+      );
+      if (!fresh) {
+        alert('The purchase was updated, but the raw-material stock could not be adjusted. Please run a stock adjustment or reload.');
+      }
       const updatedPurchases = state.purchases.map(p =>
         p.id === editingPurchase.id ? { ...editingPurchase, ...formData, items: validItems, totalAmount } : p
       );
-      setState({ ...state, purchases: updatedPurchases, rawMaterials: updatedRawMaterials });
+      setState({
+        ...state,
+        purchases: updatedPurchases,
+        ...(fresh && { rawMaterials: fresh.rawMaterials, finishedGoods: fresh.finishedGoods }),
+      });
     } else {
       const newPurchase = {
         date: formData.date,
@@ -1063,9 +1125,9 @@ export default function NorthernWaterSystemApp() {
         status: 'received'
       };
 
-      // Persist the purchase FIRST; only apply the raw-material increase (which
-      // auto-persists) on a confirmed save, so a failed insert can't raise stock
-      // with no purchase record behind it.
+      // Persist the purchase FIRST; only apply the raw-material increase (via the
+      // atomic delta RPC) on a confirmed save, so a failed insert can't raise
+      // stock with no purchase record behind it.
       const { data: savedPurchase, error: purchaseError } = await supabase
         .from('purchases')
         .insert([newPurchase])
@@ -1081,10 +1143,17 @@ export default function NorthernWaterSystemApp() {
       const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
       applyPurchaseItemsToRawMaterials(updatedRawMaterials, validItems, +1);
 
+      const fresh = await persistInventoryDeltas(
+        { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
+        { rawMaterials: updatedRawMaterials, finishedGoods: state.finishedGoods }
+      );
+      if (!fresh) {
+        alert('The purchase was saved, but the raw-material stock could not be updated. Please run a stock adjustment or reload.');
+      }
       setState({
         ...state,
         purchases: [...state.purchases, savedPurchase],
-        rawMaterials: updatedRawMaterials
+        ...(fresh && { rawMaterials: fresh.rawMaterials, finishedGoods: fresh.finishedGoods }),
       });
     }
 
@@ -1110,10 +1179,17 @@ export default function NorthernWaterSystemApp() {
     const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
     applyPurchaseItemsToRawMaterials(updatedRawMaterials, purchase.items, -1);
 
+    const fresh = await persistInventoryDeltas(
+      { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
+      { rawMaterials: updatedRawMaterials, finishedGoods: state.finishedGoods }
+    );
+    if (!fresh) {
+      alert('The purchase was deleted, but the raw-material stock could not be reversed. Please run a stock adjustment or reload.');
+    }
     setState({
       ...state,
       purchases: state.purchases.filter(p => p.id !== id),
-      rawMaterials: updatedRawMaterials
+      ...(fresh && { rawMaterials: fresh.rawMaterials, finishedGoods: fresh.finishedGoods }),
     });
     console.log('✅ Purchase deleted and inventory reversed');
   };
@@ -2554,7 +2630,7 @@ export default function NorthernWaterSystemApp() {
     }
 
     // 3. Both deletes confirmed — now reverse the local effects.
-    //    Return cartons to finished goods (auto-persists via the inventory effect).
+    //    Return cartons to finished goods (persisted via the atomic delta RPC).
     const updatedFinishedGoods = { ...state.finishedGoods };
     sale.items.forEach(item => {
       if (updatedFinishedGoods[item.size]) {
@@ -2575,11 +2651,18 @@ export default function NorthernWaterSystemApp() {
         : c
     );
 
+    const fresh = await persistInventoryDeltas(
+      { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
+      { rawMaterials: state.rawMaterials, finishedGoods: updatedFinishedGoods }
+    );
+    if (!fresh) {
+      alert('The sale was deleted, but the finished-goods stock could not be returned. Please run a stock adjustment or reload.');
+    }
     setState({
       ...state,
       sales: state.sales.filter(s => s.id !== id),
       payments: state.payments.filter(p => p.saleId !== id),
-      finishedGoods: updatedFinishedGoods,
+      ...(fresh && { rawMaterials: fresh.rawMaterials, finishedGoods: fresh.finishedGoods }),
       customers: updatedCustomers
     });
 
@@ -2672,11 +2755,17 @@ export default function NorthernWaterSystemApp() {
       updatedRawMaterials.seals['short_neck'] += totalShortNeckBottles;
     }
 
+    const fresh = await persistInventoryDeltas(
+      { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
+      { rawMaterials: updatedRawMaterials, finishedGoods: updatedFinishedGoods }
+    );
+    if (!fresh) {
+      alert('The production log was deleted, but the stock could not be reversed. Please run a stock adjustment or reload.');
+    }
     setState({
       ...state,
       productionLogs: state.productionLogs.filter(p => p.id !== id),
-      rawMaterials: updatedRawMaterials,
-      finishedGoods: updatedFinishedGoods
+      ...(fresh && { rawMaterials: fresh.rawMaterials, finishedGoods: fresh.finishedGoods }),
     });
     console.log('✅ Production log deleted and reversed in Supabase');
   };
@@ -2778,10 +2867,17 @@ export default function NorthernWaterSystemApp() {
       return; // leave the modal open with the entry intact
     }
 
+    const fresh = await persistInventoryDeltas(
+      { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
+      { rawMaterials: state.rawMaterials, finishedGoods: updatedFinishedGoods }
+    );
+    if (!fresh) {
+      alert('The sale was recorded, but the finished-goods stock could not be updated. Please run a stock adjustment or reload.');
+    }
     setState({
       ...state,
       sales: [...state.sales, savedSale],
-      finishedGoods: updatedFinishedGoods,
+      ...(fresh && { rawMaterials: fresh.rawMaterials, finishedGoods: fresh.finishedGoods }),
       customers: updatedCustomers
     });
 
@@ -2874,9 +2970,16 @@ export default function NorthernWaterSystemApp() {
     const updatedFG = JSON.parse(JSON.stringify(state.finishedGoods));
     lines.forEach(l => { if (updatedFG[l.size]) updatedFG[l.size].quantity -= l.quantity; });
 
+    const fresh = await persistInventoryDeltas(
+      { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
+      { rawMaterials: state.rawMaterials, finishedGoods: updatedFG }
+    );
+    if (!fresh) {
+      alert('The delivery was recorded, but the plant finished-goods stock could not be updated. Please run a stock adjustment or reload.');
+    }
     setState({
       ...state,
-      finishedGoods: updatedFG, // auto-persists via the inventory effect
+      ...(fresh && { rawMaterials: fresh.rawMaterials, finishedGoods: fresh.finishedGoods }),
       consignmentMovements: [...state.consignmentMovements, ...saved],
     });
     setShowModal(false);
@@ -2917,9 +3020,16 @@ export default function NorthernWaterSystemApp() {
     const updatedFG = JSON.parse(JSON.stringify(state.finishedGoods));
     lines.forEach(l => { if (updatedFG[l.size]) updatedFG[l.size].quantity += l.quantity; });
 
+    const fresh = await persistInventoryDeltas(
+      { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
+      { rawMaterials: state.rawMaterials, finishedGoods: updatedFG }
+    );
+    if (!fresh) {
+      alert('The take-back was recorded, but the plant finished-goods stock could not be updated. Please run a stock adjustment or reload.');
+    }
     setState({
       ...state,
-      finishedGoods: updatedFG,
+      ...(fresh && { rawMaterials: fresh.rawMaterials, finishedGoods: fresh.finishedGoods }),
       consignmentMovements: [...state.consignmentMovements, ...saved],
     });
     setShowModal(false);
@@ -3369,9 +3479,9 @@ export default function NorthernWaterSystemApp() {
       updatedRawMaterials.seals['short_neck'] -= totalShortNeckBottles;
     }
 
-    // Persist the production log FIRST. Only then apply the inventory changes,
-    // so a failed insert can't leave raw materials deducted / finished goods
-    // added (which auto-persist) with no production record to explain them.
+    // Persist the production log FIRST. Only then apply the inventory changes
+    // (via the atomic delta RPC), so a failed insert can't leave raw materials
+    // deducted / finished goods added with no production record to explain them.
     const { data: savedProduction, error: prodError } = await supabase
       .from('production_logs')
       .insert([newProduction])
@@ -3384,11 +3494,17 @@ export default function NorthernWaterSystemApp() {
       return; // leave the modal open with the entry intact
     }
 
+    const fresh = await persistInventoryDeltas(
+      { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
+      { rawMaterials: updatedRawMaterials, finishedGoods: updatedFinishedGoods }
+    );
+    if (!fresh) {
+      alert('The production log was recorded, but the stock could not be updated. Please run a stock adjustment or reload.');
+    }
     setState({
       ...state,
       productionLogs: [...state.productionLogs, savedProduction],
-      rawMaterials: updatedRawMaterials,
-      finishedGoods: updatedFinishedGoods
+      ...(fresh && { rawMaterials: fresh.rawMaterials, finishedGoods: fresh.finishedGoods }),
     });
 
     setShowModal(false);
