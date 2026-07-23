@@ -346,6 +346,29 @@ export default function NorthernWaterSystemApp() {
   const [loginError, setLoginError] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
 
+  // Declared before the session useEffect below so the effect never references
+  // it inside its temporal dead zone (react-hooks/immutability).
+  const fetchUserProfile = async (userId) => {
+    try {
+      const { data } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+      if (data) {
+        setUserProfile(data);
+        // Sales users land on their own Home dashboard
+        if (data.role === 'sales') {
+          setActiveTab('salesdashboard');
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching profile:', error);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
   // Check for existing session on app start
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -369,27 +392,6 @@ export default function NorthernWaterSystemApp() {
 
     return () => subscription.unsubscribe();
   }, []);
-
-  const fetchUserProfile = async (userId) => {
-    try {
-      const { data } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
-      if (data) {
-        setUserProfile(data);
-        // Sales users land on their own Home dashboard
-        if (data.role === 'sales') {
-          setActiveTab('salesdashboard');
-        }
-      }
-    } catch (error) {
-      console.error('Error fetching profile:', error);
-    } finally {
-      setAuthLoading(false);
-    }
-  };
 
   const handleLogin = async () => {
     setLoginError('');
@@ -451,20 +453,6 @@ export default function NorthernWaterSystemApp() {
     : myLocation
       ? state.customers.filter(c => c.location === myLocation)
       : state.customers;
-
-  // Load data from Supabase on app start — ONCE per login.
-  // Triggered by userProfile (not session) so the role is known before fetching.
-  // The guard resets on logout because handleLogout sets userProfile to null.
-  const hasLoadedData = useRef(false);
-  useEffect(() => {
-    if (userProfile && !hasLoadedData.current) {
-      hasLoadedData.current = true;
-      loadDataFromSupabase(userProfile.role);
-    }
-    if (!userProfile) {
-      hasLoadedData.current = false;
-    }
-  }, [userProfile]);
 
   // True once the login-time inventory fetch actually returned rows. If the
   // fetch fails/returns empty the session keeps the hardcoded demo defaults —
@@ -618,6 +606,22 @@ export default function NorthernWaterSystemApp() {
       console.error('❌ Error loading data from Supabase:', error);
     }
   };
+
+  // Load data from Supabase on app start — ONCE per login. Declared after
+  // loadDataFromSupabase so the effect doesn't reference it inside its temporal
+  // dead zone (react-hooks/immutability).
+  // Triggered by userProfile (not session) so the role is known before fetching.
+  // The guard resets on logout because handleLogout sets userProfile to null.
+  const hasLoadedData = useRef(false);
+  useEffect(() => {
+    if (userProfile && !hasLoadedData.current) {
+      hasLoadedData.current = true;
+      loadDataFromSupabase(userProfile.role);
+    }
+    if (!userProfile) {
+      hasLoadedData.current = false;
+    }
+  }, [userProfile]);
 
   // Find the most recent purchase unit price for a given material key
   // (e.g. 'emptyBottles_0.5L', 'seals_short_neck', 'labels_5L', 'kraStamps').
