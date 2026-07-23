@@ -346,6 +346,29 @@ export default function NorthernWaterSystemApp() {
   const [loginError, setLoginError] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
 
+  // Declared before the session useEffect below so the effect never references
+  // it inside its temporal dead zone (react-hooks/immutability).
+  const fetchUserProfile = async (userId) => {
+    try {
+      const { data } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+      if (data) {
+        setUserProfile(data);
+        // Sales users land on their own Home dashboard
+        if (data.role === 'sales') {
+          setActiveTab('salesdashboard');
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching profile:', error);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
   // Check for existing session on app start
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -369,27 +392,6 @@ export default function NorthernWaterSystemApp() {
 
     return () => subscription.unsubscribe();
   }, []);
-
-  const fetchUserProfile = async (userId) => {
-    try {
-      const { data } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
-      if (data) {
-        setUserProfile(data);
-        // Sales users land on their own Home dashboard
-        if (data.role === 'sales') {
-          setActiveTab('salesdashboard');
-        }
-      }
-    } catch (error) {
-      console.error('Error fetching profile:', error);
-    } finally {
-      setAuthLoading(false);
-    }
-  };
 
   const handleLogin = async () => {
     setLoginError('');
@@ -451,20 +453,6 @@ export default function NorthernWaterSystemApp() {
     : myLocation
       ? state.customers.filter(c => c.location === myLocation)
       : state.customers;
-
-  // Load data from Supabase on app start — ONCE per login.
-  // Triggered by userProfile (not session) so the role is known before fetching.
-  // The guard resets on logout because handleLogout sets userProfile to null.
-  const hasLoadedData = useRef(false);
-  useEffect(() => {
-    if (userProfile && !hasLoadedData.current) {
-      hasLoadedData.current = true;
-      loadDataFromSupabase(userProfile.role);
-    }
-    if (!userProfile) {
-      hasLoadedData.current = false;
-    }
-  }, [userProfile]);
 
   // True once the login-time inventory fetch actually returned rows. If the
   // fetch fails/returns empty the session keeps the hardcoded demo defaults —
@@ -618,6 +606,22 @@ export default function NorthernWaterSystemApp() {
       console.error('❌ Error loading data from Supabase:', error);
     }
   };
+
+  // Load data from Supabase on app start — ONCE per login. Declared after
+  // loadDataFromSupabase so the effect doesn't reference it inside its temporal
+  // dead zone (react-hooks/immutability).
+  // Triggered by userProfile (not session) so the role is known before fetching.
+  // The guard resets on logout because handleLogout sets userProfile to null.
+  const hasLoadedData = useRef(false);
+  useEffect(() => {
+    if (userProfile && !hasLoadedData.current) {
+      hasLoadedData.current = true;
+      loadDataFromSupabase(userProfile.role);
+    }
+    if (!userProfile) {
+      hasLoadedData.current = false;
+    }
+  }, [userProfile]);
 
   // Find the most recent purchase unit price for a given material key
   // (e.g. 'emptyBottles_0.5L', 'seals_short_neck', 'labels_5L', 'kraStamps').
@@ -1626,6 +1630,71 @@ export default function NorthernWaterSystemApp() {
     };
   };
 
+  const generateProductionReport = () => {
+    // With no date range selected, default to the current month (not all time),
+    // matching the Sales / Cash / Expense reports.
+    const monthPrefix = localMonthPrefix();
+    const hasRange = dateRange.start && dateRange.end;
+    const logs = hasRange
+      ? state.productionLogs.filter(l => l.date >= dateRange.start && l.date <= dateRange.end)
+      : state.productionLogs.filter(l => (l.date || '').slice(0, 7) === monthPrefix);
+
+    const cartonsBySize = {};
+    const bottlesBySize = {};
+    let totalCartons = 0;
+    let totalBottles = 0;
+    let fgValue = 0; // estimated finished-goods value at carton cost (information only)
+
+    logs.forEach(log => {
+      Object.entries(log.items || {}).forEach(([size, ctns]) => {
+        const cartons = ctns || 0;
+        if (cartons === 0) return;
+        const bottles = cartons * (BOTTLES_PER_CARTON[size] || 1);
+        cartonsBySize[size] = (cartonsBySize[size] || 0) + cartons;
+        bottlesBySize[size] = (bottlesBySize[size] || 0) + bottles;
+        totalCartons += cartons;
+        totalBottles += bottles;
+        fgValue += cartons * (cartonCosts[size] || 0);
+      });
+    });
+
+    // Casual labour is paid per carton produced (× the shared rate). This is an
+    // estimate for information only — it does NOT post to the P&L; the actual
+    // Casual Labour expense is created when a payout is recorded in HR.
+    const casualCost = totalCartons * (Number(casualRate) || 0);
+
+    // Per-run rows, newest first, for the detail table.
+    const runs = logs.slice()
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .map(log => {
+        const runCartons = Object.values(log.items || {}).reduce((s, q) => s + (q || 0), 0);
+        return {
+          id: log.id,
+          date: log.date,
+          items: log.items || {},
+          totalCartons: runCartons,
+          casualCount: (log.casuals || []).length,
+          notes: log.notes || ''
+        };
+      });
+
+    return {
+      title: 'Production Report',
+      date: new Date().toLocaleDateString(),
+      period: hasRange
+        ? `${dateRange.start} to ${dateRange.end}`
+        : `This Month (${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })})`,
+      totalRuns: logs.length,
+      totalCartons,
+      totalBottles,
+      cartonsBySize,
+      bottlesBySize,
+      fgValue,
+      casualCost,
+      runs
+    };
+  };
+
   const handleGenerateReport = (type) => {
     let data;
     if (type === 'aging') {
@@ -1646,6 +1715,8 @@ export default function NorthernWaterSystemApp() {
       data = generateCustomerRevenueReport();
     } else if (type === 'productmix') {
       data = generateProductMixReport();
+    } else if (type === 'productionreport') {
+      data = generateProductionReport();
     }
     setReportData(data);
     setReportType(type);
@@ -2062,6 +2133,40 @@ export default function NorthernWaterSystemApp() {
           </div>
         `;
       }
+    } else if (reportType === 'productionreport') {
+      let cartonRows = '';
+      Object.entries(reportData.cartonsBySize).forEach(([size, qty]) => {
+        cartonRows += `<tr><td>${SIZE_LABELS[size] || size}</td><td>${qty.toLocaleString()} cartons</td><td>${(reportData.bottlesBySize[size] || 0).toLocaleString()} bottles</td></tr>`;
+      });
+      let runRows = '';
+      reportData.runs.forEach(run => {
+        const items = Object.entries(run.items).filter(([, q]) => q).map(([size, q]) => `${q}× ${SIZE_LABELS[size] || size}`).join(', ') || '-';
+        runRows += `<tr><td>#${run.id}</td><td>${run.date}</td><td>${escapeHtml(items)}</td><td>${run.totalCartons.toLocaleString()}</td><td>${run.casualCount}</td></tr>`;
+      });
+      htmlContent += `
+        <div class="section">
+          <div class="summary">
+            Period: ${reportData.period} | Runs: ${reportData.totalRuns} | Cartons: ${reportData.totalCartons.toLocaleString()} | Bottles: ${reportData.totalBottles.toLocaleString()}
+          </div>
+          <h2>Production by Size</h2>
+          <table>
+            <thead><tr><th>Bottle Size</th><th>Cartons</th><th>Bottles</th></tr></thead>
+            <tbody>${cartonRows || '<tr><td colspan="3">No production in the selected period</td></tr>'}</tbody>
+          </table>
+          <h2>Estimated Costs (information only — not posted to the P&L)</h2>
+          <table>
+            <tbody>
+              <tr><td>Est. Finished-Goods Value</td><td>KES ${reportData.fgValue.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td></tr>
+              <tr><td>Est. Casual Labour Cost</td><td>KES ${reportData.casualCost.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td></tr>
+            </tbody>
+          </table>
+          <h2>Production Runs</h2>
+          <table>
+            <thead><tr><th>Run</th><th>Date</th><th>Items</th><th>Cartons</th><th>Casuals</th></tr></thead>
+            <tbody>${runRows || '<tr><td colspan="5">No production in the selected period</td></tr>'}</tbody>
+          </table>
+        </div>
+      `;
     }
 
     htmlContent += `
@@ -4337,6 +4442,7 @@ export default function NorthernWaterSystemApp() {
                 { id: 'customersummary', label: 'Customer Summary', icon: '👥' },
                 { id: 'customerrevenue', label: 'Customer Trend', icon: '📅' },
                 { id: 'productmix', label: 'Product Mix', icon: '🧴' },
+                { id: 'productionreport', label: 'Production', icon: '🏭' },
               ].map(report => (
                 <button
                   key={report.id}
@@ -4400,7 +4506,7 @@ export default function NorthernWaterSystemApp() {
             )}
 
             {/* Date Range — applies to all event-based reports */}
-            {(reportType === 'sales' || reportType === 'cash' || reportType === 'expense' || reportType === 'profitloss' || reportType === 'topcustomers' || reportType === 'customersummary' || reportType === 'customerrevenue' || reportType === 'productmix') && (
+            {(reportType === 'sales' || reportType === 'cash' || reportType === 'expense' || reportType === 'profitloss' || reportType === 'topcustomers' || reportType === 'customersummary' || reportType === 'customerrevenue' || reportType === 'productmix' || reportType === 'productionreport') && (
               <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-3 md:p-4">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
                   <div>
@@ -4957,6 +5063,102 @@ export default function NorthernWaterSystemApp() {
                             </table>
                           </div>
                         )}
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Production Report */}
+                {reportType === 'productionreport' && (
+                  <div className="space-y-4 md:space-y-6">
+                    <p className="text-slate-500 text-xs">Period: {reportData.period}</p>
+
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
+                      <div className="bg-sky-50 border border-slate-200 rounded-lg p-3 md:p-4">
+                        <p className="text-slate-500 text-xs md:text-sm">Production Runs</p>
+                        <p className="text-slate-900 text-xl md:text-2xl font-bold">{reportData.totalRuns}</p>
+                      </div>
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 md:p-4">
+                        <p className="text-emerald-600 text-xs md:text-sm">Cartons Produced</p>
+                        <p className="text-slate-900 text-xl md:text-2xl font-bold">{reportData.totalCartons.toLocaleString()}</p>
+                      </div>
+                      <div className="bg-sky-50 border border-slate-200 rounded-lg p-3 md:p-4">
+                        <p className="text-slate-500 text-xs md:text-sm">Bottles Produced</p>
+                        <p className="text-slate-900 text-xl md:text-2xl font-bold">{reportData.totalBottles.toLocaleString()}</p>
+                      </div>
+                    </div>
+
+                    {reportData.totalRuns === 0 ? (
+                      <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No production in the selected period</p>
+                    ) : (
+                      <>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-6">
+                          <div>
+                            <h4 className="text-slate-900 font-semibold mb-2 md:mb-3 text-sm">Cartons by Size</h4>
+                            <div className="space-y-1 md:space-y-2">
+                              {Object.entries(reportData.cartonsBySize).map(([size, qty]) => (
+                                <div key={size} className="flex justify-between p-2 bg-slate-50 rounded text-xs md:text-sm">
+                                  <p className="text-slate-500">{SIZE_LABELS[size] || size}</p>
+                                  <p className="text-slate-900 font-semibold">{qty.toLocaleString()} cartons</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                          <div>
+                            <h4 className="text-slate-900 font-semibold mb-2 md:mb-3 text-sm">Bottles by Size</h4>
+                            <div className="space-y-1 md:space-y-2">
+                              {Object.entries(reportData.bottlesBySize).map(([size, qty]) => (
+                                <div key={size} className="flex justify-between p-2 bg-slate-50 rounded text-xs md:text-sm">
+                                  <p className="text-slate-500">{SIZE_LABELS[size] || size}</p>
+                                  <p className="text-slate-900 font-semibold">{qty.toLocaleString()} bottles</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Estimated costs — information only, not posted to the P&L */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+                          <div className="bg-white border border-slate-200 rounded-lg p-3 md:p-4">
+                            <p className="text-slate-500 text-xs md:text-sm">Est. Finished-Goods Value</p>
+                            <p className="text-slate-900 text-lg md:text-xl font-bold">KES {reportData.fgValue.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                          </div>
+                          <div className="bg-white border border-slate-200 rounded-lg p-3 md:p-4">
+                            <p className="text-slate-500 text-xs md:text-sm">Est. Casual Labour Cost</p>
+                            <p className="text-slate-900 text-lg md:text-xl font-bold">KES {reportData.casualCost.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                          </div>
+                        </div>
+                        <p className="text-slate-400 text-xs">
+                          Finished-goods value uses configured carton costs; casual labour is estimated at the current per-carton rate. Both are for information only — they are not posted to the P&L.
+                        </p>
+
+                        {/* Per-run detail */}
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-slate-500 border-b border-slate-200">
+                                <th className="py-2 pr-2">Run</th>
+                                <th className="py-2 pr-2">Date</th>
+                                <th className="py-2 pr-2">Items</th>
+                                <th className="py-2 pr-2 text-right">Cartons</th>
+                                <th className="py-2 text-right">Casuals</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {reportData.runs.map(run => (
+                                <tr key={run.id} className="border-b border-slate-100">
+                                  <td className="py-2 pr-2 text-slate-900">#{run.id}</td>
+                                  <td className="py-2 pr-2 text-slate-600">{run.date}</td>
+                                  <td className="py-2 pr-2 text-slate-600">
+                                    {Object.entries(run.items).filter(([, q]) => q).map(([size, q]) => `${q}× ${SIZE_LABELS[size] || size}`).join(', ') || '—'}
+                                  </td>
+                                  <td className="py-2 pr-2 text-right text-slate-900 font-semibold">{run.totalCartons.toLocaleString()}</td>
+                                  <td className="py-2 text-right text-slate-600">{run.casualCount}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
                       </>
                     )}
                   </div>
