@@ -1,6 +1,12 @@
 -- =============================================================================
--- 004_db_generated_ids_production_purchases.sql
+-- 004b_db_generated_ids_production_purchases.sql
 -- Northern Water Company Ltd — OASIS Springs
+--
+-- Renamed from `004_db_generated_ids_production_purchases.sql`: it shared the
+-- number 004 with what is now 004a, which made filename order ambiguous for
+-- anyone applying these in sequence. This file SUPERSEDES 004a and is the one to
+-- run on a fresh database. Note it was actually applied AFTER 005 — see
+-- migrations/README.md for the true chronology.
 --
 -- Moves id generation for production_logs and purchases into the database.
 --
