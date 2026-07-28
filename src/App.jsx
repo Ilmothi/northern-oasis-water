@@ -503,6 +503,24 @@ export default function NorthernWaterSystemApp() {
     return { rawMaterials: data.rawMaterials, finishedGoods: data.finishedGoods };
   };
 
+  // Merge the authoritative rows a money RPC returns (migration 011) back into
+  // local state. Covers the two slices every one of those functions can touch:
+  // the customer's balance and the inventory blobs. Callers handle their own
+  // sales/payments rows themselves, since those differ per flow — inserted,
+  // updated, or removed. `customer` and `sale` come back null when the parent row
+  // no longer exists, which is why both are guarded.
+  const applyRpcRows = (data) => {
+    const patch = {};
+    if (data?.customer) {
+      patch.customers = state.customers.map(c => (c.id === data.customer.id ? data.customer : c));
+    }
+    if (data?.inventory) {
+      patch.rawMaterials = data.inventory.rawMaterials;
+      patch.finishedGoods = data.inventory.finishedGoods;
+    }
+    return patch;
+  };
+
   const loadDataFromSupabase = async (role) => {
     const isAdminOrManager = role === 'admin' || role === 'manager';
     const isAdmin = role === 'admin';
@@ -2704,11 +2722,11 @@ export default function NorthernWaterSystemApp() {
   };
 
   // Delete Sale — reverses inventory deduction and customer debt.
-  // Persist-first: nothing is changed locally (and no side effect that
-  // auto-persists is applied) until the database confirms each delete —
-  // supabase-js returns errors rather than throwing, so every result is
-  // checked explicitly. An RLS denial or network failure aborts with an
-  // alert instead of silently corrupting balances and stock.
+  // The whole reversal (linked payments, the sale, the cartons and the balance)
+  // happens in ONE transaction server-side, so it can no longer half-complete.
+  // The consignment guard and the balance arithmetic are enforced there too;
+  // the checks here are for a clear message before anything is attempted.
+  // See migration 011.
   const handleDeleteSale = async (id) => {
     const sale = state.sales.find(s => s.id === id);
     if (!sale) return;
@@ -2730,95 +2748,22 @@ export default function NorthernWaterSystemApp() {
     confirmMsg += '. This cannot be undone.';
     if (!confirm(confirmMsg)) return;
 
-    // 1. Remove linked payments first (they reference the sale). Abort on
-    //    failure — nothing has changed yet.
-    const { error: payDelError } = await supabase.from('payments').delete().eq('saleId', id);
-    if (payDelError) {
-      console.error('❌ Error deleting linked payments:', payDelError);
-      alert('Could not delete this sale — nothing was changed. Please try again.\n\n' + (payDelError.message || 'Unknown error'));
+    // One transaction: linked payments, the sale, the returned cartons and the
+    // balance reversal all succeed together or none of them happen. There is no
+    // longer a "payments deleted but sale survived" state to compensate for.
+    const { data, error } = await supabase.rpc('delete_sale', { p_sale_id: id });
+    if (error) {
+      console.error('❌ Error deleting sale:', error);
+      alert('Could not delete this sale — nothing was changed. The sale, its payments, the stock and the balance are all as they were.\n\n' + (error.message || 'Unknown error'));
       return;
     }
 
-    // 2. Remove the sale itself.
-    const { error: saleDelError } = await supabase.from('sales').delete().eq('id', id);
-    if (saleDelError) {
-      console.error('❌ Error deleting sale:', saleDelError);
-      // The payments are already gone but the sale remains. Reconcile to the
-      // "payments deleted" state so the books stay coherent: the sale's paid
-      // drops by the removed payments and the customer owes that amount again.
-      const paidViaPayments = linkedPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
-      if (paidViaPayments > 0) {
-        const newPaid = (sale.paid || 0) - paidViaPayments;
-        const newStatus = newPaid >= sale.total ? 'paid' : newPaid > 0 ? 'partial' : 'pending';
-        const { error: saleUpdError } = await supabase.from('sales')
-          .update({ paid: newPaid, status: newStatus }).eq('id', id);
-        if (saleUpdError) console.error('❌ Error reconciling sale after failed delete:', saleUpdError);
-        const cust = state.customers.find(c => c.id === sale.customerId);
-        if (cust) {
-          const { error: custUpdError } = await supabase.from('customers')
-            .update({ balance: cust.balance - paidViaPayments }).eq('id', cust.id);
-          if (custUpdError) console.error('❌ Error reconciling balance after failed delete:', custUpdError);
-        }
-        setState({
-          ...state,
-          payments: state.payments.filter(p => p.saleId !== id),
-          sales: state.sales.map(s => s.id === id ? { ...s, paid: newPaid, status: newStatus } : s),
-          customers: state.customers.map(c => c.id === sale.customerId ? { ...c, balance: c.balance - paidViaPayments } : c)
-        });
-        alert('The sale could not be deleted, but its linked payments were already removed. The sale now shows as unpaid/partial again. Please retry the delete or re-enter the payments.\n\n' + (saleDelError.message || 'Unknown error'));
-      } else {
-        alert('Could not delete this sale — nothing was changed. Please try again.\n\n' + (saleDelError.message || 'Unknown error'));
-      }
-      return;
-    }
-
-    // 3. Both deletes confirmed — now reverse the local effects.
-    //    Return cartons to finished goods (persisted via the atomic delta RPC).
-    const updatedFinishedGoods = { ...state.finishedGoods };
-    sale.items.forEach(item => {
-      if (updatedFinishedGoods[item.size]) {
-        updatedFinishedGoods[item.size] = {
-          ...updatedFinishedGoods[item.size],
-          quantity: updatedFinishedGoods[item.size].quantity + item.quantity
-        };
-      }
-    });
-
-    //    Reverse customer balance: removing the sale cancels the original
-    //    debit of (total - paidAtCreation) AND removes all linked payments
-    //    which had credited (sum of payments). Net balance change = +(total - paid).
-    const outstanding = sale.total - sale.paid;
-    const updatedCustomers = state.customers.map(c =>
-      c.id === sale.customerId
-        ? { ...c, balance: c.balance + outstanding }
-        : c
-    );
-
-    const fresh = await persistInventoryDeltas(
-      { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
-      { rawMaterials: state.rawMaterials, finishedGoods: updatedFinishedGoods }
-    );
-    if (!fresh) {
-      alert('The sale was deleted, but the finished-goods stock could not be returned. Please run a stock adjustment or reload.');
-    }
     setState({
       ...state,
       sales: state.sales.filter(s => s.id !== id),
       payments: state.payments.filter(p => p.saleId !== id),
-      ...(fresh && { rawMaterials: fresh.rawMaterials, finishedGoods: fresh.finishedGoods }),
-      customers: updatedCustomers
+      ...applyRpcRows(data),
     });
-
-    // 4. Persist the balance reversal; warn if it fails (sale is already gone).
-    const cust = updatedCustomers.find(c => c.id === sale.customerId);
-    if (cust) {
-      const { error: custError } = await supabase.from('customers')
-        .update({ balance: cust.balance }).eq('id', cust.id);
-      if (custError) {
-        console.error('❌ Error updating customer balance after sale delete:', custError);
-        alert('Sale deleted, but the customer balance could not be updated. Please check this customer\'s balance.');
-      }
-    }
     console.log('✅ Sale deleted and reversed in Supabase');
   };
 
@@ -2982,62 +2927,22 @@ export default function NorthernWaterSystemApp() {
       created_by: session?.user?.id || null
     };
 
-    // Deep clone so the deduction below never mutates live state in place — if
-    // the insert fails we return early without setState, and a shallow copy
-    // would leave the real finished-goods quantities already decremented.
-    const updatedFinishedGoods = JSON.parse(JSON.stringify(state.finishedGoods));
-    validItems.forEach(item => {
-      // Items already come in CARTONS from sales input
-      // No conversion needed - just deduct directly
-      if (updatedFinishedGoods[item.size]) {
-        updatedFinishedGoods[item.size].quantity -= item.quantity;
-      }
-    });
-
-    // Only the unpaid remainder becomes debt — never the full total when part
-    // of it was paid on the spot.
-    const debtAmount = total - amountPaid;
-    const updatedCustomers = state.customers.map(c => 
-      c.id === parseInt(formData.customerId) 
-        ? { ...c, balance: c.balance - debtAmount }
-        : c
-    );
-
-    // Persist FIRST — only reflect the sale locally if the database accepts it.
-    // (Previously the row was added to state optimistically and the insert could
-    // be silently rejected on a primary-key collision, so the rep saw a sale
-    // that was never saved.)
-    const { data: savedSale, error: saleError } = await supabase
-      .from('sales')
-      .insert([newSale])
-      .select()
-      .single();
-
-    if (saleError || !savedSale) {
-      console.error('❌ Error saving sale to Supabase:', saleError);
-      alert('Could not save this sale — it has NOT been recorded. Please try again.\n\n' + (saleError?.message || 'Unknown error'));
+    // One transaction: the sale row, the finished-goods deduction and the
+    // customer's debt all move together or not at all. The balance is applied
+    // server-side as a delta on the committed value, so a stale session can no
+    // longer overwrite someone else's payment. See migration 011.
+    const { data, error } = await supabase.rpc('record_sale', { p_sale: newSale });
+    if (error || !data?.sale) {
+      console.error('❌ Error recording sale:', error);
+      alert('Could not save this sale — nothing was recorded, and stock and balances are unchanged. Please try again.\n\n' + (error?.message || 'Unknown error'));
       return; // leave the modal open with the entry intact
     }
 
-    const fresh = await persistInventoryDeltas(
-      { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
-      { rawMaterials: state.rawMaterials, finishedGoods: updatedFinishedGoods }
-    );
-    if (!fresh) {
-      alert('The sale was recorded, but the finished-goods stock could not be updated. Please run a stock adjustment or reload.');
-    }
     setState({
       ...state,
-      sales: [...state.sales, savedSale],
-      ...(fresh && { rawMaterials: fresh.rawMaterials, finishedGoods: fresh.finishedGoods }),
-      customers: updatedCustomers
+      sales: [...state.sales, data.sale],
+      ...applyRpcRows(data),
     });
-
-    const { error: custError } = await supabase
-      .from('customers')
-      .update({ balance: updatedCustomers.find(c => c.id === parseInt(formData.customerId)).balance })
-      .eq('id', parseInt(formData.customerId));
-    if (custError) console.error('❌ Error updating customer balance after sale:', custError);
 
     setShowModal(false);
   };
@@ -3265,45 +3170,32 @@ export default function NorthernWaterSystemApp() {
       created_by: session?.user?.id || null,
     };
 
-    // Sale first — the consignment 'sold' rows reference its id.
-    const { data: savedSale, error: saleError } = await supabase.from('sales').insert([newSale]).select().single();
-    if (saleError || !savedSale) {
-      console.error('❌ Error saving consignment sale:', saleError);
-      alert('Could not record this sale — nothing was changed. Please try again.\n\n' + (saleError?.message || 'Unknown error'));
-      return;
-    }
-
     const rows = lines.map(l => ({
-      shop_id: shopId,
-      date,
       type: 'sold',
+      date,
       size: l.size,
       quantity: l.quantity,
       unit_price: l.price,
-      sale_id: savedSale.id,
       created_by: session?.user?.id || null,
     }));
-    const { data: savedMoves, error: moveError } = await supabase.from('consignment_movements').insert(rows).select();
-    if (moveError) {
-      // The sale saved but the stock ledger did not. The books are correct;
-      // the shop's stock will read high until this is fixed. Warn, don't hide it.
-      console.error('❌ Consignment sale saved but ledger update failed:', moveError);
-      alert('The sale was recorded, but the shop\'s consignment stock could NOT be updated. Ask the admin to reconcile this shop\'s stock.\n\n' + (moveError.message || 'Unknown error'));
-    }
 
-    const debtAmount = total - amountPaid;
-    const updatedCustomers = state.customers.map(c => c.id === shopId ? { ...c, balance: c.balance - debtAmount } : c);
+    // One transaction: the sale, the 'sold' movements that reference it, and the
+    // shop's debt. The books and the stock ledger can no longer separate.
+    const { data, error } = await supabase.rpc('consignment_post_sale', {
+      p_sale: newSale, p_movements: rows,
+    });
+    if (error || !data?.sale) {
+      console.error('❌ Error recording consignment sale:', error);
+      alert('Could not record this sale — nothing was changed. The shop\'s stock and balance are as they were.\n\n' + (error?.message || 'Unknown error'));
+      return;
+    }
 
     setState({
       ...state,
-      sales: [...state.sales, savedSale],
-      consignmentMovements: savedMoves ? [...state.consignmentMovements, ...savedMoves] : state.consignmentMovements,
-      customers: updatedCustomers,
+      sales: [...state.sales, data.sale],
+      consignmentMovements: [...state.consignmentMovements, ...(data.movements || [])],
+      ...applyRpcRows(data),
     });
-
-    const { error: custError } = await supabase.from('customers')
-      .update({ balance: updatedCustomers.find(c => c.id === shopId).balance }).eq('id', shopId);
-    if (custError) console.error('❌ Error updating shop balance after consignment sale:', custError);
 
     setShowModal(false);
   };
@@ -3344,43 +3236,35 @@ export default function NorthernWaterSystemApp() {
       method: null,
       created_by: session?.user?.id || null,
     };
-    const { data: savedSale, error: saleError } = await supabase.from('sales').insert([creditNote]).select().single();
-    if (saleError || !savedSale) {
-      console.error('❌ Error saving reconciliation credit note:', saleError);
-      alert('Could not record the reconciliation — nothing was changed. Please try again.\n\n' + (saleError?.message || 'Unknown error'));
-      return;
-    }
-
     const rows = lines.map(l => ({
-      shop_id: shopId,
-      date,
       type: 'reconcile',
+      date,
       size: l.size,
       quantity: l.quantity,
       unit_price: l.price,
-      sale_id: savedSale.id,
       note: 'Cutover reconciliation',
       created_by: session?.user?.id || null,
     }));
-    const { data: savedMoves, error: moveError } = await supabase.from('consignment_movements').insert(rows).select();
-    if (moveError) {
-      console.error('❌ Reconciliation credit note saved but ledger seeding failed:', moveError);
-      alert('The credit note was recorded, but seeding the shop\'s stock failed. Please retry seeding via a delivery entry.\n\n' + (moveError.message || 'Unknown error'));
-    }
 
-    // Reduce debt: balance -= (total - paid) = balance -= (-value) = balance + value.
-    const updatedCustomers = state.customers.map(c => c.id === shopId ? { ...c, balance: c.balance - (creditNote.total - 0) } : c);
+    // Same transaction as Report Sold, with a negative total: the credit note,
+    // the seeded stock and the debt reduction all land together. The server
+    // reduces the balance by -(total - paid), which for a negative total is a
+    // credit. Only an admin may post either half (migration 010).
+    const { data, error } = await supabase.rpc('consignment_post_sale', {
+      p_sale: creditNote, p_movements: rows,
+    });
+    if (error || !data?.sale) {
+      console.error('❌ Error recording reconciliation:', error);
+      alert('Could not record the reconciliation — nothing was changed. The shop\'s stock and debt are as they were.\n\n' + (error?.message || 'Unknown error'));
+      return;
+    }
 
     setState({
       ...state,
-      sales: [...state.sales, savedSale],
-      consignmentMovements: savedMoves ? [...state.consignmentMovements, ...savedMoves] : state.consignmentMovements,
-      customers: updatedCustomers,
+      sales: [...state.sales, data.sale],
+      consignmentMovements: [...state.consignmentMovements, ...(data.movements || [])],
+      ...applyRpcRows(data),
     });
-
-    const { error: custError } = await supabase.from('customers')
-      .update({ balance: updatedCustomers.find(c => c.id === shopId).balance }).eq('id', shopId);
-    if (custError) console.error('❌ Error updating shop balance after reconciliation:', custError);
 
     setShowModal(false);
   };
@@ -3433,59 +3317,24 @@ export default function NorthernWaterSystemApp() {
       created_by: session?.user?.id || null
     };
 
-    const newSalesState = state.sales.map(s => {
-      if (s.id === parseInt(formData.saleId)) {
-        const newPaid = s.paid + formData.amount;
-        return {
-          ...s,
-          paid: newPaid,
-          status: newPaid >= s.total ? 'paid' : 'partial'
-        };
-      }
-      return s;
-    });
-
-    const updatedCustomers = state.customers.map(c => {
-      if (c.id === sale.customerId) {
-        return { ...c, balance: c.balance + formData.amount };
-      }
-      return c;
-    });
-
-    // Persist the payment FIRST; only update local state if it actually saved.
-    const { data: savedPayment, error: payError } = await supabase
-      .from('payments')
-      .insert([newPayment])
-      .select()
-      .single();
-
-    if (payError || !savedPayment) {
-      console.error('❌ Error saving payment:', payError);
-      alert('Could not save this payment — it has NOT been recorded. Please try again.\n\n' + (payError?.message || 'Unknown error'));
+    // One transaction: the payment row, the invoice's paid/status and the
+    // customer's balance move together. The over-payment check above is repeated
+    // server-side against the CURRENT committed invoice, so two cashiers taking
+    // money for the same invoice at once can no longer overpay it or overwrite
+    // each other's payment. See migration 011.
+    const { data, error } = await supabase.rpc('record_payment', { p_payment: newPayment });
+    if (error || !data?.payment) {
+      console.error('❌ Error recording payment:', error);
+      alert('Could not save this payment — nothing was recorded, and the invoice and balance are unchanged. Please try again.\n\n' + (error?.message || 'Unknown error'));
       return; // leave the modal open with the entry intact
     }
 
     setState({
       ...state,
-      payments: [...state.payments, savedPayment],
-      sales: newSalesState,
-      customers: updatedCustomers
+      payments: [...state.payments, data.payment],
+      ...(data.sale && { sales: state.sales.map(s => (s.id === data.sale.id ? data.sale : s)) }),
+      ...applyRpcRows(data),
     });
-
-    // Reflect the payment on the sale (paid/status) and the customer balance.
-    const updatedSale = newSalesState.find(s => s.id === parseInt(formData.saleId));
-    const { error: saleUpdErr } = await supabase
-      .from('sales')
-      .update({ paid: updatedSale.paid, status: updatedSale.status })
-      .eq('id', updatedSale.id);
-    if (saleUpdErr) console.error('❌ Error updating sale after payment:', saleUpdErr);
-
-    const updatedCust = updatedCustomers.find(c => c.id === sale.customerId);
-    const { error: custUpdErr } = await supabase
-      .from('customers')
-      .update({ balance: updatedCust.balance })
-      .eq('id', updatedCust.id);
-    if (custUpdErr) console.error('❌ Error updating customer after payment:', custUpdErr);
 
     setShowModal(false);
   };
@@ -3507,64 +3356,22 @@ export default function NorthernWaterSystemApp() {
     confirmMsg += ' and reduce cash collected. This cannot be undone.';
     if (!confirm(confirmMsg)) return;
 
-    // Persist-first: delete the payment row and check the result before any
-    // local change — a rejected delete must not shift balances.
-    const { error: delError } = await supabase.from('payments').delete().eq('id', id);
-    if (delError) {
-      console.error('❌ Error deleting payment:', delError);
-      alert('Could not delete this payment — nothing was changed. Please try again.\n\n' + (delError.message || 'Unknown error'));
+    // One transaction: the payment row, the invoice's paid/status and the
+    // customer's balance are reversed together, so the payment can no longer
+    // vanish while the invoice still shows it as paid.
+    const { data, error } = await supabase.rpc('delete_payment', { p_payment_id: id });
+    if (error) {
+      console.error('❌ Error deleting payment:', error);
+      alert('Could not delete this payment — nothing was changed. The payment, the invoice and the balance are all as they were.\n\n' + (error.message || 'Unknown error'));
       return;
     }
 
-    // 1. Reverse the sale's paid amount and status (if the sale still exists)
-    const updatedSales = state.sales.map(s => {
-      if (s.id === payment.saleId) {
-        const newPaid = (s.paid || 0) - payment.amount;
-        return {
-          ...s,
-          paid: newPaid,
-          status: newPaid >= s.total ? 'paid' : newPaid > 0 ? 'partial' : 'pending'
-        };
-      }
-      return s;
-    });
-
-    // 2. Reverse the customer's balance (payment had credited it)
-    const updatedCustomers = state.customers.map(c =>
-      c.id === payment.customerId
-        ? { ...c, balance: c.balance - payment.amount }
-        : c
-    );
-
-    // 3. Remove the payment from state
     setState({
       ...state,
       payments: state.payments.filter(p => p.id !== id),
-      sales: updatedSales,
-      customers: updatedCustomers
+      ...(data?.sale && { sales: state.sales.map(s => (s.id === data.sale.id ? data.sale : s)) }),
+      ...applyRpcRows(data),
     });
-
-    // 4. Persist the reversals; warn on failure (the payment is already gone).
-    if (sale) {
-      const updatedSale = updatedSales.find(s => s.id === payment.saleId);
-      const { error: saleUpdError } = await supabase
-        .from('sales')
-        .update({ paid: updatedSale.paid, status: updatedSale.status })
-        .eq('id', updatedSale.id);
-      if (saleUpdError) {
-        console.error('❌ Error updating sale after payment delete:', saleUpdError);
-        alert(`Payment deleted, but invoice ${sale.invoiceNumber} could not be updated to show the restored balance. Please check it.`);
-      }
-    }
-    if (customer) {
-      const updatedCust = updatedCustomers.find(c => c.id === payment.customerId);
-      const { error: custUpdError } = await supabase.from('customers')
-        .update({ balance: updatedCust.balance }).eq('id', updatedCust.id);
-      if (custUpdError) {
-        console.error('❌ Error updating customer after payment delete:', custUpdError);
-        alert(`Payment deleted, but ${customer.name}'s balance could not be updated. Please check it.`);
-      }
-    }
     console.log('✅ Payment deleted and reversed in Supabase');
   };
 
