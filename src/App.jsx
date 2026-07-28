@@ -5773,7 +5773,12 @@ export default function NorthernWaterSystemApp() {
         {/* Customers Tab */}
         {activeTab === 'customers' && (() => {
           // Stats reflect ALL customers in scope (not the current search).
-          const allCustomers = state.customers;
+          // visibleCustomers, not state.customers: a sales user must only ever
+          // see their own location's accounts and debt. RLS scopes this at the
+          // database too — this is the second line of defence, and the reason
+          // the Customers module is no longer the odd one out among the
+          // sales-facing views.
+          const allCustomers = visibleCustomers;
           const totalCustomers = allCustomers.length;
           const activeCount = allCustomers.filter(c => c.isActive).length;
           const outstandingDebt = allCustomers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0);
@@ -5822,7 +5827,9 @@ export default function NorthernWaterSystemApp() {
             {/* Summary cards */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4">
               <StatCard label="Total Customers" value={totalCustomers.toLocaleString()} icon={Users} accent="sky" sub="accounts in your scope" />
-              <StatCard label="Outstanding Debt" value={`KES ${outstandingDebt.toLocaleString()}`} icon={Wallet} accent="rose" sub="owed across all accounts" />
+              {/* "all accounts" read as company-wide to a sales user whose view is
+                  location-scoped; say whose accounts these actually are. */}
+              <StatCard label="Outstanding Debt" value={`KES ${outstandingDebt.toLocaleString()}`} icon={Wallet} accent="rose" sub={role === 'sales' && myLocation ? `owed across ${myLocation} accounts` : 'owed across all accounts'} />
               <StatCard label="Active Accounts" value={activeCount.toLocaleString()} icon={TrendingUp} accent="emerald" sub={`${totalCustomers - activeCount} inactive`} />
             </div>
 
