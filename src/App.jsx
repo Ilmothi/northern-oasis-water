@@ -1436,21 +1436,33 @@ export default function NorthernWaterSystemApp() {
     let cogsExpenses = 0;
     let excludedExpenses = 0;
     const operatingBreakdown = {};
+    // cogs- and excluded-tagged expenses are NOT deducted here (see the memo note
+    // below), but they are broken down by type so the P&L can be reconciled
+    // line-for-line against the Expense Report instead of silently dropping them.
+    const cogsBreakdown = {};
+    const excludedBreakdown = {};
     periodExpenses.forEach(e => {
       // Treatment comes from the expense type; fall back to the stored category
       // (which we now set to the treatment), then default to operating for old records.
       const treatment = EXPENSE_TREATMENT[e.subcategory] || e.category || 'operating';
+      const key = e.subcategory || 'Other';
       if (treatment === 'operating') {
         operatingExpenses += e.amount;
-        const key = e.subcategory || 'Other';
         operatingBreakdown[key] = (operatingBreakdown[key] || 0) + e.amount;
       } else if (treatment === 'cogs') {
         cogsExpenses += e.amount;
+        cogsBreakdown[key] = (cogsBreakdown[key] || 0) + e.amount;
       } else {
         excludedExpenses += e.amount;
+        excludedBreakdown[key] = (excludedBreakdown[key] || 0) + e.amount;
       }
     });
 
+    // Net profit deliberately excludes cogs-tagged expenses: those are the raw
+    // material / excise costs already carried by the admin-entered cost per carton
+    // above, so deducting them again would double-count. excluded-tagged types
+    // (loan principal, empty-bottle transport) are cash movements, not P&L costs.
+    // Both are reported as memo lines so the omission is visible, not silent.
     const netProfit = grossProfit - operatingExpenses;
 
     return {
@@ -1466,7 +1478,9 @@ export default function NorthernWaterSystemApp() {
       operatingExpenses,
       operatingBreakdown,
       cogsExpenses,
+      cogsBreakdown,
       excludedExpenses,
+      excludedBreakdown,
       netProfit,
       netMargin: totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) : 0
     };
@@ -2038,6 +2052,25 @@ export default function NorthernWaterSystemApp() {
       Object.entries(reportData.operatingBreakdown).forEach(([k, v]) => {
         opRows += `<tr><td style="padding-left:20px;">${escapeHtml(k)}</td><td>KES ${v.toLocaleString()}</td></tr>`;
       });
+
+      // Memo rows: recorded expenses that are deliberately NOT deducted, listed so
+      // the printed P&L reconciles with the Expense Report rather than dropping them.
+      let memoRows = '';
+      const memoGroup = (label, total, breakdown) => {
+        if (!(total > 0)) return;
+        memoRows += `<tr><td><strong>${label}</strong></td><td>KES ${total.toLocaleString()}</td></tr>`;
+        Object.entries(breakdown).forEach(([k, v]) => {
+          memoRows += `<tr><td style="padding-left:20px;color:#64748b;">${escapeHtml(k)}</td><td style="color:#64748b;">KES ${v.toLocaleString()}</td></tr>`;
+        });
+      };
+      memoGroup('Material &amp; excise purchases', reportData.cogsExpenses, reportData.cogsBreakdown);
+      memoGroup('Excluded from P&amp;L (cash only)', reportData.excludedExpenses, reportData.excludedBreakdown);
+      if (memoRows) {
+        memoRows = `
+            <tr><td colspan="2" style="padding-top:14px;font-size:11px;color:#666;text-transform:uppercase;letter-spacing:0.5px;">Recorded, not deducted</td></tr>
+            ${memoRows}
+        `;
+      }
       htmlContent += `
         <div class="section">
           <div class="summary">Period: ${reportData.period}</div>
@@ -2063,8 +2096,10 @@ export default function NorthernWaterSystemApp() {
               <td><strong>Net Profit/Loss</strong></td>
               <td><strong>KES ${reportData.netProfit.toLocaleString()} (${reportData.netMargin}%)</strong></td>
             </tr>
+            ${memoRows}
           </table>
           <p style="font-size:11px;color:#666;margin-top:10px;">COGS is based on cartons sold × cost per carton (raw materials only). Casual labour is an operating expense, not part of COGS. Raw material purchases are not counted again as operating expenses.</p>
+          <p style="font-size:11px;color:#666;margin-top:6px;">“Recorded, not deducted” lists expenses that are already carried by the cost per carton in COGS, or held outside the P&amp;L by design. They are shown so this statement ties back to the Expense Report for the same period.</p>
         </div>
       `;
     } else if (reportType === 'topcustomers') {
@@ -2897,6 +2932,15 @@ export default function NorthernWaterSystemApp() {
       return;
     }
 
+    // Belt-and-braces: the picker already hides consignment shops, but a shop
+    // flagged while this form was open would otherwise slip through and deduct
+    // finished goods a second time (they left the plant at delivery).
+    const saleCustomer = state.customers.find(c => c.id === parseInt(formData.customerId));
+    if (saleCustomer?.is_consignee) {
+      alert(`${saleCustomer.name} is a consignment shop, so it cannot be invoiced from here — the stock it holds was already deducted when it was delivered.\n\nRecord what it sold under Inventory → Consignment → Report Sold instead.`);
+      return;
+    }
+
     // Prices are entered manually — guard against accidentally saving a
     // line that has a quantity but no price (which would be a KES 0 invoice).
     if (formData.items.some(i => i.quantity > 0 && (!i.price || i.price <= 0))) {
@@ -3002,6 +3046,22 @@ export default function NorthernWaterSystemApp() {
   // See migration 008_consignment.sql.
 
   const consignees = () => state.customers.filter(c => c.is_consignee);
+
+  // Customers selectable on a new sale, honouring the search box. Consignment
+  // shops are excluded on purpose: their cartons already left finished goods at
+  // delivery, so an ordinary sale to them would deduct stock a second time and
+  // double-count the revenue that Report Sold recognises.
+  const saleCustomerOptions = () => {
+    const q = saleCustomerSearch.toLowerCase();
+    return state.customers.filter(c =>
+      !c.is_consignee && (
+        !q ||
+        c.name.toLowerCase().includes(q) ||
+        (c.location || '').toLowerCase().includes(q) ||
+        (c.phone || '').includes(q)
+      )
+    );
+  };
 
   // Cartons a shop currently holds, per size, derived from the movement ledger.
   const getConsignmentOnHand = (shopId) => {
@@ -4880,6 +4940,48 @@ export default function NorthernWaterSystemApp() {
                       )}
                     </div>
 
+                    {/* Recorded but not deducted — shown so this report reconciles
+                        with the Expense Report instead of silently dropping them. */}
+                    {(reportData.cogsExpenses > 0 || reportData.excludedExpenses > 0) && (
+                      <div className="bg-slate-50 rounded-lg p-3 md:p-4 space-y-2 border border-dashed border-slate-300">
+                        <p className="text-slate-500 text-xs font-semibold uppercase tracking-wide">
+                          Recorded, not deducted
+                        </p>
+                        {reportData.cogsExpenses > 0 && (
+                          <>
+                            <div className="flex justify-between text-sm">
+                              <span className="text-slate-500">Material &amp; excise purchases</span>
+                              <span className="text-slate-600">KES {reportData.cogsExpenses.toLocaleString()}</span>
+                            </div>
+                            {Object.entries(reportData.cogsBreakdown).map(([k, v]) => (
+                              <div key={k} className="flex justify-between text-xs pl-3">
+                                <span className="text-slate-400">{k}</span>
+                                <span className="text-slate-500">KES {v.toLocaleString()}</span>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                        {reportData.excludedExpenses > 0 && (
+                          <>
+                            <div className="flex justify-between text-sm pt-1">
+                              <span className="text-slate-500">Excluded from P&amp;L (cash only)</span>
+                              <span className="text-slate-600">KES {reportData.excludedExpenses.toLocaleString()}</span>
+                            </div>
+                            {Object.entries(reportData.excludedBreakdown).map(([k, v]) => (
+                              <div key={k} className="flex justify-between text-xs pl-3">
+                                <span className="text-slate-400">{k}</span>
+                                <span className="text-slate-500">KES {v.toLocaleString()}</span>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                        <p className="text-slate-500 text-xs pt-1">
+                          Already carried by the cost per carton in COGS above, or outside the P&amp;L by design.
+                          Listed here so this report ties back to the Expense Report.
+                        </p>
+                      </div>
+                    )}
+
                     {/* Net Profit */}
                     <div className={`border-2 rounded-lg p-3 md:p-4 ${reportData.netProfit >= 0 ? 'border-emerald-200 bg-emerald-50' : 'border-rose-200 bg-rose-50'}`}>
                       <p className={reportData.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}>Net Profit</p>
@@ -6719,14 +6821,7 @@ export default function NorthernWaterSystemApp() {
                       className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm placeholder-slate-400 mb-2"
                     />
                     <div className="max-h-48 overflow-y-auto border border-slate-300 rounded-lg divide-y divide-blue-400/10">
-                      {state.customers
-                        .filter(c => {
-                          const q = saleCustomerSearch.toLowerCase();
-                          return !q ||
-                            c.name.toLowerCase().includes(q) ||
-                            (c.location || '').toLowerCase().includes(q) ||
-                            (c.phone || '').includes(q);
-                        })
+                      {saleCustomerOptions()
                         .map(c => {
                           const selected = parseInt(formData.customerId) === c.id;
                           return (
@@ -6745,16 +6840,17 @@ export default function NorthernWaterSystemApp() {
                             </button>
                           );
                         })}
-                      {state.customers.filter(c => {
-                        const q = saleCustomerSearch.toLowerCase();
-                        return !q ||
-                          c.name.toLowerCase().includes(q) ||
-                          (c.location || '').toLowerCase().includes(q) ||
-                          (c.phone || '').includes(q);
-                      }).length === 0 && (
+                      {saleCustomerOptions().length === 0 && (
                         <p className="text-slate-500 text-sm text-center py-3">No matching customers</p>
                       )}
                     </div>
+                    {consignees().length > 0 && (
+                      <p className="text-slate-500 text-xs mt-2">
+                        Consignment shops are not listed here. Record what they sell under{' '}
+                        <span className="font-medium">Inventory → Consignment → Report Sold</span>, so their
+                        stock and debt stay correct.
+                      </p>
+                    )}
                     {formData.customerId && (
                       <p className="text-emerald-600 text-xs mt-2">
                         ✓ Selected: {state.customers.find(c => c.id === parseInt(formData.customerId))?.name}
