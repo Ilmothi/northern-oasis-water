@@ -77,14 +77,24 @@ create index if not exists consignment_movements_shop_idx
 
 alter table consignment_movements enable row level security;
 
+-- Each policy is dropped first so this file is re-runnable; they were bare
+-- `create policy` statements when first applied, which error on a second run.
+--
+-- NOTE: migration 010 supersedes the INSERT policy below, splitting it so that
+-- only an admin may insert a 'reconcile' movement (it erases customer debt).
+-- Re-running THIS file would reinstate the looser manager-can-reconcile rule, so
+-- if you ever replay it, apply 010 afterwards.
+drop policy if exists "consignment_movements_select" on consignment_movements;
 create policy "consignment_movements_select"
   on consignment_movements for select
   using (get_my_role() in ('admin', 'manager'));
 
+drop policy if exists "consignment_movements_insert" on consignment_movements;
 create policy "consignment_movements_insert"
   on consignment_movements for insert
   with check (get_my_role() in ('admin', 'manager'));
 
+drop policy if exists "consignment_movements_delete" on consignment_movements;
 create policy "consignment_movements_delete"
   on consignment_movements for delete
   using (get_my_role() = 'admin');
