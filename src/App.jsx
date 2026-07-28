@@ -669,7 +669,10 @@ export default function NorthernWaterSystemApp() {
     return total;
   };
 
-  // Finished goods valued at admin-entered cost per carton (0 if not set)
+  // Finished goods AT THE PLANT, valued at admin-entered cost per carton (0 if
+  // not set). Cartons held by consignment shops are still ours but have already
+  // left this figure — see calculateConsignmentStockValue, and use
+  // calculateTotalAssets for the combined number.
   const calculateFinishedGoodsValue = () => {
     let total = 0;
     Object.entries(state.finishedGoods).forEach(([size, data]) => {
@@ -3075,6 +3078,30 @@ export default function NorthernWaterSystemApp() {
     return onHand;
   };
 
+  // Stock sitting at consignment shops, valued at the same carton cost as plant
+  // finished goods. Delivering to a shop is a transfer, not a sale, so these
+  // cartons are still a company asset — they were just deducted from
+  // finishedGoods at delivery and would otherwise vanish from the balance sheet
+  // until the shop reports them sold.
+  //
+  // Note this reads the movement ledger, which is only loaded for admin/manager
+  // (loadDataFromSupabase tier 2). Sales users get 0 here, which is correct
+  // because no asset figure is shown to them.
+  const calculateConsignmentStockValue = () => {
+    let total = 0;
+    consignees().forEach(shop => {
+      Object.entries(getConsignmentOnHand(shop.id)).forEach(([size, cartons]) => {
+        total += (cartons || 0) * (cartonCosts[size] || 0);
+      });
+    });
+    return total;
+  };
+
+  // The single source for the headline asset figure, so the dashboard header and
+  // the Cost Settings panel can never drift apart.
+  const calculateTotalAssets = () =>
+    calculateInventoryValue() + calculateFinishedGoodsValue() + calculateConsignmentStockValue();
+
   const openConsignment = (action, shopId) => {
     const sizes = Object.keys(state.finishedGoods);
     const lines = {}; const prices = {};
@@ -3892,7 +3919,7 @@ export default function NorthernWaterSystemApp() {
               {role !== 'sales' && (
                 <div className="text-right">
                   <p className="text-sky-600 text-xs font-semibold">Total Assets</p>
-                  <p className="text-lg md:text-2xl font-bold text-sky-600">KES {(calculateInventoryValue() + calculateFinishedGoodsValue()).toLocaleString()}</p>
+                  <p className="text-lg md:text-2xl font-bold text-sky-600">KES {calculateTotalAssets().toLocaleString()}</p>
                 </div>
               )}
               <div className="flex items-center gap-2 md:gap-3 border-l border-slate-200 pl-3 md:pl-5">
@@ -6168,15 +6195,24 @@ export default function NorthernWaterSystemApp() {
                   <span className="text-slate-900 font-semibold">KES {calculateInventoryValue().toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between p-2 bg-slate-50 rounded">
-                  <span className="text-slate-500">Finished Goods (at carton cost)</span>
+                  <span className="text-slate-500">Finished Goods at the plant (at carton cost)</span>
                   <span className="text-slate-900 font-semibold">KES {calculateFinishedGoodsValue().toLocaleString()}</span>
                 </div>
+                {consignees().length > 0 && (
+                  <div className="flex justify-between p-2 bg-slate-50 rounded">
+                    <span className="text-slate-500">Stock at consignment shops (at carton cost)</span>
+                    <span className="text-slate-900 font-semibold">KES {calculateConsignmentStockValue().toLocaleString()}</span>
+                  </div>
+                )}
                 <div className="flex justify-between p-2 bg-slate-50 rounded border border-emerald-200">
                   <span className="text-emerald-600 font-semibold">Total Assets</span>
-                  <span className="text-emerald-600 font-bold">KES {(calculateInventoryValue() + calculateFinishedGoodsValue()).toLocaleString()}</span>
+                  <span className="text-emerald-600 font-bold">KES {calculateTotalAssets().toLocaleString()}</span>
                 </div>
               </div>
               <p className="text-slate-500 text-xs mt-3">Note: Materials with no purchase recorded yet are valued at 0 until you log a purchase for them.</p>
+              {consignees().length > 0 && (
+                <p className="text-slate-500 text-xs mt-1">Stock delivered to a consignment shop is still ours until the shop reports it sold, so it is counted as an asset — just held off-site rather than at the plant.</p>
+              )}
             </div>
           </div>
         )}
