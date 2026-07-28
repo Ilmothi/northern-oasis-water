@@ -91,11 +91,14 @@ errored with `column ... already has a default`. Both are now guarded on
 
 ## Known limitation
 
-`001_rls_policies.sql` and `002_employees_rls_sales_casual.sql` still use bare
-`create policy` and will error if re-run. They were deliberately left alone:
-`001` defines the entire security boundary across twelve tables, and mechanically
-rewriting ~30 policy statements carries more risk than the re-runnability is worth
-while the schema is live and stable.
+`001_rls_policies.sql` (45 policies) and `002_employees_rls_sales_casual.sql`
+(1 policy) still use bare `create policy` and will error if re-run. They are the
+only two files in this directory that are not idempotent — `006`, `008`, `010`
+and `012` all pair every `create policy` with a `drop policy if exists`.
+
+They were deliberately left alone: `001` defines the entire security boundary
+across twelve tables, and mechanically rewriting 45 policy statements carries more
+risk than the re-runnability is worth while the schema is live and stable.
 
 The practical consequence is that rebuilding from scratch needs `001` and `002`
 applied to a genuinely empty database. If a staging-environment rebuild ever
