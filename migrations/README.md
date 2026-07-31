@@ -41,19 +41,21 @@ functions** (`prosecdef`, `proconfig`). See `docs/audit-2026-07-30-rls.md`.
 | `012_production_logs_sales_role.sql` | Sales role can log production and see its own runs |
 | `013_remove_blanket_policies.sql` | Drops the `using(true)` policies that made RLS inert on 12 of 15 tables, and closes the profile privilege-escalation hole |
 | `014_reapply_inventory_function_authz.sql` | Re-applies `010` sections 2–3, and corrects their null-role fail-open. Closed the stock-write outage |
+| `015_atomic_production.sql` | `production_bom_changes`, `record_production`, `delete_production` — moves the BOM into the database and makes production logging a single transaction |
 
 Apply dates were not recorded before this file existed. Known: `007` on
 2026-07-02; `008` and `009` on 2026-07-22; `010`, `011` and `012` on 2026-07-28;
 `013` on 2026-07-28 or shortly after (confirmed live by the 2026-07-30 audit);
-`014` on 2026-07-31, verified against `pg_proc` (both inventory functions
-`prosecdef = true`, `record_sale` and `get_my_role` unchanged).
+`014` and `015` on 2026-07-31. Both verified against `pg_proc` rather than
+trusting the apply to have succeeded — `014`'s two inventory functions
+`prosecdef = true` with `record_sale`/`get_my_role` unchanged as controls, and
+`015`'s three functions all present and all `SECURITY INVOKER`.
 The rest were applied between 2026-06-12 and 2026-06-29, in filename order.
 
-### Written but NOT yet applied
-
-| File | What it does |
-|------|--------------|
-| `015_atomic_production.sql` | `production_bom_changes`, `record_production`, `delete_production` — moves the BOM into the database and makes production logging a single transaction. Requires `014`; must be applied **before** the matching client deploy |
+`015` is live **ahead of the client that calls it**, which is the safe order —
+the new functions sit unused until `record_production` / `delete_production`
+ship in `src/App.jsx`. Deploying that client first would have broken production
+logging outright.
 
 ## The 010 partial apply
 
