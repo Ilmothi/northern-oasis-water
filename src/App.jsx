@@ -2768,92 +2768,30 @@ export default function NorthernWaterSystemApp() {
   };
 
   // Delete Production Log — returns finished goods and restores raw materials.
-  // Persist-first: the log row is deleted (and the result checked) before the
-  // inventory reversal is applied, so a rejected delete can't leave stock
-  // reversed with the production record still on the books.
+  // One transaction (migration 015): the row is removed and the stock reversed
+  // together, or neither happens. A refused delete can no longer leave stock
+  // reversed with the run still on the books, or the run deleted with its stock
+  // never returned. The reversal is derived server-side from the stored run, so
+  // it is by construction the exact inverse of what the run deducted.
   const handleDeleteProduction = async (id) => {
     const log = state.productionLogs.find(p => p.id === id);
     if (!log) return;
     if (!confirm('Delete this production log? This will reverse the raw materials used and the finished goods produced. This cannot be undone.')) return;
 
-    const { error: delError } = await supabase.from('production_logs').delete().eq('id', id);
-    if (delError) {
-      console.error('❌ Error deleting production log:', delError);
-      alert('Could not delete this production log — nothing was changed. Please try again.\n\n' + (delError.message || 'Unknown error'));
+    const { data, error } = await supabase.rpc('delete_production', { p_id: id });
+    if (error) {
+      console.error('❌ Error deleting production log:', error);
+      alert('Could not delete this production log — nothing was changed. Please try again.\n\n' + (error.message || 'Unknown error'));
       return;
     }
 
-    const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
-    const updatedFinishedGoods = JSON.parse(JSON.stringify(state.finishedGoods));
-
-    Object.entries(log.items).forEach(([size, cartonsProduced]) => {
-      if (!cartonsProduced) return;
-      const bottlesPerCarton = BOTTLES_PER_CARTON[size];
-      const bottlesProduced = cartonsProduced * bottlesPerCarton;
-
-      // Restore empty bottles
-      if (size === '0.5L') updatedRawMaterials.emptyBottles['0.5L'] += bottlesProduced;
-      else if (size === '1.5L') updatedRawMaterials.emptyBottles['1.5L'] += bottlesProduced;
-      else if (size === '5L') updatedRawMaterials.emptyBottles['5L'] += bottlesProduced;
-      else if (size === '18.9L_disposable') updatedRawMaterials.emptyBottles['18.9L_disposable'] += cartonsProduced;
-      else if (size === '18.9L_refill') updatedRawMaterials.emptyBottles['18.9L_refill'] += cartonsProduced;
-
-      // Restore seals (5L and 18.9L here; short neck handled below)
-      if (size === '5L') updatedRawMaterials.seals['5L'] += bottlesProduced;
-      else if (size === '18.9L_disposable' || size === '18.9L_refill') updatedRawMaterials.seals['18.9L'] += cartonsProduced;
-
-      // Restore labels
-      if (size === '0.5L') updatedRawMaterials.labels['0.5L'] += bottlesProduced;
-      else if (size === '1.5L') updatedRawMaterials.labels['1.5L'] += bottlesProduced;
-      else if (size === '5L') updatedRawMaterials.labels['5L'] += bottlesProduced;
-      else if (size === '18.9L_disposable' || size === '18.9L_refill') updatedRawMaterials.labels['18.9L'] += cartonsProduced;
-
-      // Restore caps (18.9L only)
-      if (size === '18.9L_disposable' || size === '18.9L_refill') {
-        if (updatedRawMaterials.caps && updatedRawMaterials.caps['18.9L'] != null) {
-          updatedRawMaterials.caps['18.9L'] += cartonsProduced;
-        }
-      }
-
-      // Restore overwraps (by size)
-      if (updatedRawMaterials.overwraps[size] !== undefined) {
-        updatedRawMaterials.overwraps[size] += cartonsProduced;
-      }
-
-      // Restore KRA stamps (per bottle, mirroring the production deduction).
-      // Note: logs recorded BEFORE the per-bottle rule only deducted one stamp
-      // per carton, so deleting one of those old logs over-restores stamps —
-      // correct with a stock adjustment if it happens.
-      updatedRawMaterials.kraStamps += bottlesProduced;
-
-      // Restore RO chemical
-      updatedRawMaterials.roChemical += (bottlesProduced / 1000);
-
-      // Remove the produced finished goods
-      if (updatedFinishedGoods[size]) {
-        updatedFinishedGoods[size].quantity -= cartonsProduced;
-      }
-    });
-
-    // Restore combined short neck seals (0.5L + 1.5L)
-    const totalShortNeckBottles =
-      ((log.items['0.5L'] || 0) * BOTTLES_PER_CARTON['0.5L']) +
-      ((log.items['1.5L'] || 0) * BOTTLES_PER_CARTON['1.5L']);
-    if (totalShortNeckBottles > 0) {
-      updatedRawMaterials.seals['short_neck'] += totalShortNeckBottles;
-    }
-
-    const fresh = await persistInventoryDeltas(
-      { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
-      { rawMaterials: updatedRawMaterials, finishedGoods: updatedFinishedGoods }
-    );
-    if (!fresh) {
-      alert('The production log was deleted, but the stock could not be reversed. Please run a stock adjustment or reload.');
-    }
     setState({
       ...state,
       productionLogs: state.productionLogs.filter(p => p.id !== id),
-      ...(fresh && { rawMaterials: fresh.rawMaterials, finishedGoods: fresh.finishedGoods }),
+      ...(data?.inventory && {
+        rawMaterials: data.inventory.rawMaterials,
+        finishedGoods: data.inventory.finishedGoods,
+      }),
     });
     console.log('✅ Production log deleted and reversed in Supabase');
   };
@@ -3388,122 +3326,41 @@ export default function NorthernWaterSystemApp() {
       return;
     }
 
-    // Input is in CARTONS for all sizes
-    // id is assigned by the database (identity column) — see handleSaveSale.
-    const newProduction = {
-      date: formData.date,
-      items: formData.items, // Cartons produced
-      unit: 'cartons', // Always cartons
-      notes: formData.notes,
-      casuals: formData.casuals || [],
-      created_by: session?.user?.id || null
-    };
-
-    // Deep clone so the BOM deductions below never mutate live state in place —
-    // if the insert fails we return early without setState, and a shallow copy
-    // would leave the real raw-material / finished-goods quantities already
-    // changed (and out of step with the missing production record).
-    const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
-    const updatedFinishedGoods = JSON.parse(JSON.stringify(state.finishedGoods));
-
-    Object.entries(formData.items).forEach(([size, cartonsProduced]) => {
-      if (cartonsProduced === 0) return;
-      
-      // cartonsProduced is in CARTONS
-      const bottlesPerCarton = BOTTLES_PER_CARTON[size];
-      
-      // Calculate bottles needed from raw materials
-      const bottlesNeeded = cartonsProduced * bottlesPerCarton;
-
-      // ===== DEDUCT EMPTY BOTTLES (based on size) =====
-      if (size === '0.5L') updatedRawMaterials.emptyBottles['0.5L'] -= bottlesNeeded;
-      else if (size === '1.5L') updatedRawMaterials.emptyBottles['1.5L'] -= bottlesNeeded;
-      else if (size === '5L') updatedRawMaterials.emptyBottles['5L'] -= bottlesNeeded;
-      else if (size === '18.9L_disposable') updatedRawMaterials.emptyBottles['18.9L_disposable'] -= cartonsProduced;
-      else if (size === '18.9L_refill') updatedRawMaterials.emptyBottles['18.9L_refill'] -= cartonsProduced;
-
-      // ===== DEDUCT SEALS =====
-      // 0.5L and 1.5L both use SHORT NECK seals - add both and deduct once
-      if (size === '0.5L') {
-        // Will be handled below when we sum both 0.5L and 1.5L
-      } else if (size === '1.5L') {
-        // Will be handled below when we sum both 0.5L and 1.5L
-      } else if (size === '5L') {
-        updatedRawMaterials.seals['5L'] -= bottlesNeeded;
-      } else if (size === '18.9L_disposable' || size === '18.9L_refill') {
-        updatedRawMaterials.seals['18.9L'] -= cartonsProduced;
-      }
-
-      // ===== DEDUCT LABELS (based on size) =====
-      if (size === '0.5L') updatedRawMaterials.labels['0.5L'] -= bottlesNeeded;
-      else if (size === '1.5L') updatedRawMaterials.labels['1.5L'] -= bottlesNeeded;
-      else if (size === '5L') updatedRawMaterials.labels['5L'] -= bottlesNeeded;
-      else if (size === '18.9L_disposable' || size === '18.9L_refill') updatedRawMaterials.labels['18.9L'] -= cartonsProduced;
-
-      // ===== DEDUCT CAPS (18.9L only — both disposable and refill) =====
-      if (size === '18.9L_disposable' || size === '18.9L_refill') {
-        if (updatedRawMaterials.caps && updatedRawMaterials.caps['18.9L'] != null) {
-          updatedRawMaterials.caps['18.9L'] -= cartonsProduced;
-        }
-      }
-
-      // ===== DEDUCT OVERWRAPS (per carton, BY SIZE) =====
-      // != null (not truthy): when overwraps for a size are at 0, production must
-      // still deduct (driving it negative to show the shortage), matching how the
-      // delete-production restore adds back unconditionally.
-      if (updatedRawMaterials.overwraps[size] != null) {
-        updatedRawMaterials.overwraps[size] -= cartonsProduced;
-      }
-
-      // ===== DEDUCT KRA STAMPS (per BOTTLE — every bottle carries a stamp) =====
-      // For 18.9L sizes bottlesNeeded equals cartonsProduced (1 bottle/carton),
-      // so this only changes the 0.5L / 1.5L / 5L consumption.
-      updatedRawMaterials.kraStamps -= bottlesNeeded;
-
-      // ===== DEDUCT RO CHEMICAL (based on bottles) =====
-      updatedRawMaterials.roChemical -= (bottlesNeeded / 1000);
-
-      // ===== INCREASE FINISHED GOODS (in CARTONS) =====
-      if (updatedFinishedGoods[size]) {
-        updatedFinishedGoods[size].quantity += cartonsProduced;
-      }
+    // Input is in CARTONS for all sizes.
+    //
+    // The BOM — which raw materials a run consumes and how many cartons it
+    // yields — lives in the database as of migration 015, so it is no longer
+    // computed here. record_production writes the log AND moves the stock in a
+    // single transaction: both land or neither does. The old two-step version
+    // could record a run and then fail to post the finished goods, leaving a
+    // stock discrepancy no report could see.
+    //
+    // id, created_by and the stock movement are all assigned server-side —
+    // created_by from the session rather than the payload, which is what
+    // production_logs' RLS policy checks for sales users.
+    const { data, error } = await supabase.rpc('record_production', {
+      p_log: {
+        date: formData.date,
+        items: formData.items, // cartons produced
+        unit: 'cartons', // always cartons
+        notes: formData.notes,
+        casuals: formData.casuals || [],
+      },
     });
 
-    // ===== DEDUCT COMBINED SHORT NECK SEALS (for both 0.5L and 1.5L) =====
-    const totalShortNeckBottles = 
-      ((formData.items['0.5L'] || 0) * BOTTLES_PER_CARTON['0.5L']) +
-      ((formData.items['1.5L'] || 0) * BOTTLES_PER_CARTON['1.5L']);
-    
-    if (totalShortNeckBottles > 0) {
-      updatedRawMaterials.seals['short_neck'] -= totalShortNeckBottles;
-    }
-
-    // Persist the production log FIRST. Only then apply the inventory changes
-    // (via the atomic delta RPC), so a failed insert can't leave raw materials
-    // deducted / finished goods added with no production record to explain them.
-    const { data: savedProduction, error: prodError } = await supabase
-      .from('production_logs')
-      .insert([newProduction])
-      .select()
-      .single();
-
-    if (prodError || !savedProduction) {
-      console.error('❌ Error saving production log:', prodError);
-      alert('Could not save this production log — it has NOT been recorded and stock was not changed. Please try again.\n\n' + (prodError?.message || 'Unknown error'));
+    if (error || !data?.production) {
+      console.error('❌ Error saving production log:', error);
+      alert('Could not save this production run — nothing was recorded and stock was not changed. Please try again.\n\n' + (error?.message || 'Unknown error'));
       return; // leave the modal open with the entry intact
     }
 
-    const fresh = await persistInventoryDeltas(
-      { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
-      { rawMaterials: updatedRawMaterials, finishedGoods: updatedFinishedGoods }
-    );
-    if (!fresh) {
-      alert('The production log was recorded, but the stock could not be updated. Please run a stock adjustment or reload.');
-    }
     setState({
       ...state,
-      productionLogs: [...state.productionLogs, savedProduction],
-      ...(fresh && { rawMaterials: fresh.rawMaterials, finishedGoods: fresh.finishedGoods }),
+      productionLogs: [...state.productionLogs, data.production],
+      ...(data.inventory && {
+        rawMaterials: data.inventory.rawMaterials,
+        finishedGoods: data.inventory.finishedGoods,
+      }),
     });
 
     setShowModal(false);
