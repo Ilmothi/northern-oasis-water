@@ -2984,38 +2984,36 @@ export default function NorthernWaterSystemApp() {
       }
     }
 
-    const rows = lines.map(l => ({
-      shop_id: shopId,
-      date: formData.date || localDateString(),
-      type: 'deliver',
-      size: l.size,
-      quantity: l.quantity,
-      note: formData.note || null,
-      created_by: session?.user?.id || null,
-    }));
+    // One transaction (migration 016): the ledger rows and the plant stock move
+    // together or not at all. The old two-step version could commit the movement
+    // rows and then fail to deduct finished goods, which double-counted those
+    // cartons — once as plant stock, once as consignment stock, both feeding
+    // calculateTotalAssets. created_by and the stock delta are set server-side,
+    // and the "enough at the plant" limit is re-checked there under the row lock.
+    const { data, error } = await supabase.rpc('consignment_move_stock', {
+      p_shop_id: shopId,
+      p_type: 'deliver',
+      p_movements: lines.map(l => ({
+        size: l.size,
+        quantity: l.quantity,
+        date: formData.date || localDateString(),
+        note: formData.note || null,
+      })),
+    });
 
-    // Persist the ledger FIRST — only move stock once the DB accepts the rows.
-    const { data: saved, error } = await supabase.from('consignment_movements').insert(rows).select();
-    if (error || !saved) {
+    if (error || !data?.movements) {
       console.error('❌ Error saving consignment delivery:', error);
       alert('Could not record this delivery — nothing was changed. Please try again.\n\n' + (error?.message || 'Unknown error'));
       return;
     }
 
-    const updatedFG = JSON.parse(JSON.stringify(state.finishedGoods));
-    lines.forEach(l => { if (updatedFG[l.size]) updatedFG[l.size].quantity -= l.quantity; });
-
-    const fresh = await persistInventoryDeltas(
-      { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
-      { rawMaterials: state.rawMaterials, finishedGoods: updatedFG }
-    );
-    if (!fresh) {
-      alert('The delivery was recorded, but the plant finished-goods stock could not be updated. Please run a stock adjustment or reload.');
-    }
     setState({
       ...state,
-      ...(fresh && { rawMaterials: fresh.rawMaterials, finishedGoods: fresh.finishedGoods }),
-      consignmentMovements: [...state.consignmentMovements, ...saved],
+      ...(data.inventory && {
+        rawMaterials: data.inventory.rawMaterials,
+        finishedGoods: data.inventory.finishedGoods,
+      }),
+      consignmentMovements: [...state.consignmentMovements, ...data.movements],
     });
     setShowModal(false);
   };
@@ -3035,37 +3033,34 @@ export default function NorthernWaterSystemApp() {
       }
     }
 
-    const rows = lines.map(l => ({
-      shop_id: shopId,
-      date: formData.date || localDateString(),
-      type: 'return',
-      size: l.size,
-      quantity: l.quantity,
-      note: formData.note || null,
-      created_by: session?.user?.id || null,
-    }));
+    // Atomic, same as the delivery above (migration 016). The "shop holds that
+    // much" limit is re-derived server-side from the ledger after the rows are
+    // inserted, so a stale local copy of the movements can no longer let a shop
+    // hand back more than it has.
+    const { data, error } = await supabase.rpc('consignment_move_stock', {
+      p_shop_id: shopId,
+      p_type: 'return',
+      p_movements: lines.map(l => ({
+        size: l.size,
+        quantity: l.quantity,
+        date: formData.date || localDateString(),
+        note: formData.note || null,
+      })),
+    });
 
-    const { data: saved, error } = await supabase.from('consignment_movements').insert(rows).select();
-    if (error || !saved) {
+    if (error || !data?.movements) {
       console.error('❌ Error saving consignment return:', error);
       alert('Could not record this take-back — nothing was changed. Please try again.\n\n' + (error?.message || 'Unknown error'));
       return;
     }
 
-    const updatedFG = JSON.parse(JSON.stringify(state.finishedGoods));
-    lines.forEach(l => { if (updatedFG[l.size]) updatedFG[l.size].quantity += l.quantity; });
-
-    const fresh = await persistInventoryDeltas(
-      { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
-      { rawMaterials: state.rawMaterials, finishedGoods: updatedFG }
-    );
-    if (!fresh) {
-      alert('The take-back was recorded, but the plant finished-goods stock could not be updated. Please run a stock adjustment or reload.');
-    }
     setState({
       ...state,
-      ...(fresh && { rawMaterials: fresh.rawMaterials, finishedGoods: fresh.finishedGoods }),
-      consignmentMovements: [...state.consignmentMovements, ...saved],
+      ...(data.inventory && {
+        rawMaterials: data.inventory.rawMaterials,
+        finishedGoods: data.inventory.finishedGoods,
+      }),
+      consignmentMovements: [...state.consignmentMovements, ...data.movements],
     });
     setShowModal(false);
   };

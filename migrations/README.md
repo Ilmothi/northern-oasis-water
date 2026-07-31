@@ -57,6 +57,12 @@ the new functions sit unused until `record_production` / `delete_production`
 ship in `src/App.jsx`. Deploying that client first would have broken production
 logging outright.
 
+### Written but NOT yet applied
+
+| File | What it does |
+|------|--------------|
+| `016_atomic_consignment_transfers.sql` | `consignment_move_stock` — makes consignment deliver and take-back single transactions, and moves both stock limits server-side. Requires `014`; independent of `015`. Must be applied **before** the matching client deploy |
+
 ## The 010 partial apply
 
 Worth knowing, because it is the reason for the warning above and it caused a
