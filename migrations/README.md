@@ -42,6 +42,7 @@ functions** (`prosecdef`, `proconfig`). See `docs/audit-2026-07-30-rls.md`.
 | `013_remove_blanket_policies.sql` | Drops the `using(true)` policies that made RLS inert on 12 of 15 tables, and closes the profile privilege-escalation hole |
 | `014_reapply_inventory_function_authz.sql` | Re-applies `010` sections 2–3, and corrects their null-role fail-open. Closed the stock-write outage |
 | `015_atomic_production.sql` | `production_bom_changes`, `record_production`, `delete_production` — moves the BOM into the database and makes production logging a single transaction |
+| `017_customer_balance_and_write_scope.sql` | Makes `customers.balance` derived (`recompute_customer_balance` replaces `adjust_customer_balance`) and removes the client's UPDATE privilege on the column; adds location scope and `created_by` attribution to the `sales` and `payments` INSERT policies. Closes audit findings 1 and 3, and the forgeable/unscoped part of 2 |
 
 Apply dates were not recorded before this file existed. Known: `007` on
 2026-07-02; `008` and `009` on 2026-07-22; `010`, `011` and `012` on 2026-07-28;
@@ -50,7 +51,15 @@ Apply dates were not recorded before this file existed. Known: `007` on
 trusting the apply to have succeeded — `014`'s two inventory functions
 `prosecdef = true` with `record_sale`/`get_my_role` unchanged as controls, and
 `015`'s three functions all present and all `SECURITY INVOKER`.
+`017` on 2026-08-01, verified three ways: all five money functions confirmed
+rewired onto `recompute_customer_balance` with none still referencing the dropped
+`adjust_customer_balance`; the five column grants on `customers` present with
+`balance` absent; and the two rewritten INSERT policies in `pg_policies`.
 The rest were applied between 2026-06-12 and 2026-06-29, in filename order.
+
+`017` was applied **before** its matching client, which is the wrong order for
+that file and broke customer editing until the client caught up — see the note
+under 018 below.
 
 `015` is live **ahead of the client that calls it**, which is the safe order —
 the new functions sit unused until `record_production` / `delete_production`
@@ -62,6 +71,43 @@ logging outright.
 | File | What it does |
 |------|--------------|
 | `016_atomic_consignment_transfers.sql` | `consignment_move_stock` — makes consignment deliver and take-back single transactions, and moves both stock limits server-side. Requires `014`; independent of `015`. Must be applied **before** the matching client deploy |
+| `018_settle_customer_balances.sql` | Corrects the five customer balances that disagree with their sales ledger. **Debtors and Aging Debtors rise by KES 5,450 on apply.** Requires `017` |
+
+### The 017 ordering mistake, and why 018 exists
+
+`017` inverts the usual rule: it must be applied **after** its client, not
+before. It revokes table-wide UPDATE on `customers`, and the client that shipped
+before it sent the entire customer row back on every edit — including `balance`
+and `id`, neither of which is grantable afterwards.
+
+It was applied first, on 2026-08-01, and customer editing broke immediately with
+`permission denied for table customers`. Nothing else was affected: no money
+path writes `customers` outside `recompute_customer_balance`, which runs as
+owner. The remedy was to deploy the client, not to roll anything back.
+
+Two things worth carrying forward from that. **`permission denied for table X` is
+what PostgreSQL reports for a missing COLUMN privilege too** — it checks the
+table-level grant first and reports the failure against the table, so the message
+does not tell you which column caused it. `information_schema.column_privileges`
+does. And an ordering constraint stated only in a file header is not much of a
+constraint; if a file must not be applied before something else, that belongs in
+this table where the apply decision is actually made.
+
+`018` exists because the balance correction was written as a section of `017`
+after `017` was already live. Appending it would have left this repo's record
+disagreeing with the database — the precise failure this README exists to
+prevent — so it was extracted. `017` now matches what was applied, statement for
+statement.
+
+### Draft, not in the apply order
+
+`019_DRAFT_payment_write_path.sql` closes finding 2's remainder: it makes
+`sales.paid` derived, revokes client INSERT on `payments` and UPDATE on `sales`,
+and converts `record_payment` to `SECURITY DEFINER`. It carries the only
+hand-written authorization gates in this series — three of them, all on the
+payment path — plus a schema change and a backfill. Open questions are listed at
+the foot of the file. Rename it to `019_payment_write_path.sql` only once those
+are answered and `017` and `018` are both live and verified.
 
 ## The 010 partial apply
 
