@@ -42,35 +42,50 @@ functions** (`prosecdef`, `proconfig`). See `docs/audit-2026-07-30-rls.md`.
 | `013_remove_blanket_policies.sql` | Drops the `using(true)` policies that made RLS inert on 12 of 15 tables, and closes the profile privilege-escalation hole |
 | `014_reapply_inventory_function_authz.sql` | Re-applies `010` sections 2–3, and corrects their null-role fail-open. Closed the stock-write outage |
 | `015_atomic_production.sql` | `production_bom_changes`, `record_production`, `delete_production` — moves the BOM into the database and makes production logging a single transaction |
+| `016_atomic_consignment_transfers.sql` | `consignment_move_stock` — makes consignment deliver and take-back single transactions, and moves both stock limits server-side |
 | `017_customer_balance_and_write_scope.sql` | Makes `customers.balance` derived (`recompute_customer_balance` replaces `adjust_customer_balance`) and removes the client's UPDATE privilege on the column; adds location scope and `created_by` attribution to the `sales` and `payments` INSERT policies. Closes audit findings 1 and 3, and the forgeable/unscoped part of 2 |
 
 Apply dates were not recorded before this file existed. Known: `007` on
 2026-07-02; `008` and `009` on 2026-07-22; `010`, `011` and `012` on 2026-07-28;
 `013` on 2026-07-28 or shortly after (confirmed live by the 2026-07-30 audit);
-`014` and `015` on 2026-07-31. Both verified against `pg_proc` rather than
+`014`, `015` and `016` on 2026-07-31, all verified against `pg_proc` rather than
 trusting the apply to have succeeded — `014`'s two inventory functions
 `prosecdef = true` with `record_sale`/`get_my_role` unchanged as controls, and
-`015`'s three functions all present and all `SECURITY INVOKER`.
+`015`'s three plus `016`'s one all present and all `SECURITY INVOKER`. `016` was
+additionally proved atomic against the live database: a refused call left the
+`consignment_movements` count unchanged, where the code it replaces would have
+committed the ledger row.
 `017` on 2026-08-01, verified three ways: all five money functions confirmed
 rewired onto `recompute_customer_balance` with none still referencing the dropped
 `adjust_customer_balance`; the five column grants on `customers` present with
 `balance` absent; and the two rewritten INSERT policies in `pg_policies`.
 The rest were applied between 2026-06-12 and 2026-06-29, in filename order.
 
-`017` was applied **before** its matching client, which is the wrong order for
-that file and broke customer editing until the client caught up — see the note
+`015` and `016` were applied ahead of the clients that call them, which is the
+safe order for those files — the new functions sat unused until
+`record_production`, `delete_production` and `consignment_move_stock` shipped in
+`src/App.jsx` (PRs #29 and #30, 2026-08-01). Deploying either client first would
+have broken production logging or consignment transfers outright.
+
+`017` is the opposite case and was applied in the wrong order — see the note
 under 018 below.
 
-`015` is live **ahead of the client that calls it**, which is the safe order —
-the new functions sit unused until `record_production` / `delete_production`
-ship in `src/App.jsx`. Deploying that client first would have broken production
-logging outright.
+**This table was itself wrong for a day**, and it is worth recording why. `016`
+was applied on 2026-07-31 and verified, but the commit recording that never
+reached `main`, so this file went on listing it as pending while its client was
+live in production. Nothing broke — the migration really had been applied — but
+for a day the only written record said consignment transfers should have been
+failing. Re-verified against `pg_proc` on 2026-08-01 before this correction was
+written, rather than trusting the commit message that had gone missing.
+
+The lesson is not "remember to merge the commit". It is that **a record of what
+is applied, kept in a branch, is not a record.** If you verify an apply, land
+that verification on `main` in the same sitting.
 
 ### Written but NOT yet applied
 
 | File | What it does |
 |------|--------------|
-| `016_atomic_consignment_transfers.sql` | `consignment_move_stock` — makes consignment deliver and take-back single transactions, and moves both stock limits server-side. Requires `014`; independent of `015`. Must be applied **before** the matching client deploy |
 | `018_settle_customer_balances.sql` | Corrects the five customer balances that disagree with their sales ledger. **Debtors and Aging Debtors rise by KES 5,450 on apply.** Requires `017` |
 
 ### The 017 ordering mistake, and why 018 exists
