@@ -3375,12 +3375,25 @@ export default function NorthernWaterSystemApp() {
       return;
     }
 
+    // Send ONLY the fields this form edits. openEdit seeds formData with the
+    // whole customer row, so spreading it sent `balance` back too — a value read
+    // once at login, which quietly overwrote any debt movement another user had
+    // recorded since. It is also the only column-level write the database still
+    // allows: `balance` is derived from the sales ledger by
+    // recompute_customer_balance and is not grantable to the client.
+    const editableFields = {
+      name: formData.name,
+      location: formData.location,
+      phone: formData.phone,
+      is_consignee: !!formData.is_consignee,
+    };
+
     if (editingCustomer) {
       // Persist FIRST — only reflect the edit locally once the database
       // accepts it (supabase returns errors rather than throwing).
       const { error: updError } = await supabase
         .from('customers')
-        .update(formData)
+        .update(editableFields)
         .eq('id', editingCustomer.id);
       if (updError) {
         console.error('❌ Error updating customer:', updError);
@@ -3389,13 +3402,13 @@ export default function NorthernWaterSystemApp() {
       }
 
       const updatedCustomers = state.customers.map(c =>
-        c.id === editingCustomer.id ? { ...c, ...formData } : c
+        c.id === editingCustomer.id ? { ...c, ...editableFields } : c
       );
       setState({ ...state, customers: updatedCustomers });
       console.log('✅ Customer updated in Supabase');
     } else {
       const newCustomer = {
-        ...formData,
+        ...editableFields,
         balance: 0,
         isActive: true
       };
