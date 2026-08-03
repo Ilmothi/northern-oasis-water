@@ -2897,9 +2897,15 @@ export default function NorthernWaterSystemApp() {
   // shops are excluded on purpose: their cartons already left finished goods at
   // delivery, so an ordinary sale to them would deduct stock a second time and
   // double-count the revenue that Report Sold recognises.
+  //
+  // Filters visibleCustomers, not state.customers: a sales user may only insert
+  // a sale for a customer at their own location (sales_insert_non_admin), so
+  // offering them anyone else produces an RLS refusal at save time instead of
+  // the customer simply not being on the list. Every other sales-role view
+  // already goes through this filter; this one was missed.
   const saleCustomerOptions = () => {
     const q = saleCustomerSearch.toLowerCase();
-    return state.customers.filter(c =>
+    return visibleCustomers.filter(c =>
       !c.is_consignee && (
         !q ||
         c.name.toLowerCase().includes(q) ||

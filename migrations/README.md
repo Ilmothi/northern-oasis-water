@@ -87,6 +87,40 @@ that verification on `main` in the same sitting.
 | File | What it does |
 |------|--------------|
 | `018_settle_customer_balances.sql` | Corrects the five customer balances that disagree with their sales ledger. **Debtors and Aging Debtors rise by KES 5,450 on apply.** Requires `017` |
+| `019_server_side_attribution_and_payment_delete.sql` | Stamps `created_by` server-side in `record_sale` / `consignment_post_sale` and restores `017`'s `sales_insert_non_admin`; removes `delete_payment`'s `FOR UPDATE`, which has blocked all payment deletion since `013`; normalises a blank profile location. Requires `017` |
+
+### 017 aftermath — two live defects, and what they have in common
+
+Testing `017` in production turned up two failures worth recording, because
+neither would have shown up in a policy dump.
+
+**Sales staff could not record a sale.** `017` added `created_by = auth.uid()` to
+`sales_insert_non_admin`. The check was right; the value it checked was
+client-supplied. `record_sale` read `created_by` from its JSON payload, the
+client filled it from React state, and `auth.uid()` comes from the JWT — signing
+in as a second user in the same browser makes those diverge, and the policy then
+refuses a legitimate sale. Worked around on 2026-08-01 by reverting the policy to
+`010`'s form; fixed properly in `019` by stamping the value server-side so there
+is nothing left to disagree.
+
+**Nobody could delete a payment, admin included** — and this one predates `017`
+by four days. `delete_payment` opens with `select … for update`, and
+`SELECT … FOR UPDATE` requires the UPDATE policies to be satisfied as well as
+SELECT. `payments` has no UPDATE policy: `001` omitted it deliberately because
+payments are immutable. The blanket `"Authenticated full access"` policy covered
+it until **`013` dropped that**, and the lock has matched zero rows ever since.
+
+The common thread is worth more than either bug. Both live **inside function
+bodies**, where RLS changes behaviour silently rather than raising — a
+`FOR UPDATE` that matches nothing, a `row_count = 0` treated as "not permitted".
+`pg_policies` looked correct throughout, and the 2026-07-30 audit read the policy
+set rather than the function bodies, so it caught neither. `013` has now made two
+separate latent gaps binding this way, the first being the stock-write outage
+fixed by `014`.
+
+**So: when a policy is dropped, grep the function bodies for `for update` and for
+`row_count`, not just the policy list.** Those are the two places where the
+absence of a policy is silent.
 
 ### The 017 ordering mistake, and why 018 exists
 
@@ -116,12 +150,12 @@ statement.
 
 ### Draft, not in the apply order
 
-`019_DRAFT_payment_write_path.sql` closes finding 2's remainder: it makes
+`020_DRAFT_payment_write_path.sql` closes finding 2's remainder: it makes
 `sales.paid` derived, revokes client INSERT on `payments` and UPDATE on `sales`,
 and converts `record_payment` to `SECURITY DEFINER`. It carries the only
 hand-written authorization gates in this series — three of them, all on the
 payment path — plus a schema change and a backfill. Open questions are listed at
-the foot of the file. Rename it to `019_payment_write_path.sql` only once those
+the foot of the file. Rename it to `020_payment_write_path.sql` only once those
 are answered and `017` and `018` are both live and verified.
 
 ## The 010 partial apply

@@ -1,5 +1,5 @@
 -- =============================================================================
--- 019_DRAFT_payment_write_path.sql
+-- 020_DRAFT_payment_write_path.sql
 -- Northern Water Company Ltd — OASIS Springs
 --
 -- ############################################################################
@@ -7,7 +7,7 @@
 -- ##                                                                        ##
 -- ##  This file is not numbered into the apply order and is not listed in    ##
 -- ##  migrations/README.md as applied. Rename it to                          ##
--- ##  019_payment_write_path.sql only once the open questions at the foot    ##
+-- ##  020_payment_write_path.sql only once the open questions at the foot    ##
 -- ##  are answered, and 017 and 018 are both live and verified.              ##
 -- ############################################################################
 --
