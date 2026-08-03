@@ -395,8 +395,16 @@ commit;
 --
 -- 2. delete_payment no longer locks. Expect `f`:
 --
---      select pg_get_functiondef(oid) ilike '%for update%' as still_locks
+--      select pg_get_functiondef(oid) ilike '%p_payment_id for update%'
+--               as still_locks
 --        from pg_proc where proname = 'delete_payment';
+--
+--    Match the STATEMENT, not the phrase. This check was first written as
+--    `ilike '%for update%'`, which returned true against a correctly-applied
+--    function because section 4's body carries a comment explaining why the
+--    lock was removed — the phrase appears in the definition either way.
+--    `pg_get_functiondef` returns comments as well as code, so any verification
+--    query here has to match something a comment would not say.
 --
 -- 3. The policy is back:
 --
