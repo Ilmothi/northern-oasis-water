@@ -91,7 +91,7 @@
 --   * It does not touch `payments_insert` — working, verified in production.
 --   * It does not add an UPDATE policy to `payments`. They stay immutable.
 --   * It does not address findings 4, 5, 7-13, or finding 2's remainder
---     (`020_DRAFT_payment_write_path.sql`).
+--     (`DRAFT_payment_write_path.sql`).
 --
 -- REPORT IMPACT: none. No figure moves. Section 4's profile change alters no
 -- policy outcome (see its header).

@@ -148,15 +148,22 @@ disagreeing with the database — the precise failure this README exists to
 prevent — so it was extracted. `017` now matches what was applied, statement for
 statement.
 
+| `020_no_negative_stock.sql` | Refuses any sale or production deletion that would drive finished goods below zero, using `016`'s post-change pattern. **Refuses to apply while finished goods are negative** — the stock reconciliation must run first, or every sale of an affected size is blocked from that moment. Requires `019` |
+
 ### Draft, not in the apply order
 
-`020_DRAFT_payment_write_path.sql` closes finding 2's remainder: it makes
+`DRAFT_payment_write_path.sql` closes finding 2's remainder: it makes
 `sales.paid` derived, revokes client INSERT on `payments` and UPDATE on `sales`,
 and converts `record_payment` to `SECURITY DEFINER`. It carries the only
 hand-written authorization gates in this series — three of them, all on the
 payment path — plus a schema change and a backfill. Open questions are listed at
-the foot of the file. Rename it to `020_payment_write_path.sql` only once those
+the foot of the file. Give it the next free number and rename it only once those
 are answered and `017` and `018` are both live and verified.
+
+It carries no number on purpose. A draft that sits in the directory for weeks
+collides with every real migration written in the meantime, and renumbering it
+each time is churn that risks a stale cross-reference. Numbers are for files in
+the apply order; this one earns its number when it joins.
 
 ## The 010 partial apply
 
