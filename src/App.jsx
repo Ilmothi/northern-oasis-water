@@ -346,6 +346,14 @@ export default function NorthernWaterSystemApp() {
   const [loginError, setLoginError] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
 
+  // Guards the modal's Save button against double submission. Two taps on a
+  // phone are two separate click events, and `setSaving(true)` has not
+  // necessarily re-rendered the disabled button by the time the second one
+  // lands — so the ref, not the state, is what actually blocks it. The state
+  // exists only to show "Saving…".
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+
   // Declared before the session useEffect below so the effect never references
   // it inside its temporal dead zone (react-hooks/immutability).
   const fetchUserProfile = async (userId) => {
@@ -509,6 +517,105 @@ export default function NorthernWaterSystemApp() {
   // sales/payments rows themselves, since those differ per flow — inserted,
   // updated, or removed. `customer` and `sale` come back null when the parent row
   // no longer exists, which is why both are guarded.
+  // ===== SUBMISSION SAFETY =====
+  //
+  // Two related failure modes, both of which were creating duplicate sales,
+  // payments and production runs in production:
+  //
+  //   1. Double-tapping Save fired the handler twice. Each call was a valid,
+  //      independent transaction, so nothing downstream could tell the second
+  //      one was unwanted. `runSave` stops it at the source.
+  //   2. A connection dropped mid-save left the request hanging forever (fetch
+  //      has no default timeout), so staff assumed it had failed and re-entered
+  //      the record later. `withTimeout` makes that fail loudly instead — and
+  //      deliberately says the outcome is UNKNOWN rather than "not recorded",
+  //      because the write may well have committed before the link died.
+  //
+  // The duplicate that neither of these can catch — the server commits, the
+  // response never arrives, and the operator legitimately retries — is closed
+  // server-side by the client key below. See migration 021.
+
+  const SAVE_TIMEOUT_MS = 20000;
+
+  // Runs one save at a time. Any second invocation while a save is in flight is
+  // refused outright rather than queued: the user pressing Save twice means
+  // "save this once", never "save it twice".
+  const runSave = async (fn) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      await fn();
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  };
+
+  // supabase-js query builders and .rpc() are thenables resolving to
+  // { data, error } and do not throw on network failure — but they also never
+  // settle at all if the connection drops mid-flight. Race them against a timer
+  // and normalise the timeout into the same { data, error } shape every caller
+  // already handles, flagged so the message can tell the truth about it.
+  const withTimeout = async (query) => {
+    let timer;
+    try {
+      return await Promise.race([
+        query,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('save-timeout')), SAVE_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (err) {
+      if (err?.message === 'save-timeout') {
+        return { data: null, error: { message: 'Timed out', timedOut: true } };
+      }
+      return { data: null, error: { message: err?.message || 'Unknown error' } };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  // Wording is the whole point of this helper. On an ordinary refusal the
+  // database rolled everything back and "nothing was recorded" is true. On a
+  // timeout it is NOT true — we never heard back — and telling staff it is, is
+  // exactly what produces a duplicate when they re-enter the record.
+  // `replaySafe` says whether this form carries a client key (migration 021 —
+  // sales, payments and production only). Where it does, pressing Save again is
+  // genuinely safe and staff should be told so. Where it does not, the honest
+  // advice is to go and look first, so the flag defaults to false.
+  const saveFailureMessage = (error, refusedMessage, whereToCheck, replaySafe = false) => {
+    if (error?.timedOut) {
+      return `The connection was lost while saving.\n\n` +
+        `THIS MAY OR MAY NOT HAVE BEEN SAVED. Check ${whereToCheck} before entering it again.\n\n` +
+        (replaySafe
+          ? 'If you press Save again on this same form it is safe — the system will recognise it and will not record it twice.'
+          : 'If it is already there, close this form — pressing Save again would record it a second time.');
+    }
+    return `${refusedMessage}\n\n${error?.message || 'Unknown error'}`;
+  };
+
+  // Identifies one filled-in form, so the database can recognise a resend of
+  // that same form and return what it already saved instead of saving it again.
+  // Generated when the form opens and kept for as long as it stays open, which
+  // is what makes retrying after a timeout safe.
+  const newClientKey = () => {
+    if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+    // Some of the field tablets run WebViews old enough to lack randomUUID.
+    // The column is `uuid`, so the fallback has to be v4-shaped.
+    const b = crypto.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    const h = [...b].map(x => x.toString(16).padStart(2, '0')).join('');
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  };
+
+  // Replaces the row if it is already in local state, appends it otherwise. A
+  // replayed save returns a row we may already be holding; appending it would
+  // put the duplicate back on screen that the database just refused to create.
+  const upsertById = (rows, row) =>
+    rows.some(r => r.id === row.id) ? rows.map(r => (r.id === row.id ? row : r)) : [...rows, row];
+
   const applyRpcRows = (data) => {
     const patch = {};
     if (data?.customer) {
@@ -1107,15 +1214,19 @@ export default function NorthernWaterSystemApp() {
     if (editingPurchase) {
       // Persist the edit FIRST; only adjust raw materials (via the atomic delta
       // RPC) once the update is confirmed.
-      const { error: updateError } = await supabase.from('purchases').update({
+      const { error: updateError } = await withTimeout(supabase.from('purchases').update({
         date: formData.date,
         supplier: formData.supplier,
         items: validItems,
         totalAmount
-      }).eq('id', editingPurchase.id);
+      }).eq('id', editingPurchase.id));
       if (updateError) {
         console.error('❌ Error updating purchase:', updateError);
-        alert('Could not update this purchase — it has NOT been changed and stock was not adjusted. Please try again.\n\n' + (updateError.message || 'Unknown error'));
+        alert(saveFailureMessage(
+          updateError,
+          'Could not update this purchase — it has NOT been changed and stock was not adjusted. Please try again.',
+          'the purchase in the Purchases list'
+        ));
         return;
       }
 
@@ -1153,14 +1264,18 @@ export default function NorthernWaterSystemApp() {
       // Persist the purchase FIRST; only apply the raw-material increase (via the
       // atomic delta RPC) on a confirmed save, so a failed insert can't raise
       // stock with no purchase record behind it.
-      const { data: savedPurchase, error: purchaseError } = await supabase
+      const { data: savedPurchase, error: purchaseError } = await withTimeout(supabase
         .from('purchases')
         .insert([newPurchase])
         .select()
-        .single();
+        .single());
       if (purchaseError || !savedPurchase) {
         console.error('❌ Error saving purchase:', purchaseError);
-        alert('Could not save this purchase — it has NOT been recorded and stock was not changed. Please try again.\n\n' + (purchaseError?.message || 'Unknown error'));
+        alert(saveFailureMessage(
+          purchaseError,
+          'Could not save this purchase — it has NOT been recorded and stock was not changed. Please try again.',
+          'the Purchases list'
+        ));
         return;
       }
 
@@ -2621,7 +2736,7 @@ export default function NorthernWaterSystemApp() {
     if (editingExpense) {
       // Persist FIRST — only reflect the edit locally once the database
       // accepts it (supabase returns errors rather than throwing).
-      const { error: updError } = await supabase
+      const { error: updError } = await withTimeout(supabase
         .from('expenses')
         .update({
           date: formData.date,
@@ -2631,10 +2746,14 @@ export default function NorthernWaterSystemApp() {
           amount: parseFloat(formData.amount),
           advance_employee_id: advanceId
         })
-        .eq('id', editingExpense.id);
+        .eq('id', editingExpense.id));
       if (updError) {
         console.error('❌ Error updating expense:', updError);
-        alert('Could not update this expense — it has NOT been changed. Please try again.\n\n' + (updError.message || 'Unknown error'));
+        alert(saveFailureMessage(
+          updError,
+          'Could not update this expense — it has NOT been changed. Please try again.',
+          'the expense in the Expenses list'
+        ));
         return;
       }
 
@@ -2655,14 +2774,18 @@ export default function NorthernWaterSystemApp() {
         created_by: session?.user?.id || null
       };
 
-      const { data: savedExpense, error: expError } = await supabase
+      const { data: savedExpense, error: expError } = await withTimeout(supabase
         .from('expenses')
         .insert([newExpense])
         .select()
-        .single();
+        .single());
       if (expError || !savedExpense) {
         console.error('❌ Error saving expense:', expError);
-        alert('Could not save this expense — it has NOT been recorded. Please try again.\n\n' + (expError?.message || 'Unknown error'));
+        alert(saveFailureMessage(
+          expError,
+          'Could not save this expense — it has NOT been recorded. Please try again.',
+          'the Expenses list'
+        ));
         return;
       }
 
@@ -2807,7 +2930,8 @@ export default function NorthernWaterSystemApp() {
       // null = "paid in full": the Amount Paid input tracks the running total
       // until the cashier types an amount themselves (partial/credit sale).
       amountPaid: null,
-      method: 'cash'
+      method: 'cash',
+      clientKey: newClientKey()
     });
     setShowModal(true);
   };
@@ -2862,25 +2986,40 @@ export default function NorthernWaterSystemApp() {
       // How the point-of-sale amount was received; later repayments carry their
       // own method on the payment record.
       method: amountPaid > 0 ? (formData.method || 'cash') : null,
-      created_by: session?.user?.id || null
+      created_by: session?.user?.id || null,
+      // Identifies this filled-in form. If the sale committed but the response
+      // was lost, resending it returns the sale already recorded instead of
+      // writing a second one.
+      client_key: formData.clientKey || null
     };
 
     // One transaction: the sale row, the finished-goods deduction and the
     // customer's debt all move together or not at all. The balance is applied
     // server-side as a delta on the committed value, so a stale session can no
     // longer overwrite someone else's payment. See migration 011.
-    const { data, error } = await supabase.rpc('record_sale', { p_sale: newSale });
+    const { data, error } = await withTimeout(supabase.rpc('record_sale', { p_sale: newSale }));
     if (error || !data?.sale) {
       console.error('❌ Error recording sale:', error);
-      alert('Could not save this sale — nothing was recorded, and stock and balances are unchanged. Please try again.\n\n' + (error?.message || 'Unknown error'));
+      alert(saveFailureMessage(
+        error,
+        'Could not save this sale — nothing was recorded, and stock and balances are unchanged. Please try again.',
+        'the Sales list',
+        true
+      ));
       return; // leave the modal open with the entry intact
     }
 
     setState({
       ...state,
-      sales: [...state.sales, data.sale],
+      sales: upsertById(state.sales, data.sale),
       ...applyRpcRows(data),
     });
+
+    // The database recognised this form as one it had already saved — the
+    // earlier attempt did commit, its response just never arrived.
+    if (data.replayed) {
+      alert(`This sale was already recorded as invoice ${data.sale.invoiceNumber}. It has not been saved twice.`);
+    }
 
     setShowModal(false);
   };
@@ -3227,7 +3366,7 @@ export default function NorthernWaterSystemApp() {
     }
     setModalType('payment');
     setPaymentSaleSearch('');
-    setFormData({ saleId: '', amount: 0, method: 'cash', reference: '', date: localDateString() });
+    setFormData({ saleId: '', amount: 0, method: 'cash', reference: '', date: localDateString(), clientKey: newClientKey() });
     setShowModal(true);
   };
 
@@ -3253,7 +3392,9 @@ export default function NorthernWaterSystemApp() {
       amount: formData.amount,
       method: formData.method,
       reference: formData.reference,
-      created_by: session?.user?.id || null
+      created_by: session?.user?.id || null,
+      // See handleSaveSale — makes a retry after a lost connection safe.
+      client_key: formData.clientKey || null
     };
 
     // One transaction: the payment row, the invoice's paid/status and the
@@ -3261,19 +3402,28 @@ export default function NorthernWaterSystemApp() {
     // server-side against the CURRENT committed invoice, so two cashiers taking
     // money for the same invoice at once can no longer overpay it or overwrite
     // each other's payment. See migration 011.
-    const { data, error } = await supabase.rpc('record_payment', { p_payment: newPayment });
+    const { data, error } = await withTimeout(supabase.rpc('record_payment', { p_payment: newPayment }));
     if (error || !data?.payment) {
       console.error('❌ Error recording payment:', error);
-      alert('Could not save this payment — nothing was recorded, and the invoice and balance are unchanged. Please try again.\n\n' + (error?.message || 'Unknown error'));
+      alert(saveFailureMessage(
+        error,
+        'Could not save this payment — nothing was recorded, and the invoice and balance are unchanged. Please try again.',
+        "the customer's payment history",
+        true
+      ));
       return; // leave the modal open with the entry intact
     }
 
     setState({
       ...state,
-      payments: [...state.payments, data.payment],
+      payments: upsertById(state.payments, data.payment),
       ...(data.sale && { sales: state.sales.map(s => (s.id === data.sale.id ? data.sale : s)) }),
       ...applyRpcRows(data),
     });
+
+    if (data.replayed) {
+      alert(`This payment of KES ${Number(data.payment.amount).toLocaleString()} was already recorded. It has not been saved twice.`);
+    }
 
     setShowModal(false);
   };
@@ -3317,7 +3467,7 @@ export default function NorthernWaterSystemApp() {
   // Production
   const handleAddProduction = () => {
     setModalType('production');
-    setFormData({ items: {}, date: localDateString(), notes: '', unit: 'cartons', casuals: [] });
+    setFormData({ items: {}, date: localDateString(), notes: '', unit: 'cartons', casuals: [], clientKey: newClientKey() });
     setShowModal(true);
   };
 
@@ -3339,30 +3489,41 @@ export default function NorthernWaterSystemApp() {
     // id, created_by and the stock movement are all assigned server-side —
     // created_by from the session rather than the payload, which is what
     // production_logs' RLS policy checks for sales users.
-    const { data, error } = await supabase.rpc('record_production', {
+    const { data, error } = await withTimeout(supabase.rpc('record_production', {
       p_log: {
         date: formData.date,
         items: formData.items, // cartons produced
         unit: 'cartons', // always cartons
         notes: formData.notes,
         casuals: formData.casuals || [],
+        // See handleSaveSale — makes a retry after a lost connection safe.
+        client_key: formData.clientKey || null,
       },
-    });
+    }));
 
     if (error || !data?.production) {
       console.error('❌ Error saving production log:', error);
-      alert('Could not save this production run — nothing was recorded and stock was not changed. Please try again.\n\n' + (error?.message || 'Unknown error'));
+      alert(saveFailureMessage(
+        error,
+        'Could not save this production run — nothing was recorded and stock was not changed. Please try again.',
+        "today's production logs",
+        true
+      ));
       return; // leave the modal open with the entry intact
     }
 
     setState({
       ...state,
-      productionLogs: [...state.productionLogs, data.production],
+      productionLogs: upsertById(state.productionLogs, data.production),
       ...(data.inventory && {
         rawMaterials: data.inventory.rawMaterials,
         finishedGoods: data.inventory.finishedGoods,
       }),
     });
+
+    if (data.replayed) {
+      alert('This production run was already recorded. It has not been saved twice, and stock was not deducted again.');
+    }
 
     setShowModal(false);
   };
@@ -3397,13 +3558,17 @@ export default function NorthernWaterSystemApp() {
     if (editingCustomer) {
       // Persist FIRST — only reflect the edit locally once the database
       // accepts it (supabase returns errors rather than throwing).
-      const { error: updError } = await supabase
+      const { error: updError } = await withTimeout(supabase
         .from('customers')
         .update(editableFields)
-        .eq('id', editingCustomer.id);
+        .eq('id', editingCustomer.id));
       if (updError) {
         console.error('❌ Error updating customer:', updError);
-        alert('Could not update this customer — nothing was changed. Please try again.\n\n' + (updError.message || 'Unknown error'));
+        alert(saveFailureMessage(
+          updError,
+          'Could not update this customer — nothing was changed. Please try again.',
+          'the customer record'
+        ));
         return;
       }
 
@@ -3421,14 +3586,18 @@ export default function NorthernWaterSystemApp() {
 
       // The DB assigns the id — a sales user only sees an RLS-filtered subset of
       // customers and would otherwise generate a colliding id.
-      const { data: savedCustomer, error: custError } = await supabase
+      const { data: savedCustomer, error: custError } = await withTimeout(supabase
         .from('customers')
         .insert([newCustomer])
         .select()
-        .single();
+        .single());
       if (custError || !savedCustomer) {
         console.error('❌ Error saving customer:', custError);
-        alert('Could not save this customer — it has NOT been recorded. Please try again.\n\n' + (custError?.message || 'Unknown error'));
+        alert(saveFailureMessage(
+          custError,
+          'Could not save this customer — it has NOT been recorded. Please try again.',
+          'the Customers list'
+        ));
         return;
       }
 
@@ -7274,25 +7443,32 @@ export default function NorthernWaterSystemApp() {
             <div className="flex gap-2 md:gap-3 p-4 md:p-6 border-t border-slate-100 bg-white sticky bottom-0">
               <button
                 onClick={() => setShowModal(false)}
-                className="flex-1 px-3 md:px-4 py-2 border border-slate-300 text-slate-500 rounded-lg hover:bg-slate-50 transition text-sm"
+                disabled={saving}
+                className="flex-1 px-3 md:px-4 py-2 border border-slate-300 text-slate-500 rounded-lg hover:bg-slate-50 transition text-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Cancel
               </button>
+              {/* Every save in the app funnels through this one button, so the
+                  double-submit guard lives here rather than in nine handlers.
+                  `runSave` refuses a second tap while the first is still in
+                  flight; `disabled` is what the user sees, but the ref inside
+                  runSave is what actually enforces it. */}
               <button
-                onClick={() => {
-                  if (modalType === 'sale') handleSaveSale();
-                  else if (modalType === 'payment') handleSavePayment();
-                  else if (modalType === 'production') handleSaveProduction();
-                  else if (modalType === 'purchase') handleSavePurchase();
-                  else if (modalType === 'expense') handleSaveExpense();
-                  else if (modalType === 'customer') handleSaveCustomer();
-                  else if (modalType === 'adjust') handleStockAdjustment();
-                  else if (modalType === 'consignment') handleSaveConsignment();
-                  else if (modalType === 'employee') handleSaveEmployee();
-                }}
-                className="flex-1 px-3 md:px-4 py-2 bg-sky-500 hover:bg-sky-600 text-white font-medium rounded-lg transition flex items-center justify-center gap-2 text-sm"
+                onClick={() => runSave(async () => {
+                  if (modalType === 'sale') await handleSaveSale();
+                  else if (modalType === 'payment') await handleSavePayment();
+                  else if (modalType === 'production') await handleSaveProduction();
+                  else if (modalType === 'purchase') await handleSavePurchase();
+                  else if (modalType === 'expense') await handleSaveExpense();
+                  else if (modalType === 'customer') await handleSaveCustomer();
+                  else if (modalType === 'adjust') await handleStockAdjustment();
+                  else if (modalType === 'consignment') await handleSaveConsignment();
+                  else if (modalType === 'employee') await handleSaveEmployee();
+                })}
+                disabled={saving}
+                className="flex-1 px-3 md:px-4 py-2 bg-sky-500 hover:bg-sky-600 text-white font-medium rounded-lg transition flex items-center justify-center gap-2 text-sm disabled:bg-sky-300 disabled:cursor-not-allowed"
               >
-                <Save className="w-4 h-4" /> Save
+                <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save'}
               </button>
             </div>
           </div>
