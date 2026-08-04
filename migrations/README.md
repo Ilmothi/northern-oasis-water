@@ -44,6 +44,9 @@ functions** (`prosecdef`, `proconfig`). See `docs/audit-2026-07-30-rls.md`.
 | `015_atomic_production.sql` | `production_bom_changes`, `record_production`, `delete_production` — moves the BOM into the database and makes production logging a single transaction |
 | `016_atomic_consignment_transfers.sql` | `consignment_move_stock` — makes consignment deliver and take-back single transactions, and moves both stock limits server-side |
 | `017_customer_balance_and_write_scope.sql` | Makes `customers.balance` derived (`recompute_customer_balance` replaces `adjust_customer_balance`) and removes the client's UPDATE privilege on the column; adds location scope and `created_by` attribution to the `sales` and `payments` INSERT policies. Closes audit findings 1 and 3, and the forgeable/unscoped part of 2 |
+| `019_server_side_attribution_and_payment_delete.sql` | Stamps `created_by` server-side in `record_sale` / `consignment_post_sale` and restores `017`'s `sales_insert_non_admin`; removes `delete_payment`'s `FOR UPDATE`, which had blocked all payment deletion since `013`; normalises a blank profile location |
+| `020_no_negative_stock.sql` | Refuses any sale or production deletion that would drive finished goods below zero, using `016`'s post-change pattern |
+| `021_idempotent_money_writes.sql` | Adds a `client_key` idempotency key to `sales`, `payments` and `production_logs`, so a save retried after a lost response returns the existing row instead of recording a duplicate. Rewrites the three `record_*` functions around it |
 
 Apply dates were not recorded before this file existed. Known: `007` on
 2026-07-02; `008` and `009` on 2026-07-22; `010`, `011` and `012` on 2026-07-28;
@@ -55,6 +58,20 @@ trusting the apply to have succeeded — `014`'s two inventory functions
 additionally proved atomic against the live database: a refused call left the
 `consignment_movements` count unchanged, where the code it replaces would have
 committed the ledger row.
+`019`, `020` and `021` on 2026-08-04, reported applied by the operator. **These
+three have NOT been independently verified against `pg_proc` at the time of
+writing** — run each file's own verification block before relying on this row.
+That matters more than usual for `020`: it is written to REFUSE to apply while
+finished goods are negative, so a successful apply implies the outstanding stock
+reconciliation (0.5 L −24, 1.5 L −110) was completed first. If it was not, check
+what actually landed before assuming the guard is live.
+
+`021` was applied ahead of its client, which is the safe order for that file and
+the one its header recommends — `client_key` simply stays NULL until the client
+starts sending it, and the replay branch is never entered. Until PR for
+`prevent-double-submit` merges, the idempotency half of `021` is inert and only
+the double-tap guard is missing from production.
+
 `017` on 2026-08-01, verified three ways: all five money functions confirmed
 rewired onto `recompute_customer_balance` with none still referencing the dropped
 `adjust_customer_balance`; the five column grants on `customers` present with
@@ -87,7 +104,10 @@ that verification on `main` in the same sitting.
 | File | What it does |
 |------|--------------|
 | `018_settle_customer_balances.sql` | Corrects the five customer balances that disagree with their sales ledger. **Debtors and Aging Debtors rise by KES 5,450 on apply.** Requires `017` |
-| `019_server_side_attribution_and_payment_delete.sql` | Stamps `created_by` server-side in `record_sale` / `consignment_post_sale` and restores `017`'s `sales_insert_non_admin`; removes `delete_payment`'s `FOR UPDATE`, which has blocked all payment deletion since `013`; normalises a blank profile location. Requires `017` |
+
+`018` is now the only file left in this section, and it is a data correction
+rather than a schema or policy change — nothing else waits on it. `019`, `020`
+and `021` moved to the applied table on 2026-08-04.
 
 ### 017 aftermath — two live defects, and what they have in common
 
@@ -148,7 +168,10 @@ disagreeing with the database — the precise failure this README exists to
 prevent — so it was extracted. `017` now matches what was applied, statement for
 statement.
 
-| `020_no_negative_stock.sql` | Refuses any sale or production deletion that would drive finished goods below zero, using `016`'s post-change pattern. **Refuses to apply while finished goods are negative** — the stock reconciliation must run first, or every sale of an affected size is blocked from that moment. Requires `019` |
+`020`'s row sat here for three days, below this prose rather than in the table
+above — where, having no header, it did not render as a table row at all. It has
+been moved. A pending migration listed somewhere the apply decision is not made
+is the same failure as `016` being recorded only in an unmerged branch.
 
 ### Draft, not in the apply order
 
