@@ -325,7 +325,6 @@ export default function NorthernWaterSystemApp() {
   const [paymentsSearch, setPaymentsSearch] = useState('');
   const [paymentsFilterDate, setPaymentsFilterDate] = useState('');
   const [debtsSearch, setDebtsSearch] = useState('');
-  const [statementRange, setStatementRange] = useState({ start: '', end: '' });
   const [invoiceDetail, setInvoiceDetail] = useState(null);
   const [breakdownCard, setBreakdownCard] = useState(null);
   const [cartonCosts, setCartonCosts] = useState({});
@@ -2499,105 +2498,61 @@ export default function NorthernWaterSystemApp() {
     }, 500);
   };
 
-  // Build a printable customer account statement: a chronological ledger of
-  // invoices (debits) and payments (credits) with a running balance. Optionally
-  // scoped to a date range, in which case an opening balance carries forward all
-  // activity before the start date. With no range, the closing balance equals the
-  // customer's current outstanding debt, so it reconciles with the balance shown
-  // in the UI and the Aging Debtors report.
+  // Build a printable customer account statement listing only invoices that are
+  // still unsettled — one row each, showing what was charged, what has been paid
+  // against it, and what is still outstanding. Fully settled invoices are left
+  // off entirely, so this is a "what you owe us" document, not a trading history.
+  //
+  // Balance Due is the sum of the Outstanding column, which is by construction
+  // the same figure `recompute_customer_balance` derives for `customers.balance`
+  // (migration 017: balance = -sum(sales.total - sales.paid)). So the statement
+  // always reconciles with the balance shown in the UI and the Aging Debtors
+  // report — there is no separate calculation that could drift from it.
   // Read-only — renders existing records, changes nothing.
-  const downloadAccountStatementAsPDF = (customer, range = { start: '', end: '' }) => {
+  const downloadAccountStatementAsPDF = (customer) => {
     if (!customer) return;
     const fmt = (n) => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const prettyMethod = (m) => (m ? String(m).replace(/_/g, ' ') : '');
-    const hasRange = !!(range.start && range.end);
 
-    const sales = state.sales.filter(s => s.customerId === customer.id);
-    const payments = state.payments.filter(p => p.customerId === customer.id);
-
-    // Ledger entries: each sale is a debit of its total. Its payment is split into
-    // recorded debt-payments and any amount paid at point of sale (mirrors the Cash
-    // Collected report so nothing is double-counted or dropped).
-    const allEntries = [];
-    sales.forEach(s => {
-      const items = (s.items || []).map(i => `${i.quantity}× ${SIZE_LABELS[i.size] || i.size}`).join(', ');
-      allEntries.push({
-        date: s.date,
-        order: 0,
-        ref: s.invoiceNumber || `Sale #${s.id}`,
-        desc: `Invoice${items ? ' · ' + items : ''}`,
-        debit: s.total || 0,
-        credit: 0
-      });
-      const linkedPayments = payments.filter(p => p.saleId === s.id);
-      const paidViaPayments = linkedPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
-      const paidAtSale = (s.paid || 0) - paidViaPayments;
-      if (paidAtSale > 0) {
-        allEntries.push({
+    // Unsettled means outstanding !== 0, not > 0: consignment credit notes are
+    // sales posted with a negative total, and they reduce what the customer owes.
+    // Dropping them would overstate the bill.
+    //
+    // Rounded to cents before the test so float residue (part-payments that don't
+    // divide evenly) can't leave a fully settled invoice on the statement as a
+    // fraction-of-a-cent row.
+    const entries = state.sales
+      .filter(s => s.customerId === customer.id)
+      .map(s => {
+        const charged = s.total || 0;
+        const paid = s.paid || 0;
+        const items = (s.items || []).map(i => `${i.quantity}× ${SIZE_LABELS[i.size] || i.size}`).join(', ');
+        return {
           date: s.date,
-          order: 1,
           ref: s.invoiceNumber || `Sale #${s.id}`,
-          desc: 'Payment at point of sale',
-          debit: 0,
-          credit: paidAtSale
-        });
-      }
-    });
-    payments.forEach(p => {
-      allEntries.push({
-        date: p.date,
-        order: 1,
-        ref: p.reference || (p.invoiceNumber || ''),
-        desc: `Payment${p.method ? ' · ' + prettyMethod(p.method) : ''}`,
-        debit: 0,
-        credit: p.amount || 0
-      });
-    });
+          desc: items || (charged < 0 ? 'Credit note' : 'Invoice'),
+          charged,
+          paid,
+          outstanding: Math.round((charged - paid) * 100) / 100,
+        };
+      })
+      .filter(e => e.outstanding !== 0)
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 
-    // Chronological order; on the same date show the invoice before its payment.
-    allEntries.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order));
-
-    // Opening balance = net of everything before the start date; in-range entries
-    // are those within [start, end]. With no range, opening is 0 and all show.
-    let opening = 0;
-    const entries = [];
-    allEntries.forEach(e => {
-      const d = e.date || '';
-      if (hasRange && d && d < range.start) {
-        opening += e.debit - e.credit;
-      } else if (!hasRange || (d >= range.start && d <= range.end)) {
-        entries.push(e);
-      }
-    });
-
-    let running = opening;
-    let rows = hasRange ? `
-        <tr style="background:#f0f9ff;">
-          <td>${range.start}</td>
-          <td>—</td>
-          <td><strong>Opening balance</strong></td>
-          <td style="text-align:right;">—</td>
-          <td style="text-align:right;">—</td>
-          <td style="text-align:right;font-weight:bold;">${fmt(opening)}</td>
-        </tr>` : '';
-    rows += entries.map(e => {
-      running += e.debit - e.credit;
-      return `
+    const rows = entries.map(e => `
         <tr>
           <td>${escapeHtml(e.date || '—')}</td>
           <td>${escapeHtml(e.ref || '—')}</td>
           <td>${escapeHtml(e.desc)}</td>
-          <td style="text-align:right;">${e.debit ? fmt(e.debit) : '—'}</td>
-          <td style="text-align:right;color:#059669;">${e.credit ? fmt(e.credit) : '—'}</td>
-          <td style="text-align:right;font-weight:bold;">${fmt(running)}</td>
-        </tr>`;
-    }).join('');
+          <td style="text-align:right;">${fmt(e.charged)}</td>
+          <td style="text-align:right;color:#059669;">${e.paid ? fmt(e.paid) : '—'}</td>
+          <td style="text-align:right;font-weight:bold;">${fmt(e.outstanding)}</td>
+        </tr>`).join('');
 
-    // Totals reflect the shown period. In-range charges/payments plus the opening
-    // balance give the closing balance as at the end date.
-    const totalCharged = entries.reduce((sum, e) => sum + e.debit, 0);
-    const totalPaid = entries.reduce((sum, e) => sum + e.credit, 0);
-    const closing = opening + totalCharged - totalPaid; // positive => customer owes
+    // Totals cover the invoices listed above only — settled ones contribute
+    // nothing to any of the three figures.
+    const totalCharged = entries.reduce((sum, e) => sum + e.charged, 0);
+    const totalPaid = entries.reduce((sum, e) => sum + e.paid, 0);
+    const closing = totalCharged - totalPaid; // positive => customer owes
 
     const htmlContent = `
       <!DOCTYPE html>
@@ -2656,7 +2611,7 @@ export default function NorthernWaterSystemApp() {
 
           <div class="title">
             <h2>STATEMENT OF ACCOUNT</h2>
-            <div class="meta">${hasRange ? `Period: ${range.start} to ${range.end}` : `As at ${new Date().toLocaleDateString()}`}</div>
+            <div class="meta">Outstanding invoices as at ${new Date().toLocaleDateString()}</div>
           </div>
 
           <div class="billto">
@@ -2666,30 +2621,29 @@ export default function NorthernWaterSystemApp() {
             ${customer.phone ? `<div class="sub">Tel: ${escapeHtml(customer.phone)}</div>` : ''}
           </div>
 
-          ${entries.length === 0 && !hasRange ? `<div class="empty">No transactions on record for this account.</div>` : entries.length === 0 ? `<div class="empty">No transactions in this period. Opening balance carried: KES ${fmt(opening)}.</div>` : `
+          ${entries.length === 0 ? `<div class="empty">All invoices on this account are settled. Thank you.</div>` : `
           <table>
             <thead>
               <tr>
                 <th>Date</th>
-                <th>Reference</th>
+                <th>Invoice</th>
                 <th>Description</th>
-                <th>Charge (KES)</th>
+                <th>Charged (KES)</th>
                 <th>Paid (KES)</th>
-                <th>Balance (KES)</th>
+                <th>Outstanding (KES)</th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>
           </table>`}
 
           <div class="totals">
-            ${hasRange ? `<div class="row"><span>Opening Balance</span><span>KES ${fmt(opening)}</span></div>` : ''}
-            <div class="row"><span>${hasRange ? 'Invoiced (period)' : 'Total Invoiced'}</span><span>KES ${fmt(totalCharged)}</span></div>
-            <div class="row"><span>${hasRange ? 'Paid (period)' : 'Total Paid'}</span><span>KES ${fmt(totalPaid)}</span></div>
+            <div class="row"><span>Invoiced</span><span>KES ${fmt(totalCharged)}</span></div>
+            <div class="row"><span>Paid</span><span>KES ${fmt(totalPaid)}</span></div>
             <div class="row grand"><span>${closing >= 0 ? 'Balance Due' : 'Credit Balance'}</span><span class="${closing > 0 ? 'owed' : closing < 0 ? 'credit' : ''}">KES ${fmt(Math.abs(closing))}</span></div>
           </div>
 
           <div class="footer">
-            <p>${hasRange ? 'This statement reflects invoices and payments within the period shown, carried forward from the opening balance.' : 'This statement reflects all invoices and payments on record as at the date shown above.'}</p>
+            <p>This statement lists only invoices that are still unsettled as at the date shown above. Invoices paid in full are not shown. Totals cover the invoices listed.</p>
             <p>${COMPANY.name} • Generated by OASIS Springs Management System</p>
           </div>
         </div>
@@ -5454,35 +5408,6 @@ export default function NorthernWaterSystemApp() {
                     className="bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 py-1.5 text-sm placeholder-slate-400"
                   />
                 </div>
-                <div className="flex flex-col sm:flex-row sm:items-end gap-3 mb-4 p-3 bg-slate-50 border border-slate-200 rounded-lg">
-                  <div className="flex-1">
-                    <label className="block text-slate-500 text-xs mb-1">Statement from</label>
-                    <input
-                      type="date"
-                      value={statementRange.start}
-                      onChange={(e) => setStatementRange({ ...statementRange, start: e.target.value })}
-                      className="w-full bg-white border border-slate-300 text-slate-900 rounded-lg px-3 py-1.5 text-sm"
-                    />
-                  </div>
-                  <div className="flex-1">
-                    <label className="block text-slate-500 text-xs mb-1">Statement to</label>
-                    <input
-                      type="date"
-                      value={statementRange.end}
-                      onChange={(e) => setStatementRange({ ...statementRange, end: e.target.value })}
-                      className="w-full bg-white border border-slate-300 text-slate-900 rounded-lg px-3 py-1.5 text-sm"
-                    />
-                  </div>
-                  <button
-                    onClick={() => setStatementRange({ start: '', end: '' })}
-                    className="bg-white hover:bg-slate-100 border border-slate-300 text-slate-600 rounded-lg px-3 py-1.5 text-sm font-semibold"
-                  >
-                    Clear
-                  </button>
-                  <p className="text-slate-400 text-xs sm:self-center">
-                    {statementRange.start && statementRange.end ? `Statements: ${statementRange.start} → ${statementRange.end}` : 'Statements: all time (set both dates to filter)'}
-                  </p>
-                </div>
                 <div className="space-y-3">
                   {visibleCustomers.filter(c => c.balance < 0).filter(c => !debtsSearch || (c.name || '').toLowerCase().includes(debtsSearch.toLowerCase())).length === 0 ? (
                     <div className="text-center py-8">
@@ -5559,7 +5484,7 @@ export default function NorthernWaterSystemApp() {
                                 Record Payment
                               </button>
                               <button
-                                onClick={() => downloadAccountStatementAsPDF(customer, statementRange)}
+                                onClick={() => downloadAccountStatementAsPDF(customer)}
                                 className="flex-1 bg-sky-50 hover:bg-sky-100 border border-sky-200 text-sky-700 py-2 px-3 rounded-lg transition text-sm font-semibold"
                               >
                                 Download Statement (PDF)
