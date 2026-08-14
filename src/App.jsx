@@ -256,6 +256,29 @@ const EXPENSE_TYPES = [
 
 const EXPENSE_TREATMENT = EXPENSE_TYPES.reduce((m, t) => { m[t.name] = t.treatment; return m; }, {});
 
+// Display names for the raw-material buckets `production_run_materials`
+// returns. The inventory screens spell the same names out inline; this is that
+// wording in one place, for the production run card.
+const MATERIAL_LABELS = {
+  emptyBottles: 'Empty bottles',
+  seals: 'Seals',
+  labels: 'Labels',
+  caps: 'Caps',
+  overwraps: 'Overwraps',
+  kraStamps: 'KRA stamps',
+  roChemical: 'RO chemical',
+};
+
+// Variants that are not a product size. Sizes fall through to SIZE_LABELS.
+const MATERIAL_VARIANT_LABELS = {
+  short_neck: 'Short neck (0.5L & 1.5L)',
+};
+
+// Buckets measured in something other than whole units.
+const MATERIAL_UNITS = {
+  roChemical: 'L',
+};
+
 const BOTTLES_PER_CARTON = {
   '0.5L': 24,
   '1.5L': 12,
@@ -339,6 +362,13 @@ export default function NorthernWaterSystemApp() {
   // card: the run is re-read from state, so a casual payout recorded elsewhere
   // shows here without reopening.
   const [productionDetail, setProductionDetail] = useState(null);
+  // Raw materials for the open run. Fetched rather than derived: the BOM lives
+  // in the database as of migration 015 and the client has no copy of it.
+  // Carries the run it belongs to: the card treats a result for any other run
+  // as still loading, so switching runs cannot flash the previous one's
+  // materials, and the effect never has to reset state synchronously.
+  // status: 'ready' | 'unavailable'
+  const [runMaterials, setRunMaterials] = useState({ runId: null, status: 'ready', rows: [] });
   const [breakdownCard, setBreakdownCard] = useState(null);
   const [cartonCosts, setCartonCosts] = useState({});
   const [employees, setEmployees] = useState([]);
@@ -759,6 +789,32 @@ export default function NorthernWaterSystemApp() {
       hasLoadedData.current = false;
     }
   }, [userProfile]);
+
+  // Fetch the open run's materials from `production_run_materials` (migration
+  // 022). Anything that goes wrong — the migration not applied yet, a run whose
+  // items contain a size the recipe does not know (which makes the function
+  // raise, by design), a dropped connection — lands as 'unavailable', and the
+  // card falls back to saying materials were deducted without naming them. A
+  // run card must still open when this cannot answer.
+  useEffect(() => {
+    if (productionDetail === null) return;
+    const runId = productionDetail;
+    let cancelled = false;
+    supabase
+      .rpc('production_run_materials', { p_id: runId })
+      .then(({ data, error }) => {
+        // Closing the card or opening another mid-flight must not write a
+        // stale answer over the current one.
+        if (cancelled) return;
+        if (error) {
+          console.warn('Could not load run materials:', error.message);
+          setRunMaterials({ runId, status: 'unavailable', rows: [] });
+          return;
+        }
+        setRunMaterials({ runId, status: 'ready', rows: Array.isArray(data) ? data : [] });
+      });
+    return () => { cancelled = true; };
+  }, [productionDetail]);
 
   // Find the most recent purchase unit price for a given material key
   // (e.g. 'emptyBottles_0.5L', 'seals_short_neck', 'labels_5L', 'kraStamps').
@@ -6710,6 +6766,9 @@ export default function NorthernWaterSystemApp() {
           // Same split as getCasualPay: a run's cartons divided equally among
           // the casuals on duty, × the shared rate. Kept in step with the HR
           // figure rather than inventing a second calculation.
+          // Anything not yet answered for THIS run reads as loading.
+          const mats = runMaterials.runId === log.id ? runMaterials : { status: 'loading', rows: [] };
+
           const casualIds = log.casuals || [];
           const sharePerCasual = casualIds.length ? totalCartons / casualIds.length : 0;
           const payPerCasual = sharePerCasual * (Number(casualRate) || 0);
@@ -6808,13 +6867,51 @@ export default function NorthernWaterSystemApp() {
                     </div>
                   )}
 
-                  {/* Raw materials are deliberately absent: the BOM moved into
-                      the database in migration 015, so the client no longer
-                      knows what a run consumes. Showing a guess here would be
-                      worse than showing nothing. */}
-                  <p className="text-slate-400 text-xs border-t border-slate-100 pt-3">
-                    Raw materials for this run were deducted automatically from the bill of materials when it was recorded.
-                  </p>
+                  {/* Raw materials consumed. Read from the database, not
+                      derived here: the BOM has lived server-side since 015. */}
+                  <div className="border-t border-slate-100 pt-3">
+                    <p className="text-slate-500 text-xs mb-2">Raw materials used</p>
+                    {mats.status === 'loading' && (
+                      <p className="text-slate-400 text-sm">Loading…</p>
+                    )}
+                    {mats.status === 'unavailable' && (
+                      <p className="text-slate-400 text-xs">
+                        Raw materials for this run were deducted automatically from the bill of materials when it was recorded. The itemised list could not be loaded.
+                      </p>
+                    )}
+                    {mats.status === 'ready' && mats.rows.length === 0 && (
+                      <p className="text-slate-400 text-sm">No materials recorded against this run.</p>
+                    )}
+                    {mats.status === 'ready' && mats.rows.length > 0 && (
+                      <>
+                        <div className="border border-slate-200 rounded-lg divide-y divide-slate-100">
+                          {mats.rows.map((m, i) => {
+                            const unit = MATERIAL_UNITS[m.material];
+                            const qty = Number(m.quantity) || 0;
+                            return (
+                              <div key={i} className="flex justify-between items-center gap-3 p-2.5 text-sm">
+                                <span className="text-slate-700">
+                                  {MATERIAL_LABELS[m.material] || m.material}
+                                  {m.variant && (
+                                    <span className="text-slate-400">
+                                      {' · '}{MATERIAL_VARIANT_LABELS[m.variant] || SIZE_LABELS[m.variant] || m.variant}
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="text-slate-900 font-medium whitespace-nowrap">
+                                  {/* Whole units except RO chemical, which is litres and fractional. */}
+                                  {unit ? `${qty.toFixed(2)} ${unit}` : qty.toLocaleString()}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <p className="text-slate-400 text-xs mt-2">
+                          Deducted from stock automatically when this run was recorded. Quantities come from the current bill of materials.
+                        </p>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
