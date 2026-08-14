@@ -327,6 +327,11 @@ export default function NorthernWaterSystemApp() {
   const [debtsSearch, setDebtsSearch] = useState('');
   const [statementRange, setStatementRange] = useState({ start: '', end: '' });
   const [invoiceDetail, setInvoiceDetail] = useState(null);
+  // The open customer card, held as an ID rather than the customer object: the
+  // card is looked up from state on every render, so a sale or payment recorded
+  // from inside it shows the new balance instead of a stale snapshot.
+  const [customerDetail, setCustomerDetail] = useState(null);
+  const [customerCardTab, setCustomerCardTab] = useState('sales');
   const [breakdownCard, setBreakdownCard] = useState(null);
   const [cartonCosts, setCartonCosts] = useState({});
   const [employees, setEmployees] = useState([]);
@@ -3370,6 +3375,40 @@ export default function NorthernWaterSystemApp() {
     setShowModal(true);
   };
 
+  // Open the sale modal from a customer card with that customer preselected.
+  // Same modal, same save path as the Sales tab — this only fills in who it is
+  // for. The card closes so the two modals never stack.
+  const handleAddSaleForCustomer = (customer) => {
+    handleAddSale();
+    setFormData(prev => ({ ...prev, customerId: customer.id }));
+    setSaleCustomerSearch(customer.name);
+    setCustomerDetail(null);
+  };
+
+  // Same idea for payments. The modal's sale picker filters by customer name,
+  // so seeding the search box scopes the list to this customer's unpaid
+  // invoices; when there is exactly one, it is preselected with its full
+  // balance, which is the common case from a card.
+  const handleAddPaymentForCustomer = (customer) => {
+    const pending = visibleSales.filter(s => s.customerId === customer.id && s.paid < s.total);
+    if (pending.length === 0) {
+      alert(`${customer.name} has no unpaid invoices.`);
+      return;
+    }
+    setModalType('payment');
+    setPaymentSaleSearch(customer.name);
+    setFormData({
+      saleId: pending.length === 1 ? String(pending[0].id) : '',
+      amount: pending.length === 1 ? pending[0].total - pending[0].paid : 0,
+      method: 'cash',
+      reference: '',
+      date: localDateString(),
+      clientKey: newClientKey(),
+    });
+    setCustomerDetail(null);
+    setShowModal(true);
+  };
+
   const handleSavePayment = async () => {
     if (!formData.saleId || formData.amount <= 0) {
       alert('Please select sale and enter amount');
@@ -5914,7 +5953,11 @@ export default function NorthernWaterSystemApp() {
                 </thead>
                 <tbody>
                   {filtered.map(customer => (
-                    <tr key={customer.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60 transition">
+                    <tr
+                      key={customer.id}
+                      onClick={() => { setCustomerCardTab('sales'); setCustomerDetail(customer.id); }}
+                      className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60 transition cursor-pointer"
+                    >
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-3">
                           <div className="flex-shrink-0 w-9 h-9 rounded-full bg-sky-50 text-sky-600 flex items-center justify-center text-xs font-semibold">
@@ -5935,7 +5978,9 @@ export default function NorthernWaterSystemApp() {
                       <td className={`px-5 py-3 text-right font-semibold ${customer.balance >= 0 ? 'text-slate-900' : 'text-rose-600'}`}>
                         KES {customer.balance.toLocaleString()}
                       </td>
-                      <td className="px-5 py-3">
+                      {/* stopPropagation so the row's card does not open behind
+                          the edit modal or the delete confirmation. */}
+                      <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1">
                           <button onClick={() => openEdit(customer)} className="p-2 hover:bg-slate-100 rounded-lg transition" title="Edit">
                             <Edit2 className="w-4 h-4 text-slate-500" />
@@ -5956,7 +6001,11 @@ export default function NorthernWaterSystemApp() {
               {/* Mobile cards */}
               <div className="md:hidden divide-y divide-slate-100">
                 {filtered.map(customer => (
-                  <div key={customer.id} className="p-4">
+                  <div
+                    key={customer.id}
+                    onClick={() => { setCustomerCardTab('sales'); setCustomerDetail(customer.id); }}
+                    className="p-4 active:bg-slate-50 transition cursor-pointer"
+                  >
                     <div className="flex justify-between items-start gap-3">
                       <div className="flex items-center gap-3 min-w-0">
                         <div className="flex-shrink-0 w-9 h-9 rounded-full bg-sky-50 text-sky-600 flex items-center justify-center text-xs font-semibold">
@@ -5967,7 +6016,7 @@ export default function NorthernWaterSystemApp() {
                           <p className="text-slate-500 text-xs truncate">{customer.location} • {customer.phone}</p>
                         </div>
                       </div>
-                      <div className="flex gap-1 flex-shrink-0">
+                      <div className="flex gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
                         <button onClick={() => openEdit(customer)} className="p-2 hover:bg-slate-100 rounded-lg transition">
                           <Edit2 className="w-4 h-4 text-slate-500" />
                         </button>
@@ -6436,6 +6485,241 @@ export default function NorthernWaterSystemApp() {
                         ))}
                       </div>
                     </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Customer Card */}
+        {customerDetail !== null && (() => {
+          // Looked up fresh from visibleCustomers on every render: holding the
+          // ID keeps the balance live after a sale or payment, and reading from
+          // the scoped list means a sales user cannot open a card for an
+          // account outside their location even by stale ID.
+          const customer = visibleCustomers.find(c => c.id === customerDetail);
+          if (!customer) return null;
+
+          const fmt = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          const initials = (customer.name || '?').split(' ').filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase();
+          const owed = Math.max(0, -(customer.balance || 0));
+
+          // visibleSales / visiblePayments, never state.*: the card must not
+          // show a sales user records their own tabs would hide from them.
+          const sales = visibleSales.filter(s => s.customerId === customer.id);
+          const payments = visiblePayments.filter(p => p.customerId === customer.id);
+          const salesNewestFirst = sales.slice().sort((a, b) =>
+            (a.date < b.date ? 1 : a.date > b.date ? -1 : (b.id || 0) - (a.id || 0)));
+
+          // Ledger: invoices are debits, payments credits, with a running
+          // balance. A sale's `paid` splits into its linked payment records and
+          // whatever was handed over at the till, so money is neither
+          // double-counted nor dropped (same split the Cash Collected report
+          // uses).
+          const ledger = [];
+          sales.forEach(s => {
+            const items = (s.items || []).map(i => `${i.quantity}× ${SIZE_LABELS[i.size] || i.size}`).join(', ');
+            ledger.push({
+              date: s.date, order: 0,
+              ref: s.invoiceNumber || `Sale #${s.id}`,
+              desc: (s.total || 0) < 0 ? 'Credit note' : `Invoice${items ? ' · ' + items : ''}`,
+              debit: s.total || 0, credit: 0,
+            });
+            const paidViaPayments = payments.filter(p => p.saleId === s.id).reduce((sum, p) => sum + (p.amount || 0), 0);
+            const paidAtSale = (s.paid || 0) - paidViaPayments;
+            if (paidAtSale > 0) {
+              ledger.push({
+                date: s.date, order: 1,
+                ref: s.invoiceNumber || `Sale #${s.id}`,
+                desc: 'Payment at point of sale', debit: 0, credit: paidAtSale,
+              });
+            }
+          });
+          payments.forEach(p => {
+            ledger.push({
+              date: p.date, order: 1,
+              ref: p.reference || p.invoiceNumber || '',
+              desc: `Payment${p.method ? ' · ' + String(p.method).replace(/_/g, ' ') : ''}`,
+              debit: 0, credit: p.amount || 0,
+            });
+          });
+          ledger.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order));
+          let runningBalance = 0;
+
+          const closeCard = () => setCustomerDetail(null);
+
+          return (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={closeCard}>
+              <div className="bg-white rounded-xl max-w-2xl w-full max-h-[88vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+
+                {/* Details */}
+                <div className="p-4 md:p-6 border-b border-slate-100">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex-shrink-0 w-12 h-12 rounded-full bg-sky-50 text-sky-600 flex items-center justify-center text-sm font-semibold">
+                        {initials}
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="text-slate-900 font-bold text-lg truncate">{customer.name}</h3>
+                        <p className="text-slate-500 text-xs truncate">
+                          {customer.location}{customer.phone ? ` · ${customer.phone}` : ''}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <Badge color={customer.isActive ? 'emerald' : 'rose'} dot>
+                        {customer.isActive ? 'Active' : 'Inactive'}
+                      </Badge>
+                      <button onClick={closeCard} className="text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex items-baseline justify-between bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+                    <span className="text-slate-500 text-xs">{owed > 0 ? 'Outstanding balance' : 'Balance'}</span>
+                    <span className={`text-lg font-bold ${owed > 0 ? 'text-rose-600' : 'text-slate-900'}`}>
+                      KES {fmt(owed > 0 ? owed : Math.abs(customer.balance || 0))}
+                      {owed > 0 ? '' : (customer.balance || 0) > 0 ? ' in credit' : ''}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="px-4 md:px-6 py-3 border-b border-slate-100 flex flex-wrap gap-2">
+                  {/* Consignment shops are invoiced through Report Sold, which
+                      is why the sale picker hides them — offering New Sale here
+                      would only lead to a rejection at save. */}
+                  {!customer.is_consignee && (
+                    <button
+                      onClick={() => handleAddSaleForCustomer(customer)}
+                      className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-600 text-white font-medium px-3 py-1.5 rounded-lg transition text-xs"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> New Sale
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleAddPaymentForCustomer(customer)}
+                    className="flex items-center gap-1.5 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 font-medium px-3 py-1.5 rounded-lg transition text-xs"
+                  >
+                    <Wallet className="w-3.5 h-3.5" /> Record Payment
+                  </button>
+                  <button
+                    onClick={() => downloadAccountStatementAsPDF(customer)}
+                    className="flex items-center gap-1.5 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 font-medium px-3 py-1.5 rounded-lg transition text-xs"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Statement
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditingCustomer(customer);
+                      setModalType('customer');
+                      setFormData(customer);
+                      setCustomerDetail(null);
+                      setShowModal(true);
+                    }}
+                    className="flex items-center gap-1.5 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 font-medium px-3 py-1.5 rounded-lg transition text-xs"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" /> Edit
+                  </button>
+                  {customer.is_consignee && (
+                    <p className="w-full text-slate-400 text-xs mt-1">
+                      Consignment shop — record what it sells under Inventory → Consignment → Report Sold.
+                    </p>
+                  )}
+                </div>
+
+                {/* Tabs */}
+                <div className="px-4 md:px-6 pt-3 flex gap-4 border-b border-slate-100">
+                  {[['sales', `Sales History (${sales.length})`], ['ledger', 'Ledger Entries']].map(([key, label]) => (
+                    <button
+                      key={key}
+                      onClick={() => setCustomerCardTab(key)}
+                      className={`pb-2 text-sm font-medium transition border-b-2 ${
+                        customerCardTab === key
+                          ? 'border-sky-500 text-slate-900'
+                          : 'border-transparent text-slate-400 hover:text-slate-600'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Sales history — rows open the existing invoice card */}
+                <div className="overflow-y-auto p-4 md:p-6">
+                  {customerCardTab === 'sales' && (
+                    salesNewestFirst.length === 0 ? (
+                      <p className="text-slate-400 text-sm text-center py-8">No sales recorded for this customer yet.</p>
+                    ) : (
+                      <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
+                        {salesNewestFirst.map(s => {
+                          const outstanding = Math.round(((s.total || 0) - (s.paid || 0)) * 100) / 100;
+                          const label = outstanding <= 0 ? 'Paid' : (s.paid || 0) > 0 ? 'Part paid' : 'Unpaid';
+                          const colour = outstanding <= 0 ? 'emerald' : (s.paid || 0) > 0 ? 'amber' : 'rose';
+                          return (
+                            <button
+                              key={s.id}
+                              onClick={() => { setCustomerDetail(null); setInvoiceDetail(s); }}
+                              className="w-full text-left px-3 py-2.5 hover:bg-slate-50 transition flex items-center justify-between gap-3"
+                            >
+                              <div className="min-w-0">
+                                <p className="text-slate-900 text-sm font-medium truncate">{s.invoiceNumber || `Sale #${s.id}`}</p>
+                                <p className="text-slate-400 text-xs">{s.date}</p>
+                              </div>
+                              <div className="flex items-center gap-3 flex-shrink-0">
+                                <div className="text-right">
+                                  <p className="text-slate-900 text-sm font-semibold">KES {fmt(s.total)}</p>
+                                  {outstanding > 0 && <p className="text-rose-600 text-xs">KES {fmt(outstanding)} owing</p>}
+                                </div>
+                                <Badge color={colour}>{label}</Badge>
+                                <ChevronRight className="w-4 h-4 text-slate-300" />
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )
+                  )}
+
+                  {customerCardTab === 'ledger' && (
+                    ledger.length === 0 ? (
+                      <p className="text-slate-400 text-sm text-center py-8">No transactions on this account yet.</p>
+                    ) : (
+                      <>
+                        <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="bg-slate-50 text-slate-500 text-left">
+                                <th className="font-medium px-3 py-2">Date</th>
+                                <th className="font-medium px-3 py-2">Reference</th>
+                                <th className="font-medium px-3 py-2">Description</th>
+                                <th className="font-medium px-3 py-2 text-right">Charge</th>
+                                <th className="font-medium px-3 py-2 text-right">Paid</th>
+                                <th className="font-medium px-3 py-2 text-right">Balance</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {ledger.map((e, i) => {
+                                runningBalance += e.debit - e.credit;
+                                return (
+                                  <tr key={i} className="border-t border-slate-100">
+                                    <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{e.date || '—'}</td>
+                                    <td className="px-3 py-2 text-slate-600">{e.ref || '—'}</td>
+                                    <td className="px-3 py-2 text-slate-600">{e.desc}</td>
+                                    <td className="px-3 py-2 text-right text-slate-900">{e.debit ? fmt(e.debit) : '—'}</td>
+                                    <td className="px-3 py-2 text-right text-emerald-600">{e.credit ? fmt(e.credit) : '—'}</td>
+                                    <td className="px-3 py-2 text-right font-semibold text-slate-900">{fmt(runningBalance)}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                        <p className="text-slate-400 text-xs mt-2">
+                          Every invoice and payment on this account, oldest first. The closing balance is what the customer owes today.
+                        </p>
+                      </>
+                    )
                   )}
                 </div>
               </div>
