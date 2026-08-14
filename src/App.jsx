@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, ShoppingCart, Wallet, Search, Filter, ChevronRight, ChevronDown } from 'lucide-react';
+import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, ShoppingCart, Wallet, Search, Filter, ChevronRight, ChevronDown, Maximize2, Minimize2 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import { OASIS_LOGO } from './oasisLogo';
 
@@ -332,6 +332,10 @@ export default function NorthernWaterSystemApp() {
   // from inside it shows the new balance instead of a stale snapshot.
   const [customerDetail, setCustomerDetail] = useState(null);
   const [customerCardTab, setCustomerCardTab] = useState('sales');
+  // Maximised card: near-full-screen, for reading a long ledger without the
+  // table scrolling sideways. Kept across cards so the preference sticks for
+  // the session.
+  const [customerCardExpanded, setCustomerCardExpanded] = useState(false);
   const [breakdownCard, setBreakdownCard] = useState(null);
   const [cartonCosts, setCartonCosts] = useState({});
   const [employees, setEmployees] = useState([]);
@@ -6550,8 +6554,19 @@ export default function NorthernWaterSystemApp() {
           const closeCard = () => setCustomerDetail(null);
 
           return (
-            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={closeCard}>
-              <div className="bg-white rounded-xl max-w-2xl w-full max-h-[88vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div
+              className={`fixed inset-0 bg-black/50 flex items-center justify-center z-50 ${customerCardExpanded ? 'p-2 md:p-4' : 'p-4'}`}
+              onClick={closeCard}
+            >
+              {/* Fixed height rather than max-height: the card keeps its size
+                  when you switch between a short sales list and a long ledger,
+                  instead of resizing under the cursor. */}
+              <div
+                className={`bg-white rounded-xl w-full flex flex-col ${
+                  customerCardExpanded ? 'max-w-none h-[96vh]' : 'max-w-4xl h-[85vh]'
+                }`}
+                onClick={(e) => e.stopPropagation()}
+              >
 
                 {/* Details */}
                 <div className="p-4 md:p-6 border-b border-slate-100">
@@ -6571,7 +6586,14 @@ export default function NorthernWaterSystemApp() {
                       <Badge color={customer.isActive ? 'emerald' : 'rose'} dot>
                         {customer.isActive ? 'Active' : 'Inactive'}
                       </Badge>
-                      <button onClick={closeCard} className="text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+                      <button
+                        onClick={() => setCustomerCardExpanded(v => !v)}
+                        className="hidden md:block text-slate-400 hover:text-slate-700 p-1"
+                        title={customerCardExpanded ? 'Shrink card' : 'Maximise card'}
+                      >
+                        {customerCardExpanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                      </button>
+                      <button onClick={closeCard} className="text-slate-400 hover:text-slate-700" title="Close"><X className="w-5 h-5" /></button>
                     </div>
                   </div>
 
