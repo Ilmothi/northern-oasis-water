@@ -104,10 +104,17 @@ that verification on `main` in the same sitting.
 | File | What it does |
 |------|--------------|
 | `018_settle_customer_balances.sql` | Corrects the five customer balances that disagree with their sales ledger. **Debtors and Aging Debtors rise by KES 5,450 on apply.** Requires `017` |
+| `022_production_run_materials.sql` | Adds `production_run_materials(id)`, a read-only function returning the raw materials a production run consumed, for the production run card. Purely additive — one new function, no table, column, policy or existing function touched. Requires `015` |
 
-`018` is now the only file left in this section, and it is a data correction
-rather than a schema or policy change — nothing else waits on it. `019`, `020`
-and `021` moved to the applied table on 2026-08-04.
+`018` is a data correction rather than a schema or policy change — nothing else
+waits on it. `019`, `020` and `021` moved to the applied table on 2026-08-04.
+
+`022` must be applied **before** the client that calls it, but early is safe:
+nothing calls the function until that client ships, whereas a client deployed
+first would error on every run card. Note its header caveat — it derives
+materials from the current recipe rather than reading back what was deducted on
+the day, so it is fine for "what did this run use" and is not evidence for a
+stock dispute.
 
 ### 017 aftermath — two live defects, and what they have in common
 
