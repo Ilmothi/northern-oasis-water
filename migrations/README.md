@@ -47,6 +47,8 @@ functions** (`prosecdef`, `proconfig`). See `docs/audit-2026-07-30-rls.md`.
 | `019_server_side_attribution_and_payment_delete.sql` | Stamps `created_by` server-side in `record_sale` / `consignment_post_sale` and restores `017`'s `sales_insert_non_admin`; removes `delete_payment`'s `FOR UPDATE`, which had blocked all payment deletion since `013`; normalises a blank profile location |
 | `020_no_negative_stock.sql` | Refuses any sale or production deletion that would drive finished goods below zero, using `016`'s post-change pattern |
 | `021_idempotent_money_writes.sql` | Adds a `client_key` idempotency key to `sales`, `payments` and `production_logs`, so a save retried after a lost response returns the existing row instead of recording a duplicate. Rewrites the three `record_*` functions around it |
+| `022_production_run_materials.sql` | Adds `production_run_materials(id)`, a read-only function returning the raw materials a production run consumed, for the production run card. Purely additive — one new function, no table, column, policy or existing function touched |
+| `023_retire_stamps_and_ro_chemical.sql` | Redefines `production_bom_changes` without the KRA stamp and RO chemical lines — both materials are retired. **Changes the recipe**, so historical runs restate in the UI and reversing a pre-change run no longer credits either back. Leaves the `inventory_state` keys frozen rather than deleting them |
 
 Apply dates were not recorded before this file existed. Known: `007` on
 2026-07-02; `008` and `009` on 2026-07-22; `010`, `011` and `012` on 2026-07-28;
@@ -99,6 +101,24 @@ The lesson is not "remember to merge the commit". It is that **a record of what
 is applied, kept in a branch, is not a record.** If you verify an apply, land
 that verification on `main` in the same sitting.
 
+`022` and `023` on 2026-08-14, both **verified by probing the live functions**
+rather than trusting the apply, and every verification block in both files run
+and passed. `023` is the first change to the recipe since `015` defined it:
+`production_bom_changes('{"0.5L": 10}', 1)` now contains neither `kraStamps` nor
+`roChemical`, the rest of the recipe is unchanged, and reversal is still
+symmetric — a run recorded and deleted nets to zero.
+
+Both were applied ahead of their client (`production-run-detail`), which is the
+safe order for both. `022`'s function simply sits unused until the run card
+ships. `023` is the more visible half: production stopped deducting stamps and
+chemical immediately, while the client still displayed both tiles until the
+branch merged, so the two quantities were briefly visible and frozen — which is
+the intended failure mode, and the reason migration-first was chosen.
+
+The two frozen `inventory_state` quantities should never move again. If the
+pre-apply figures were not recorded, the values as at 2026-08-14 are the
+baseline by default.
+
 ### Written but NOT yet applied
 
 | File | What it does |
@@ -107,7 +127,8 @@ that verification on `main` in the same sitting.
 
 `018` is now the only file left in this section, and it is a data correction
 rather than a schema or policy change — nothing else waits on it. `019`, `020`
-and `021` moved to the applied table on 2026-08-04.
+and `021` moved to the applied table on 2026-08-04; `022` and `023` on
+2026-08-14.
 
 ### 017 aftermath — two live defects, and what they have in common
 

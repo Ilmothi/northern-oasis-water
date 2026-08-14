@@ -137,9 +137,11 @@ const initialState = {
     },
     caps: {
       '18.9L': 2000
-    },
-    kraStamps: 50000,
-    roChemical: 1000
+    }
+    // KRA stamps and RO chemical were raw materials until 2026-08-14. Both are
+    // retired (migration 023 removed them from the BOM). Existing databases keep
+    // their quantities frozen in `inventory_state`; the app no longer reads,
+    // values or deducts them, and a fresh database no longer seeds them.
   },
 
   finishedGoods: {
@@ -169,7 +171,7 @@ const initialState = {
   // Pricing is now entered manually per sale - no auto-pricing from location
 
   expenseCategories: {
-    'Raw Materials': ['Empty Bottles', 'Overwraps', 'Seals', 'Labels', 'KRA Stamps', 'RO Machine Chemicals'],
+    'Raw Materials': ['Empty Bottles', 'Overwraps', 'Seals', 'Labels'],
     'Labour': ['Salaries', 'Casual Pay', 'Overtime'],
     'Operations': ['Rent', 'Electricity', 'Water', 'Transport', 'Maintenance', 'Other']
   },
@@ -190,9 +192,10 @@ const initialState = {
     'Labels - 1.5L': { material: 'labels_1.5L', category: 'Labels' },
     'Labels - 5L': { material: 'labels_5L', category: 'Labels' },
     'Labels - 18.9L': { material: 'labels_18.9L', category: 'Labels' },
-    'Caps - 18.9L': { material: 'caps_18.9L', category: 'Caps' },
-    'KRA Stamps': { material: 'kraStamps', category: 'KRA Stamps' },
-    'RO Machine Chemicals': { material: 'roChemical', category: 'RO Machine Chemicals' }
+    'Caps - 18.9L': { material: 'caps_18.9L', category: 'Caps' }
+    // KRA Stamps and RO Machine Chemicals removed 2026-08-14 — both retired, so
+    // no new purchase can be booked against them. Purchases already recorded
+    // against either keep their stored material key and still display.
   }
 };
 
@@ -256,6 +259,32 @@ const EXPENSE_TYPES = [
 
 const EXPENSE_TREATMENT = EXPENSE_TYPES.reduce((m, t) => { m[t.name] = t.treatment; return m; }, {});
 
+// Display names for the raw-material buckets `production_run_materials`
+// returns. The inventory screens spell the same names out inline; this is that
+// wording in one place, for the production run card.
+const MATERIAL_LABELS = {
+  emptyBottles: 'Empty bottles',
+  seals: 'Seals',
+  labels: 'Labels',
+  caps: 'Caps',
+  overwraps: 'Overwraps',
+  // Both retired 2026-08-14. Kept only so that a run card opened against a
+  // database where migration 023 has not been applied yet still names them
+  // properly instead of printing the raw key.
+  kraStamps: 'KRA stamps',
+  roChemical: 'RO chemical',
+};
+
+// Variants that are not a product size. Sizes fall through to SIZE_LABELS.
+const MATERIAL_VARIANT_LABELS = {
+  short_neck: 'Short neck (0.5L & 1.5L)',
+};
+
+// Buckets measured in something other than whole units.
+const MATERIAL_UNITS = {
+  roChemical: 'L',
+};
+
 const BOTTLES_PER_CARTON = {
   '0.5L': 24,
   '1.5L': 12,
@@ -291,7 +320,11 @@ function applyPurchaseItemsToRawMaterials(rawMaterials, items, sign) {
       const size = item.material.replace('overwraps_', '');
       if (rawMaterials.overwraps[size] != null) rawMaterials.overwraps[size] += delta;
     } else if (rawMaterials[item.material] != null) {
-      // simple categories like kraStamps, roChemical
+      // Flat, non-nested materials. Nothing purchasable maps here since KRA
+      // stamps and RO chemical were retired (2026-08-14); the branch is kept
+      // because editing a purchase recorded against either BEFORE that date
+      // still routes through it. That would move a frozen key, which is
+      // invisible — neither is displayed, valued or deducted any more.
       rawMaterials[item.material] += delta;
     }
   });
@@ -335,6 +368,17 @@ export default function NorthernWaterSystemApp() {
   // table scrolling sideways. Kept across cards so the preference sticks for
   // the session.
   const [customerCardExpanded, setCustomerCardExpanded] = useState(false);
+  // Open production run card, held as an ID for the same reason as the customer
+  // card: the run is re-read from state, so a casual payout recorded elsewhere
+  // shows here without reopening.
+  const [productionDetail, setProductionDetail] = useState(null);
+  // Raw materials for the open run. Fetched rather than derived: the BOM lives
+  // in the database as of migration 015 and the client has no copy of it.
+  // Carries the run it belongs to: the card treats a result for any other run
+  // as still loading, so switching runs cannot flash the previous one's
+  // materials, and the effect never has to reset state synchronously.
+  // status: 'ready' | 'unavailable'
+  const [runMaterials, setRunMaterials] = useState({ runId: null, status: 'ready', rows: [] });
   const [breakdownCard, setBreakdownCard] = useState(null);
   const [cartonCosts, setCartonCosts] = useState({});
   const [employees, setEmployees] = useState([]);
@@ -756,6 +800,32 @@ export default function NorthernWaterSystemApp() {
     }
   }, [userProfile]);
 
+  // Fetch the open run's materials from `production_run_materials` (migration
+  // 022). Anything that goes wrong — the migration not applied yet, a run whose
+  // items contain a size the recipe does not know (which makes the function
+  // raise, by design), a dropped connection — lands as 'unavailable', and the
+  // card falls back to saying materials were deducted without naming them. A
+  // run card must still open when this cannot answer.
+  useEffect(() => {
+    if (productionDetail === null) return;
+    const runId = productionDetail;
+    let cancelled = false;
+    supabase
+      .rpc('production_run_materials', { p_id: runId })
+      .then(({ data, error }) => {
+        // Closing the card or opening another mid-flight must not write a
+        // stale answer over the current one.
+        if (cancelled) return;
+        if (error) {
+          console.warn('Could not load run materials:', error.message);
+          setRunMaterials({ runId, status: 'unavailable', rows: [] });
+          return;
+        }
+        setRunMaterials({ runId, status: 'ready', rows: Array.isArray(data) ? data : [] });
+      });
+    return () => { cancelled = true; };
+  }, [productionDetail]);
+
   // Find the most recent purchase unit price for a given material key
   // (e.g. 'emptyBottles_0.5L', 'seals_short_neck', 'labels_5L', 'kraStamps').
   // Returns 0 if the material has never been purchased.
@@ -791,14 +861,10 @@ export default function NorthernWaterSystemApp() {
       }
     });
 
-    // Simple number categories: kraStamps, roChemical
-    if (typeof rm.kraStamps === 'number') {
-      total += rm.kraStamps * getLatestUnitPrice('kraStamps');
-    }
-    if (typeof rm.roChemical === 'number') {
-      total += rm.roChemical * getLatestUnitPrice('roChemical');
-    }
-
+    // kraStamps and roChemical were valued here until 2026-08-14. Both are
+    // retired: their keys are still in the blob on existing databases, frozen,
+    // and are deliberately NOT counted. This is why raw-material valuation —
+    // and so Current Asset Valuation — steps down on the day this ships.
     return total;
   };
 
@@ -1114,9 +1180,9 @@ export default function NorthernWaterSystemApp() {
         });
       }
     });
-    // Raw materials — simple numbers
-    items.push({ id: 'rm:kraStamps', label: 'KRA Stamps', qty: state.rawMaterials.kraStamps });
-    items.push({ id: 'rm:roChemical', label: 'RO Chemical', qty: state.rawMaterials.roChemical });
+    // KRA stamps and RO chemical were adjustable here until 2026-08-14. Both
+    // retired — a frozen key should not be adjustable, or the "frozen" claim
+    // stops being true.
     // Finished goods
     Object.keys(state.finishedGoods).forEach(size => {
       items.push({
@@ -4244,19 +4310,9 @@ export default function NorthernWaterSystemApp() {
                 </div>
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
-                <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm">Other Materials</h3>
-                <div className="space-y-2 md:space-y-3">
-                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-50 rounded-lg text-xs md:text-sm">
-                    <p className="text-slate-500">KRA Stamps</p>
-                    <p className="text-slate-900 font-semibold">{state.rawMaterials.kraStamps}</p>
-                  </div>
-                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-50 rounded-lg text-xs md:text-sm">
-                    <p className="text-slate-500">RO Chemical</p>
-                    <p className="text-slate-900 font-semibold">{state.rawMaterials.roChemical.toFixed(1)}L</p>
-                  </div>
-                </div>
-              </div>
+              {/* The "Other Materials" card held KRA Stamps and RO Chemical.
+                  Both retired 2026-08-14, which left the card with nothing in
+                  it, so the card went too. */}
             </div>
           </div>
         )}
@@ -5176,7 +5232,11 @@ export default function NorthernWaterSystemApp() {
                   <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No logs</p>
                 ) : (
                   state.productionLogs.slice().reverse().map(log => (
-                    <div key={log.id} className="p-3 md:p-4 bg-slate-50 rounded-lg border border-slate-100">
+                    <div
+                      key={log.id}
+                      onClick={() => setProductionDetail(log.id)}
+                      className="p-3 md:p-4 bg-slate-50 rounded-lg border border-slate-100 hover:border-sky-200 hover:bg-sky-50/40 transition cursor-pointer"
+                    >
                       <div className="flex justify-between items-start mb-2">
                         <div>
                           <p className="text-slate-900 font-semibold text-sm">Prod #{log.id}</p>
@@ -5195,9 +5255,11 @@ export default function NorthernWaterSystemApp() {
                         ))}
                       </div>
                       {log.notes && <p className="text-slate-500 text-xs italic">{log.notes}</p>}
-                      {/* RLS only permits admin to delete production logs. */}
+                      {/* RLS only permits admin to delete production logs.
+                          stopPropagation so deleting does not also open the
+                          run card behind the confirmation. */}
                       {role === 'admin' && (
-                        <div className="flex justify-end pt-2 mt-2 border-t border-slate-100">
+                        <div className="flex justify-end pt-2 mt-2 border-t border-slate-100" onClick={(e) => e.stopPropagation()}>
                           <button
                             onClick={() => handleDeleteProduction(log.id)}
                             className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded transition"
@@ -6675,6 +6737,177 @@ export default function NorthernWaterSystemApp() {
                       </>
                     )
                   )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Production Run Card */}
+        {productionDetail !== null && (() => {
+          const log = state.productionLogs.find(l => l.id === productionDetail);
+          if (!log) return null;
+
+          const fmt = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          // Cost figures are for admin and manager only. A sales user logs
+          // production but has no business seeing what a run is worth or what a
+          // casual earns — the same line Cost Settings already draws.
+          const showCosts = role === 'admin' || role === 'manager';
+
+          const itemRows = Object.entries(log.items || {}).filter(([, q]) => q);
+          const totalCartons = itemRows.reduce((sum, [, q]) => sum + (q || 0), 0);
+          const totalBottles = itemRows.reduce((sum, [size, q]) => sum + (q || 0) * (BOTTLES_PER_CARTON[size] || 1), 0);
+          const runValue = itemRows.reduce((sum, [size, q]) => sum + (q || 0) * (Number(cartonCosts[size]) || 0), 0);
+
+          // Same split as getCasualPay: a run's cartons divided equally among
+          // the casuals on duty, × the shared rate. Kept in step with the HR
+          // figure rather than inventing a second calculation.
+          // Anything not yet answered for THIS run reads as loading.
+          const mats = runMaterials.runId === log.id ? runMaterials : { status: 'loading', rows: [] };
+
+          const casualIds = log.casuals || [];
+          const sharePerCasual = casualIds.length ? totalCartons / casualIds.length : 0;
+          const payPerCasual = sharePerCasual * (Number(casualRate) || 0);
+
+          return (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setProductionDetail(null)}>
+              <div className="bg-white rounded-xl max-w-2xl w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between p-4 md:p-6 border-b border-slate-100 sticky top-0 bg-white z-10">
+                  <div>
+                    <h3 className="text-slate-900 font-bold">Production Run #{log.id}</h3>
+                    <p className="text-slate-400 text-xs">{log.date}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge color="sky">{log.unit || 'cartons'}</Badge>
+                    <button onClick={() => setProductionDetail(null)} className="text-slate-400 hover:text-slate-700" title="Close"><X className="w-5 h-5" /></button>
+                  </div>
+                </div>
+
+                <div className="p-4 md:p-6 space-y-4">
+                  {/* Output — cartons and bottles, which the history list does
+                      not break down. */}
+                  <div>
+                    <p className="text-slate-500 text-xs mb-2">Produced</p>
+                    <div className="border border-slate-200 rounded-lg divide-y divide-slate-100">
+                      {itemRows.length === 0 ? (
+                        <p className="text-slate-400 text-sm p-3">No items recorded on this run.</p>
+                      ) : itemRows.map(([size, qty]) => (
+                        <div key={size} className="grid grid-cols-[1fr_auto_9rem] gap-3 items-center p-2.5 text-sm">
+                          <span className="text-slate-700">{SIZE_LABELS[size] || size}</span>
+                          <span className="text-slate-500 text-xs whitespace-nowrap">
+                            {((qty || 0) * (BOTTLES_PER_CARTON[size] || 1)).toLocaleString()} bottles
+                          </span>
+                          <span className="text-slate-900 font-medium text-right">{(qty || 0).toLocaleString()} cartons</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-50 rounded-lg p-3 space-y-1 text-sm">
+                    <div className="flex justify-between"><span className="text-slate-500">Total cartons</span><span className="text-slate-900 font-semibold">{totalCartons.toLocaleString()}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Total bottles</span><span className="text-slate-900 font-semibold">{totalBottles.toLocaleString()}</span></div>
+                    {showCosts && (
+                      <div className="flex justify-between border-t border-slate-200 pt-1 mt-1">
+                        <span className="text-slate-500">Value at carton cost</span>
+                        <span className="text-slate-900 font-semibold">KES {fmt(runValue)}</span>
+                      </div>
+                    )}
+                  </div>
+                  {showCosts && runValue === 0 && (
+                    <p className="text-slate-400 text-xs -mt-2">
+                      No carton costs configured for these sizes — set them under Cost Settings to value this run.
+                    </p>
+                  )}
+
+                  {/* Casual labour on this run */}
+                  <div>
+                    <p className="text-slate-500 text-xs mb-2">
+                      Casual labour {casualIds.length > 0 && `(${casualIds.length})`}
+                    </p>
+                    {casualIds.length === 0 ? (
+                      <p className="text-slate-400 text-sm">No casuals recorded on this run.</p>
+                    ) : (
+                      <>
+                        <div className="border border-slate-200 rounded-lg divide-y divide-slate-100">
+                          {casualIds.map(empId => {
+                            const emp = employees.find(e => e.id === empId);
+                            return (
+                              <div key={empId} className="flex justify-between items-center p-2.5 text-sm gap-3">
+                                <span className="text-slate-700 truncate">{emp?.name || `Employee #${empId}`}</span>
+                                <span className="text-slate-500 text-xs whitespace-nowrap">
+                                  {sharePerCasual.toFixed(1)} cartons
+                                  {showCosts && payPerCasual > 0 && ` · KES ${fmt(payPerCasual)}`}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="flex items-center gap-2 mt-2">
+                          <Badge color={log.casual_paid ? 'emerald' : 'amber'} dot>
+                            {log.casual_paid ? 'Casual pay settled' : 'Casual pay outstanding'}
+                          </Badge>
+                          <span className="text-slate-400 text-xs">
+                            {log.casual_paid
+                              ? 'Included in a recorded payout.'
+                              : 'Will be included in the next payout for a range covering this date.'}
+                          </span>
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {log.notes && (
+                    <div>
+                      <p className="text-slate-500 text-xs mb-1">Notes</p>
+                      <p className="text-slate-600 text-sm italic">{log.notes}</p>
+                    </div>
+                  )}
+
+                  {/* Raw materials consumed. Read from the database, not
+                      derived here: the BOM has lived server-side since 015. */}
+                  <div className="border-t border-slate-100 pt-3">
+                    <p className="text-slate-500 text-xs mb-2">Raw materials used</p>
+                    {mats.status === 'loading' && (
+                      <p className="text-slate-400 text-sm">Loading…</p>
+                    )}
+                    {mats.status === 'unavailable' && (
+                      <p className="text-slate-400 text-xs">
+                        Raw materials for this run were deducted automatically from the bill of materials when it was recorded. The itemised list could not be loaded.
+                      </p>
+                    )}
+                    {mats.status === 'ready' && mats.rows.length === 0 && (
+                      <p className="text-slate-400 text-sm">No materials recorded against this run.</p>
+                    )}
+                    {mats.status === 'ready' && mats.rows.length > 0 && (
+                      <>
+                        <div className="border border-slate-200 rounded-lg divide-y divide-slate-100">
+                          {mats.rows.map((m, i) => {
+                            const unit = MATERIAL_UNITS[m.material];
+                            const qty = Number(m.quantity) || 0;
+                            return (
+                              <div key={i} className="flex justify-between items-center gap-3 p-2.5 text-sm">
+                                <span className="text-slate-700">
+                                  {MATERIAL_LABELS[m.material] || m.material}
+                                  {m.variant && (
+                                    <span className="text-slate-400">
+                                      {' · '}{MATERIAL_VARIANT_LABELS[m.variant] || SIZE_LABELS[m.variant] || m.variant}
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="text-slate-900 font-medium whitespace-nowrap">
+                                  {/* Whole units except RO chemical, which is litres and fractional. */}
+                                  {unit ? `${qty.toFixed(2)} ${unit}` : qty.toLocaleString()}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <p className="text-slate-400 text-xs mt-2">
+                          Deducted from stock automatically when this run was recorded. Quantities come from the current bill of materials.
+                        </p>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
