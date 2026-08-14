@@ -6435,8 +6435,12 @@ export default function NorthernWaterSystemApp() {
           const linkedPayments = state.payments.filter(p => p.saleId === invoiceDetail.id);
           return (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setInvoiceDetail(null)}>
-              <div className="bg-white rounded-xl max-w-md w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between p-4 md:p-6 border-b border-slate-100 sticky top-0 bg-white">
+              {/* Sized to sit alongside the customer card rather than jumping
+                  from 896px to 448px when you open an invoice from it. Height
+                  stays a cap, not a fixed 85vh: an invoice is a short static
+                  document, so a fixed height would open a mostly empty box. */}
+              <div className="bg-white rounded-xl max-w-2xl w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between p-4 md:p-6 border-b border-slate-100 sticky top-0 bg-white z-10">
                   <div>
                     <h3 className="text-slate-900 font-bold">{invoiceDetail.invoiceNumber}</h3>
                     <p className="text-slate-400 text-xs">{invoiceDetail.date}</p>
@@ -6461,11 +6465,14 @@ export default function NorthernWaterSystemApp() {
                   <div>
                     <p className="text-slate-500 text-xs mb-2">Items</p>
                     <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
+                      {/* Columns, not justify-between: at the card's new width
+                          three spread spans drift to opposite edges and stop
+                          reading as a line item. */}
                       {invoiceDetail.items.map((item, i) => (
-                        <div key={i} className="flex justify-between items-center p-2 text-sm">
+                        <div key={i} className="grid grid-cols-[1fr_auto_9rem] gap-3 items-center p-2.5 text-sm">
                           <span className="text-slate-700">{SIZE_LABELS[item.size] || item.size}</span>
-                          <span className="text-slate-500 text-xs">{item.quantity} × {item.price}</span>
-                          <span className="text-slate-900 font-medium">KES {(item.subtotal || item.quantity * item.price).toLocaleString()}</span>
+                          <span className="text-slate-500 text-xs whitespace-nowrap">{item.quantity} × {item.price}</span>
+                          <span className="text-slate-900 font-medium text-right">KES {(item.subtotal || item.quantity * item.price).toLocaleString()}</span>
                         </div>
                       ))}
                     </div>
