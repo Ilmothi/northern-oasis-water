@@ -335,6 +335,10 @@ export default function NorthernWaterSystemApp() {
   // table scrolling sideways. Kept across cards so the preference sticks for
   // the session.
   const [customerCardExpanded, setCustomerCardExpanded] = useState(false);
+  // Open production run card, held as an ID for the same reason as the customer
+  // card: the run is re-read from state, so a casual payout recorded elsewhere
+  // shows here without reopening.
+  const [productionDetail, setProductionDetail] = useState(null);
   const [breakdownCard, setBreakdownCard] = useState(null);
   const [cartonCosts, setCartonCosts] = useState({});
   const [employees, setEmployees] = useState([]);
@@ -5176,7 +5180,11 @@ export default function NorthernWaterSystemApp() {
                   <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No logs</p>
                 ) : (
                   state.productionLogs.slice().reverse().map(log => (
-                    <div key={log.id} className="p-3 md:p-4 bg-slate-50 rounded-lg border border-slate-100">
+                    <div
+                      key={log.id}
+                      onClick={() => setProductionDetail(log.id)}
+                      className="p-3 md:p-4 bg-slate-50 rounded-lg border border-slate-100 hover:border-sky-200 hover:bg-sky-50/40 transition cursor-pointer"
+                    >
                       <div className="flex justify-between items-start mb-2">
                         <div>
                           <p className="text-slate-900 font-semibold text-sm">Prod #{log.id}</p>
@@ -5195,9 +5203,11 @@ export default function NorthernWaterSystemApp() {
                         ))}
                       </div>
                       {log.notes && <p className="text-slate-500 text-xs italic">{log.notes}</p>}
-                      {/* RLS only permits admin to delete production logs. */}
+                      {/* RLS only permits admin to delete production logs.
+                          stopPropagation so deleting does not also open the
+                          run card behind the confirmation. */}
                       {role === 'admin' && (
-                        <div className="flex justify-end pt-2 mt-2 border-t border-slate-100">
+                        <div className="flex justify-end pt-2 mt-2 border-t border-slate-100" onClick={(e) => e.stopPropagation()}>
                           <button
                             onClick={() => handleDeleteProduction(log.id)}
                             className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded transition"
@@ -6675,6 +6685,136 @@ export default function NorthernWaterSystemApp() {
                       </>
                     )
                   )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Production Run Card */}
+        {productionDetail !== null && (() => {
+          const log = state.productionLogs.find(l => l.id === productionDetail);
+          if (!log) return null;
+
+          const fmt = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          // Cost figures are for admin and manager only. A sales user logs
+          // production but has no business seeing what a run is worth or what a
+          // casual earns — the same line Cost Settings already draws.
+          const showCosts = role === 'admin' || role === 'manager';
+
+          const itemRows = Object.entries(log.items || {}).filter(([, q]) => q);
+          const totalCartons = itemRows.reduce((sum, [, q]) => sum + (q || 0), 0);
+          const totalBottles = itemRows.reduce((sum, [size, q]) => sum + (q || 0) * (BOTTLES_PER_CARTON[size] || 1), 0);
+          const runValue = itemRows.reduce((sum, [size, q]) => sum + (q || 0) * (Number(cartonCosts[size]) || 0), 0);
+
+          // Same split as getCasualPay: a run's cartons divided equally among
+          // the casuals on duty, × the shared rate. Kept in step with the HR
+          // figure rather than inventing a second calculation.
+          const casualIds = log.casuals || [];
+          const sharePerCasual = casualIds.length ? totalCartons / casualIds.length : 0;
+          const payPerCasual = sharePerCasual * (Number(casualRate) || 0);
+
+          return (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setProductionDetail(null)}>
+              <div className="bg-white rounded-xl max-w-2xl w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between p-4 md:p-6 border-b border-slate-100 sticky top-0 bg-white z-10">
+                  <div>
+                    <h3 className="text-slate-900 font-bold">Production Run #{log.id}</h3>
+                    <p className="text-slate-400 text-xs">{log.date}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge color="sky">{log.unit || 'cartons'}</Badge>
+                    <button onClick={() => setProductionDetail(null)} className="text-slate-400 hover:text-slate-700" title="Close"><X className="w-5 h-5" /></button>
+                  </div>
+                </div>
+
+                <div className="p-4 md:p-6 space-y-4">
+                  {/* Output — cartons and bottles, which the history list does
+                      not break down. */}
+                  <div>
+                    <p className="text-slate-500 text-xs mb-2">Produced</p>
+                    <div className="border border-slate-200 rounded-lg divide-y divide-slate-100">
+                      {itemRows.length === 0 ? (
+                        <p className="text-slate-400 text-sm p-3">No items recorded on this run.</p>
+                      ) : itemRows.map(([size, qty]) => (
+                        <div key={size} className="grid grid-cols-[1fr_auto_9rem] gap-3 items-center p-2.5 text-sm">
+                          <span className="text-slate-700">{SIZE_LABELS[size] || size}</span>
+                          <span className="text-slate-500 text-xs whitespace-nowrap">
+                            {((qty || 0) * (BOTTLES_PER_CARTON[size] || 1)).toLocaleString()} bottles
+                          </span>
+                          <span className="text-slate-900 font-medium text-right">{(qty || 0).toLocaleString()} cartons</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-50 rounded-lg p-3 space-y-1 text-sm">
+                    <div className="flex justify-between"><span className="text-slate-500">Total cartons</span><span className="text-slate-900 font-semibold">{totalCartons.toLocaleString()}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Total bottles</span><span className="text-slate-900 font-semibold">{totalBottles.toLocaleString()}</span></div>
+                    {showCosts && (
+                      <div className="flex justify-between border-t border-slate-200 pt-1 mt-1">
+                        <span className="text-slate-500">Value at carton cost</span>
+                        <span className="text-slate-900 font-semibold">KES {fmt(runValue)}</span>
+                      </div>
+                    )}
+                  </div>
+                  {showCosts && runValue === 0 && (
+                    <p className="text-slate-400 text-xs -mt-2">
+                      No carton costs configured for these sizes — set them under Cost Settings to value this run.
+                    </p>
+                  )}
+
+                  {/* Casual labour on this run */}
+                  <div>
+                    <p className="text-slate-500 text-xs mb-2">
+                      Casual labour {casualIds.length > 0 && `(${casualIds.length})`}
+                    </p>
+                    {casualIds.length === 0 ? (
+                      <p className="text-slate-400 text-sm">No casuals recorded on this run.</p>
+                    ) : (
+                      <>
+                        <div className="border border-slate-200 rounded-lg divide-y divide-slate-100">
+                          {casualIds.map(empId => {
+                            const emp = employees.find(e => e.id === empId);
+                            return (
+                              <div key={empId} className="flex justify-between items-center p-2.5 text-sm gap-3">
+                                <span className="text-slate-700 truncate">{emp?.name || `Employee #${empId}`}</span>
+                                <span className="text-slate-500 text-xs whitespace-nowrap">
+                                  {sharePerCasual.toFixed(1)} cartons
+                                  {showCosts && payPerCasual > 0 && ` · KES ${fmt(payPerCasual)}`}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="flex items-center gap-2 mt-2">
+                          <Badge color={log.casual_paid ? 'emerald' : 'amber'} dot>
+                            {log.casual_paid ? 'Casual pay settled' : 'Casual pay outstanding'}
+                          </Badge>
+                          <span className="text-slate-400 text-xs">
+                            {log.casual_paid
+                              ? 'Included in a recorded payout.'
+                              : 'Will be included in the next payout for a range covering this date.'}
+                          </span>
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {log.notes && (
+                    <div>
+                      <p className="text-slate-500 text-xs mb-1">Notes</p>
+                      <p className="text-slate-600 text-sm italic">{log.notes}</p>
+                    </div>
+                  )}
+
+                  {/* Raw materials are deliberately absent: the BOM moved into
+                      the database in migration 015, so the client no longer
+                      knows what a run consumes. Showing a guess here would be
+                      worse than showing nothing. */}
+                  <p className="text-slate-400 text-xs border-t border-slate-100 pt-3">
+                    Raw materials for this run were deducted automatically from the bill of materials when it was recorded.
+                  </p>
                 </div>
               </div>
             </div>
