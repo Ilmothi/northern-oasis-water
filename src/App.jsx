@@ -137,9 +137,11 @@ const initialState = {
     },
     caps: {
       '18.9L': 2000
-    },
-    kraStamps: 50000,
-    roChemical: 1000
+    }
+    // KRA stamps and RO chemical were raw materials until 2026-08-14. Both are
+    // retired (migration 023 removed them from the BOM). Existing databases keep
+    // their quantities frozen in `inventory_state`; the app no longer reads,
+    // values or deducts them, and a fresh database no longer seeds them.
   },
 
   finishedGoods: {
@@ -169,7 +171,7 @@ const initialState = {
   // Pricing is now entered manually per sale - no auto-pricing from location
 
   expenseCategories: {
-    'Raw Materials': ['Empty Bottles', 'Overwraps', 'Seals', 'Labels', 'KRA Stamps', 'RO Machine Chemicals'],
+    'Raw Materials': ['Empty Bottles', 'Overwraps', 'Seals', 'Labels'],
     'Labour': ['Salaries', 'Casual Pay', 'Overtime'],
     'Operations': ['Rent', 'Electricity', 'Water', 'Transport', 'Maintenance', 'Other']
   },
@@ -190,9 +192,10 @@ const initialState = {
     'Labels - 1.5L': { material: 'labels_1.5L', category: 'Labels' },
     'Labels - 5L': { material: 'labels_5L', category: 'Labels' },
     'Labels - 18.9L': { material: 'labels_18.9L', category: 'Labels' },
-    'Caps - 18.9L': { material: 'caps_18.9L', category: 'Caps' },
-    'KRA Stamps': { material: 'kraStamps', category: 'KRA Stamps' },
-    'RO Machine Chemicals': { material: 'roChemical', category: 'RO Machine Chemicals' }
+    'Caps - 18.9L': { material: 'caps_18.9L', category: 'Caps' }
+    // KRA Stamps and RO Machine Chemicals removed 2026-08-14 — both retired, so
+    // no new purchase can be booked against them. Purchases already recorded
+    // against either keep their stored material key and still display.
   }
 };
 
@@ -265,6 +268,9 @@ const MATERIAL_LABELS = {
   labels: 'Labels',
   caps: 'Caps',
   overwraps: 'Overwraps',
+  // Both retired 2026-08-14. Kept only so that a run card opened against a
+  // database where migration 023 has not been applied yet still names them
+  // properly instead of printing the raw key.
   kraStamps: 'KRA stamps',
   roChemical: 'RO chemical',
 };
@@ -314,7 +320,11 @@ function applyPurchaseItemsToRawMaterials(rawMaterials, items, sign) {
       const size = item.material.replace('overwraps_', '');
       if (rawMaterials.overwraps[size] != null) rawMaterials.overwraps[size] += delta;
     } else if (rawMaterials[item.material] != null) {
-      // simple categories like kraStamps, roChemical
+      // Flat, non-nested materials. Nothing purchasable maps here since KRA
+      // stamps and RO chemical were retired (2026-08-14); the branch is kept
+      // because editing a purchase recorded against either BEFORE that date
+      // still routes through it. That would move a frozen key, which is
+      // invisible — neither is displayed, valued or deducted any more.
       rawMaterials[item.material] += delta;
     }
   });
@@ -851,14 +861,10 @@ export default function NorthernWaterSystemApp() {
       }
     });
 
-    // Simple number categories: kraStamps, roChemical
-    if (typeof rm.kraStamps === 'number') {
-      total += rm.kraStamps * getLatestUnitPrice('kraStamps');
-    }
-    if (typeof rm.roChemical === 'number') {
-      total += rm.roChemical * getLatestUnitPrice('roChemical');
-    }
-
+    // kraStamps and roChemical were valued here until 2026-08-14. Both are
+    // retired: their keys are still in the blob on existing databases, frozen,
+    // and are deliberately NOT counted. This is why raw-material valuation —
+    // and so Current Asset Valuation — steps down on the day this ships.
     return total;
   };
 
@@ -1174,9 +1180,9 @@ export default function NorthernWaterSystemApp() {
         });
       }
     });
-    // Raw materials — simple numbers
-    items.push({ id: 'rm:kraStamps', label: 'KRA Stamps', qty: state.rawMaterials.kraStamps });
-    items.push({ id: 'rm:roChemical', label: 'RO Chemical', qty: state.rawMaterials.roChemical });
+    // KRA stamps and RO chemical were adjustable here until 2026-08-14. Both
+    // retired — a frozen key should not be adjustable, or the "frozen" claim
+    // stops being true.
     // Finished goods
     Object.keys(state.finishedGoods).forEach(size => {
       items.push({
@@ -4304,19 +4310,9 @@ export default function NorthernWaterSystemApp() {
                 </div>
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
-                <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm">Other Materials</h3>
-                <div className="space-y-2 md:space-y-3">
-                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-50 rounded-lg text-xs md:text-sm">
-                    <p className="text-slate-500">KRA Stamps</p>
-                    <p className="text-slate-900 font-semibold">{state.rawMaterials.kraStamps}</p>
-                  </div>
-                  <div className="flex justify-between items-center p-2 md:p-3 bg-slate-50 rounded-lg text-xs md:text-sm">
-                    <p className="text-slate-500">RO Chemical</p>
-                    <p className="text-slate-900 font-semibold">{state.rawMaterials.roChemical.toFixed(1)}L</p>
-                  </div>
-                </div>
-              </div>
+              {/* The "Other Materials" card held KRA Stamps and RO Chemical.
+                  Both retired 2026-08-14, which left the card with nothing in
+                  it, so the card went too. */}
             </div>
           </div>
         )}

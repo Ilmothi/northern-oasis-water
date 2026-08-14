@@ -105,9 +105,16 @@ that verification on `main` in the same sitting.
 |------|--------------|
 | `018_settle_customer_balances.sql` | Corrects the five customer balances that disagree with their sales ledger. **Debtors and Aging Debtors rise by KES 5,450 on apply.** Requires `017` |
 | `022_production_run_materials.sql` | Adds `production_run_materials(id)`, a read-only function returning the raw materials a production run consumed, for the production run card. Purely additive — one new function, no table, column, policy or existing function touched. Requires `015` |
+| `023_retire_stamps_and_ro_chemical.sql` | Redefines `production_bom_changes` without the KRA stamp and RO chemical lines — both materials are retired. **Changes the recipe**, so historical runs restate in the UI and reversing a pre-change run no longer credits either back. Leaves the `inventory_state` keys frozen rather than deleting them. Requires `015` |
 
 `018` is a data correction rather than a schema or policy change — nothing else
 waits on it. `019`, `020` and `021` moved to the applied table on 2026-08-04.
+
+`023` is the first change to the recipe since `015` defined it, and it is worth
+reading its header before applying rather than after. Record the two frozen
+quantities (verification query 4) before you run it. Either deploy order is
+safe; migration-first is preferred, because it leaves a visible frozen number
+rather than an invisible falling one.
 
 `022` must be applied **before** the client that calls it, but early is safe:
 nothing calls the function until that client ships, whereas a client deployed
