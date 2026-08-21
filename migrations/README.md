@@ -47,6 +47,8 @@ functions** (`prosecdef`, `proconfig`). See `docs/audit-2026-07-30-rls.md`.
 | `019_server_side_attribution_and_payment_delete.sql` | Stamps `created_by` server-side in `record_sale` / `consignment_post_sale` and restores `017`'s `sales_insert_non_admin`; removes `delete_payment`'s `FOR UPDATE`, which had blocked all payment deletion since `013`; normalises a blank profile location |
 | `020_no_negative_stock.sql` | Refuses any sale or production deletion that would drive finished goods below zero, using `016`'s post-change pattern |
 | `021_idempotent_money_writes.sql` | Adds a `client_key` idempotency key to `sales`, `payments` and `production_logs`, so a save retried after a lost response returns the existing row instead of recording a duplicate. Rewrites the three `record_*` functions around it |
+| `024_lump_sum_payments.sql` | `payments.batch_id` + `record_bulk_payment` / `delete_payment_batch`, so one receipt can settle several invoices in a single transaction. Every row still names a `saleId`, so nothing downstream changes shape. **NOT YET APPLIED** |
+| `025_on_account_credit.sql` | Overpayment becomes held credit. Adds `payments.kind`, makes `payments."saleId"` nullable, and extends the balance formula to `-sum(sales.total - sales.paid) + unapplied credit`. Adds `apply_credit`; guards `delete_payment` and `delete_sale` against stranding half a credit application. **NOT YET APPLIED** |
 
 Apply dates were not recorded before this file existed. Known: `007` on
 2026-07-02; `008` and `009` on 2026-07-22; `010`, `011` and `012` on 2026-07-28;
