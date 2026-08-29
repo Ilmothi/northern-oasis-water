@@ -236,7 +236,6 @@ const EXPENSE_TYPES = [
   { name: 'Delivery Expenses', treatment: 'operating' },
   { name: 'Electricity', treatment: 'operating' },
   { name: 'Generator Expenses', treatment: 'operating' },
-  { name: 'Lorry Expenses', treatment: 'operating' },
   { name: 'Date Stamp Ink', treatment: 'operating' },
   { name: 'Transport Expenses', treatment: 'operating' },
   { name: 'LPG Gas Blow Torch', treatment: 'operating' },
@@ -255,6 +254,11 @@ const EXPENSE_TYPES = [
   // Excluded from P&L — cash tracking only
   { name: 'Empty Bottles Transport', treatment: 'excluded' },
   { name: 'Loan Principal', treatment: 'excluded' },
+  // Moved here from operating on 2026-08-29 at the owner's request. Treatment is
+  // resolved from this map at report time, not from the stored row, so this is
+  // RETROACTIVE: lorry expenses already recorded also leave the P&L, and prior
+  // periods restate upward. Cash figures and the expense total are unaffected.
+  { name: 'Lorry Expenses', treatment: 'excluded' },
 ];
 
 const EXPENSE_TREATMENT = EXPENSE_TYPES.reduce((m, t) => { m[t.name] = t.treatment; return m; }, {});
@@ -4259,6 +4263,7 @@ export default function NorthernWaterSystemApp() {
           { id: 'inventory', label: 'Inventory', icon: Package, tabs: [
             { id: 'inventory', label: 'Raw Stock', roles: ['admin', 'manager', 'sales'] },
             { id: 'production', label: 'Production', roles: ['admin', 'manager', 'sales'] },
+            { id: 'finishedgoods', label: 'Finished Goods', roles: ['admin', 'manager', 'sales'] },
             { id: 'purchases', label: 'Purchases', roles: ['admin', 'manager'] },
             { id: 'consignment', label: 'Consignment', roles: ['admin', 'manager'] },
             { id: 'costsettings', label: 'Cost Settings', roles: ['admin'] },
@@ -5607,20 +5612,6 @@ export default function NorthernWaterSystemApp() {
               </button>
             </div>
 
-            {/* Finished Goods */}
-            <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
-              <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm md:text-base">Finished Goods</h3>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-4">
-                {Object.entries(state.finishedGoods).map(([size, data]) => (
-                  <div key={size} className="bg-slate-50 border border-slate-200 rounded-lg p-3 md:p-4">
-                    <p className="text-slate-500 text-xs md:text-sm mb-2">{SIZE_LABELS[size] || size}</p>
-                    <p className="text-slate-900 text-lg md:text-2xl font-bold">{data.quantity}</p>
-                    <p className="text-slate-400 text-xs mt-2">{data.quantity * data.bottlesPerCarton} btls</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-
             {/* Production History */}
             <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
               <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm md:text-base">History</h3>
@@ -5668,6 +5659,31 @@ export default function NorthernWaterSystemApp() {
                     </div>
                   ))
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Finished Goods Tab — split out of Production on 2026-08-29. Read-only
+            view of the same state.finishedGoods the Production tab used to show;
+            stock still moves only through production, sales and adjustments. */}
+        {activeTab === 'finishedgoods' && (
+          <div className="space-y-4 md:space-y-6">
+            <div>
+              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Finished Goods</h2>
+              <p className="text-slate-500 text-sm mt-1">Cartons of bottled water ready for sale. Recorded by production, drawn down by sales.</p>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-lg md:rounded-xl p-4 md:p-6">
+              <h3 className="text-slate-900 font-semibold mb-3 md:mb-4 text-sm md:text-base">Current Stock</h3>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-4">
+                {Object.entries(state.finishedGoods).map(([size, data]) => (
+                  <div key={size} className="bg-slate-50 border border-slate-200 rounded-lg p-3 md:p-4">
+                    <p className="text-slate-500 text-xs md:text-sm mb-2">{SIZE_LABELS[size] || size}</p>
+                    <p className="text-slate-900 text-lg md:text-2xl font-bold">{data.quantity}</p>
+                    <p className="text-slate-400 text-xs mt-2">{data.quantity * data.bottlesPerCarton} btls</p>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
