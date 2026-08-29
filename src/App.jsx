@@ -353,6 +353,9 @@ export default function NorthernWaterSystemApp() {
   const [customerStatusFilter, setCustomerStatusFilter] = useState('all'); // all | active | inactive
   const [saleCustomerSearch, setSaleCustomerSearch] = useState('');
   const [paymentSaleSearch, setPaymentSaleSearch] = useState('');
+  // Lump-sum mode picks a customer rather than an invoice, so it needs its own
+  // search box — the two modes are different pickers over different lists.
+  const [paymentCustomerSearch, setPaymentCustomerSearch] = useState('');
   const [salesFilterDate, setSalesFilterDate] = useState('');
   const [salesSearch, setSalesSearch] = useState('');
   const [paymentsSearch, setPaymentsSearch] = useState('');
@@ -405,6 +408,21 @@ export default function NorthernWaterSystemApp() {
   // exists only to show "Saving…".
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  // Idempotency keys for "apply credit", which is a button rather than a form
+  // and so has nowhere else to keep them. Held per customer+invoice until the
+  // application succeeds, so a retry after a timeout carries the same keys and
+  // the database recognises it as the same request instead of spending the
+  // credit twice. See migration 025.
+  //
+  // State rather than a ref: this is read inside a handler that runSave passes
+  // around, and reading a ref from there trips react-hooks/refs. The keys are
+  // generated and used locally within the one call, so nothing here depends on
+  // the state update having landed first.
+  const [creditApplyKeys, setCreditApplyKeys] = useState({});
+  // Which credit application is in flight, as "customerId:saleId". Applying
+  // credit is the one save that does not go through the modal's Save button, so
+  // it carries its own in-flight flag rather than sharing `saving`.
+  const [applyingCredit, setApplyingCredit] = useState('');
 
   // Declared before the session useEffect below so the effect never references
   // it inside its temporal dead zone (react-hooks/immutability).
@@ -679,6 +697,48 @@ export default function NorthernWaterSystemApp() {
     }
     return patch;
   };
+
+  // The lump-sum and apply-credit RPCs return ARRAYS where the single-record
+  // ones return a row each, because one receipt moves several invoices at once.
+  // Same merge rules as applyRpcRows and upsertById, applied across the arrays.
+  const applyBatchRows = (data) => {
+    let payments = state.payments;
+    (data?.payments || []).forEach(p => { payments = upsertById(payments, p); });
+
+    const updatedSales = new Map((data?.sales || []).map(s => [s.id, s]));
+    const sales = updatedSales.size
+      ? state.sales.map(s => updatedSales.get(s.id) || s)
+      : state.sales;
+
+    const customers = data?.customer
+      ? state.customers.map(c => (c.id === data.customer.id ? data.customer : c))
+      : state.customers;
+
+    return { payments, sales, customers };
+  };
+
+  // Unapplied credit a customer is holding: every payment row that names no
+  // invoice. An on-account receipt is positive, the leg that drains a credit
+  // application is negative, so the sum is what is left to spend. This is the
+  // second term of the balance formula in migration 025, computed the same way.
+  const creditHeld = (customerId) =>
+    visiblePayments
+      .filter(p => p.customerId === customerId && !p.saleId)
+      .reduce((sum, p) => sum + (p.amount || 0), 0);
+
+  // Did this payment row represent money actually moving?
+  //
+  // Applying held credit writes two rows that cancel — one onto the invoice, one
+  // draining the credit — because the cash itself arrived earlier and was
+  // counted then. Both legs are excluded from every cash figure, which cannot
+  // change any total precisely BECAUSE they cancel; it only stops one receipt
+  // being read as two collections. An on-account row is real money and stays in.
+  const isCashMovement = (p) => (p?.kind || 'invoice') !== 'credit_applied';
+
+  // KES to the cent. Allocation splits and remainders are compared for equality
+  // all over the lump-sum flow, and float residue there would either strand a
+  // few cents as phantom credit or fail the "fully allocated" test outright.
+  const toCents = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
   const loadDataFromSupabase = async (role) => {
     const isAdminOrManager = role === 'admin' || role === 'manager';
@@ -1543,11 +1603,17 @@ export default function NorthernWaterSystemApp() {
       }
     });
 
-    // Debt payments: payment records within the period
+    // Debt payments: payment records within the period.
+    //
+    // Credit applications are skipped — see isCashMovement. Their two legs sum
+    // to zero, so leaving them out cannot move this total; it only keeps one
+    // receipt from appearing twice in the list. An on-account row is money that
+    // genuinely arrived and is counted here on the day it did, even though it is
+    // not yet against an invoice.
     let debtPaymentsTotal = 0;
     const debtPaymentsList = [];
     state.payments.forEach(p => {
-      if (inPeriod(p.date)) {
+      if (inPeriod(p.date) && isCashMovement(p)) {
         debtPaymentsTotal += p.amount;
         const customer = state.customers.find(c => c.id === p.customerId);
         debtPaymentsList.push({
@@ -1555,7 +1621,8 @@ export default function NorthernWaterSystemApp() {
           customer: customer?.name || 'Unknown',
           method: p.method || '',
           reference: p.reference || '',
-          amount: p.amount
+          amount: p.amount,
+          onAccount: p.kind === 'on_account',
         });
       }
     });
@@ -2206,7 +2273,7 @@ export default function NorthernWaterSystemApp() {
       groupByDay(reportData.debtPaymentsList).forEach(g => {
         htmlContent += `<tr class="daytotal"><td>${g.date}</td><td colspan="2">${g.items.length} ${g.items.length === 1 ? 'payment' : 'payments'}</td><td>KES ${g.total.toLocaleString()}</td></tr>`;
         g.items.forEach(p => {
-          htmlContent += `<tr><td></td><td class="detail">${escapeHtml(p.customer)}</td><td>${escapeHtml(p.method)}</td><td>KES ${p.amount.toLocaleString()}</td></tr>`;
+          htmlContent += `<tr><td></td><td class="detail">${escapeHtml(p.customer)}${p.onAccount ? ' <em>(on account)</em>' : ''}</td><td>${escapeHtml(p.method)}</td><td>KES ${p.amount.toLocaleString()}</td></tr>`;
         });
       });
       htmlContent += `
@@ -2578,11 +2645,13 @@ export default function NorthernWaterSystemApp() {
   // against it, and what is still outstanding. Fully settled invoices are left
   // off entirely, so this is a "what you owe us" document, not a trading history.
   //
-  // Balance Due is the sum of the Outstanding column, which is by construction
-  // the same figure `recompute_customer_balance` derives for `customers.balance`
-  // (migration 017: balance = -sum(sales.total - sales.paid)). So the statement
-  // always reconciles with the balance shown in the UI and the Aging Debtors
-  // report — there is no separate calculation that could drift from it.
+  // Balance Due is the sum of the Outstanding column, less any payments the
+  // customer has made that are not yet against an invoice. That is by
+  // construction the same figure `recompute_customer_balance` derives for
+  // `customers.balance` (migration 017 for the first term, 025 for the second:
+  // balance = -sum(sales.total - sales.paid) + unapplied credit). So the
+  // statement always reconciles with the balance shown in the UI and the Aging
+  // Debtors report — there is no separate calculation that could drift from it.
   // Read-only — renders existing records, changes nothing.
   const downloadAccountStatementAsPDF = (customer) => {
     if (!customer) return;
@@ -2627,7 +2696,12 @@ export default function NorthernWaterSystemApp() {
     // nothing to any of the three figures.
     const totalCharged = entries.reduce((sum, e) => sum + e.charged, 0);
     const totalPaid = entries.reduce((sum, e) => sum + e.paid, 0);
-    const closing = totalCharged - totalPaid; // positive => customer owes
+    // Money received that is not against any invoice, so it appears nowhere in
+    // the rows above. Without this line the closing figure would overstate the
+    // debt of every customer holding credit, and stop matching customers.balance
+    // — the reconciliation this document's header promises. See migration 025.
+    const onAccount = toCents(creditHeld(customer.id));
+    const closing = toCents(totalCharged - totalPaid - onAccount); // positive => customer owes
 
     const htmlContent = `
       <!DOCTYPE html>
@@ -2714,11 +2788,13 @@ export default function NorthernWaterSystemApp() {
           <div class="totals">
             <div class="row"><span>Invoiced</span><span>KES ${fmt(totalCharged)}</span></div>
             <div class="row"><span>Paid</span><span>KES ${fmt(totalPaid)}</span></div>
+            ${onAccount > 0 ? `<div class="row"><span>Payments on account (not yet applied)</span><span>KES ${fmt(onAccount)}</span></div>` : ''}
             <div class="row grand"><span>${closing >= 0 ? 'Balance Due' : 'Credit Balance'}</span><span class="${closing > 0 ? 'owed' : closing < 0 ? 'credit' : ''}">KES ${fmt(Math.abs(closing))}</span></div>
           </div>
 
           <div class="footer">
             <p>This statement lists only invoices that are still unsettled as at the date shown above. Invoices paid in full are not shown. Totals cover the invoices listed.</p>
+            ${onAccount > 0 ? `<p>Payments on account are amounts you have paid that are not yet set against a particular invoice. They have been deducted from the balance due.</p>` : ''}
             <p>${COMPANY.name} • Generated by OASIS Springs Management System</p>
           </div>
         </div>
@@ -2893,9 +2969,24 @@ export default function NorthernWaterSystemApp() {
     }
 
     const linkedPayments = state.payments.filter(p => p.saleId === id);
+    // Credit applied to this invoice is two rows sharing a batch — the leg on the
+    // invoice and the leg that drained the customer's credit. Deleting the sale
+    // removes both (migration 025, section 8), which hands the credit back.
+    const creditBatches = new Set(
+      linkedPayments.filter(p => p.kind === 'credit_applied' && p.batch_id).map(p => p.batch_id)
+    );
+    const returnedCredit = toCents(
+      state.payments
+        .filter(p => p.batch_id && creditBatches.has(p.batch_id) && p.saleId === id)
+        .reduce((sum, p) => sum + (p.amount || 0), 0)
+    );
+
     let confirmMsg = `Delete sale ${sale.invoiceNumber}? This will return the stock to inventory`;
     if (sale.paid > 0 || linkedPayments.length > 0) {
       confirmMsg += ` and remove ${linkedPayments.length} linked payment(s)`;
+    }
+    if (returnedCredit > 0) {
+      confirmMsg += `, and KES ${returnedCredit.toLocaleString()} of applied credit goes back to the customer's account`;
     }
     confirmMsg += '. This cannot be undone.';
     if (!confirm(confirmMsg)) return;
@@ -2913,7 +3004,12 @@ export default function NorthernWaterSystemApp() {
     setState({
       ...state,
       sales: state.sales.filter(s => s.id !== id),
-      payments: state.payments.filter(p => p.saleId !== id),
+      // Both the rows naming this sale AND the other leg of any credit applied
+      // to it, which names no sale and so would otherwise survive here and show
+      // as credit the customer no longer holds.
+      payments: state.payments.filter(p =>
+        p.saleId !== id && !(p.batch_id && creditBatches.has(p.batch_id))
+      ),
       ...applyRpcRows(data),
     });
     console.log('✅ Sale deleted and reversed in Supabase');
@@ -3080,6 +3176,21 @@ export default function NorthernWaterSystemApp() {
         (c.location || '').toLowerCase().includes(q) ||
         (c.phone || '').includes(q)
       )
+    );
+  };
+
+  // Who a lump sum can be received from. visibleCustomers for the same reason
+  // saleCustomerOptions uses it — offering a name the caller may not write to
+  // produces an RLS refusal at save time instead of the name simply not being
+  // on the list. Consignees are included here, unlike for sales: they do settle
+  // their accounts, they just are not invoiced through the sale modal.
+  const paymentCustomerOptions = () => {
+    const q = paymentCustomerSearch.toLowerCase();
+    return visibleCustomers.filter(c =>
+      !q ||
+      c.name.toLowerCase().includes(q) ||
+      (c.location || '').toLowerCase().includes(q) ||
+      (c.phone || '').includes(q)
     );
   };
 
@@ -3386,6 +3497,74 @@ export default function NorthernWaterSystemApp() {
     }
   };
 
+  // Both payment modes share this. `clientKey`, `batchId` and `creditClientKey`
+  // are generated once when the form opens and kept for as long as it stays
+  // open — that is what makes a retry after a timeout safe (migration 021). The
+  // per-invoice keys live on the allocation rows and are carried across
+  // re-allocations for the same reason.
+  const newPaymentForm = (overrides = {}) => ({
+    mode: 'single',
+    saleId: '',
+    customerId: '',
+    amount: 0,
+    method: 'cash',
+    reference: '',
+    date: localDateString(),
+    clientKey: newClientKey(),
+    batchId: newClientKey(),
+    creditClientKey: newClientKey(),
+    allocations: [],
+    ...overrides,
+  });
+
+  // A customer's unsettled invoices, oldest first. This is both the allocation
+  // order and the display order, so what the clerk sees is what happens.
+  const outstandingInvoices = (customerId) =>
+    visibleSales
+      .filter(s => s.customerId === parseInt(customerId) && toCents(s.total - s.paid) > 0)
+      .sort((a, b) =>
+        (a.date < b.date ? -1 : a.date > b.date ? 1 : (a.id || 0) - (b.id || 0)));
+
+  // Fill each invoice in full before moving to the next. Every line stays
+  // editable afterwards — this is a starting point, not a rule. Keys are reused
+  // from the previous allocation so that changing the amount does not invalidate
+  // an idempotency key the database may already have seen.
+  const allocateFifo = (customerId, amount, previous = []) => {
+    let left = toCents(amount);
+    return outstandingInvoices(customerId).map(s => {
+      const due = toCents(s.total - s.paid);
+      const take = Math.min(due, Math.max(0, left));
+      left = toCents(left - take);
+      return {
+        saleId: s.id,
+        amount: take,
+        clientKey: previous.find(a => a.saleId === s.id)?.clientKey || newClientKey(),
+      };
+    });
+  };
+
+  // Re-run the split whenever the customer or the amount changes.
+  const setBulkAmount = (amount, customerId = formData.customerId) =>
+    setFormData(prev => ({
+      ...prev,
+      customerId,
+      amount,
+      allocations: allocateFifo(customerId, amount, prev.allocations || []),
+    }));
+
+  // Override one line of the split by hand. The key is created once per invoice
+  // and kept, so editing an amount does not change the request's identity.
+  const setAllocation = (saleId, amount) =>
+    setFormData(prev => {
+      const rows = prev.allocations || [];
+      return {
+        ...prev,
+        allocations: rows.some(a => a.saleId === saleId)
+          ? rows.map(a => (a.saleId === saleId ? { ...a, amount } : a))
+          : [...rows, { saleId, amount, clientKey: newClientKey() }],
+      };
+    });
+
   // Add Payment
   const handleAddPayment = () => {
     const pendingSales = state.sales.filter(s => s.paid < s.total);
@@ -3395,7 +3574,8 @@ export default function NorthernWaterSystemApp() {
     }
     setModalType('payment');
     setPaymentSaleSearch('');
-    setFormData({ saleId: '', amount: 0, method: 'cash', reference: '', date: localDateString(), clientKey: newClientKey() });
+    setPaymentCustomerSearch('');
+    setFormData(newPaymentForm());
     setShowModal(true);
   };
 
@@ -3409,31 +3589,122 @@ export default function NorthernWaterSystemApp() {
     setCustomerDetail(null);
   };
 
-  // Same idea for payments. The modal's sale picker filters by customer name,
-  // so seeding the search box scopes the list to this customer's unpaid
-  // invoices; when there is exactly one, it is preselected with its full
-  // balance, which is the common case from a card.
+  // Same idea for payments, but the mode depends on what they owe.
+  //
+  // One unpaid invoice is the common case from a card, so it opens in single
+  // mode with that invoice and its full balance preselected. Several invoices —
+  // or none at all, which is a customer paying ahead — opens in lump-sum mode,
+  // where one amount is split across everything outstanding and anything left
+  // over is held as credit.
   const handleAddPaymentForCustomer = (customer) => {
     const pending = visibleSales.filter(s => s.customerId === customer.id && s.paid < s.total);
-    if (pending.length === 0) {
-      alert(`${customer.name} has no unpaid invoices.`);
-      return;
-    }
     setModalType('payment');
     setPaymentSaleSearch(customer.name);
-    setFormData({
-      saleId: pending.length === 1 ? String(pending[0].id) : '',
-      amount: pending.length === 1 ? pending[0].total - pending[0].paid : 0,
-      method: 'cash',
-      reference: '',
-      date: localDateString(),
-      clientKey: newClientKey(),
-    });
+    setPaymentCustomerSearch(customer.name);
+    if (pending.length === 1) {
+      setFormData(newPaymentForm({
+        customerId: customer.id,
+        saleId: String(pending[0].id),
+        amount: toCents(pending[0].total - pending[0].paid),
+      }));
+    } else {
+      setFormData(newPaymentForm({ mode: 'bulk', customerId: customer.id }));
+    }
     setCustomerDetail(null);
     setShowModal(true);
   };
 
+  // Lump sum — one receipt against several invoices, with any remainder held as
+  // credit. One RPC call is one transaction, which is the whole reason this is
+  // not a loop over handleSavePayment: four invoices entered one at a time is
+  // four chances for the third to land and the fourth not to, leaving the books
+  // saying a customer still owes money they have already handed over.
+  // See migrations 024 and 025.
+  const handleSaveBulkPayment = async () => {
+    const customerId = parseInt(formData.customerId);
+    const customer = state.customers.find(c => c.id === customerId);
+    if (!customer) {
+      alert('Please select a customer');
+      return;
+    }
+
+    const received = toCents(formData.amount);
+    if (received <= 0) {
+      alert('Enter the amount received');
+      return;
+    }
+
+    const allocations = (formData.allocations || [])
+      .map(a => ({ ...a, amount: toCents(a.amount) }))
+      .filter(a => a.amount > 0);
+
+    // Every allocation is checked again server-side against the CURRENT invoice,
+    // so this is the friendly message rather than the guarantee.
+    const overAllocated = allocations.find(a => {
+      const sale = state.sales.find(s => s.id === a.saleId);
+      return sale && a.amount > toCents(sale.total - sale.paid);
+    });
+    if (overAllocated) {
+      const sale = state.sales.find(s => s.id === overAllocated.saleId);
+      alert(`KES ${overAllocated.amount.toLocaleString()} is more than the KES ${toCents(sale.total - sale.paid).toLocaleString()} still outstanding on invoice ${sale.invoiceNumber || sale.id}.`);
+      return;
+    }
+
+    const allocated = toCents(allocations.reduce((sum, a) => sum + a.amount, 0));
+    const credit = toCents(received - allocated);
+
+    if (credit < 0) {
+      alert(`This receipt allocates KES ${allocated.toLocaleString()} but only KES ${received.toLocaleString()} was received. Reduce the allocations.`);
+      return;
+    }
+
+    // Money never becomes a credit balance by accident — the clerk says so.
+    if (credit > 0 && !confirm(
+      `KES ${credit.toLocaleString()} of this payment is more than ${customer.name} currently owes.\n\n` +
+      `It will be held as credit on their account, and can be applied to a future invoice from their customer card.\n\n` +
+      `Record the payment?`
+    )) return;
+
+    const { data, error } = await withTimeout(supabase.rpc('record_bulk_payment', {
+      p_batch: {
+        customerId,
+        date: formData.date,
+        method: formData.method,
+        reference: formData.reference,
+        batch_id: formData.batchId,
+        credit,
+        credit_client_key: formData.creditClientKey,
+        allocations: allocations.map(a => ({
+          saleId: a.saleId,
+          amount: a.amount,
+          client_key: a.clientKey,
+        })),
+      },
+    }));
+
+    if (error || !data?.payments?.length) {
+      console.error('❌ Error recording lump-sum payment:', error);
+      alert(saveFailureMessage(
+        error,
+        'Could not save this receipt — nothing was recorded. Every invoice and every balance is exactly as it was. Please try again.',
+        "the customer's payment history",
+        true
+      ));
+      return; // leave the modal open with the entry intact
+    }
+
+    setState({ ...state, ...applyBatchRows(data) });
+
+    if (data.replayed) {
+      alert(`This receipt of KES ${received.toLocaleString()} was already recorded. It has not been saved twice.`);
+    }
+
+    setShowModal(false);
+  };
+
   const handleSavePayment = async () => {
+    if (formData.mode === 'bulk') return handleSaveBulkPayment();
+
     if (!formData.saleId || formData.amount <= 0) {
       alert('Please select sale and enter amount');
       return;
@@ -3494,9 +3765,132 @@ export default function NorthernWaterSystemApp() {
   // Delete Payment — reverses a mistakenly-entered payment.
   // Mirrors handleSavePayment in reverse: rolls back the sale's paid/status
   // and the customer's balance, then removes the payment record.
+  // Apply held credit to one invoice.
+  //
+  // Two rows in one transaction: the invoice is settled, and the credit pool is
+  // drained by the same amount. The customer's balance therefore does not move —
+  // this money was already counted when it came in, and applying it only decides
+  // which invoice it sits against. Cash Collected does not move either, because
+  // the two legs cancel.
+  //
+  // Never automatic. Recording a sale for a customer in credit does not spend it;
+  // the clerk presses this. See migration 025.
+  const handleApplyCredit = async (customer, sale) => {
+    const held = toCents(creditHeld(customer.id));
+    const due = toCents(sale.total - sale.paid);
+    const amount = Math.min(held, due);
+    if (amount <= 0) return;
+
+    if (!confirm(
+      `Apply KES ${amount.toLocaleString()} of ${customer.name}'s credit to invoice ${sale.invoiceNumber || sale.id}?\n\n` +
+      (amount >= due
+        ? 'This settles the invoice in full.'
+        : `This settles KES ${amount.toLocaleString()} of the KES ${due.toLocaleString()} outstanding.`) +
+      `\n\nThe money was already received, so what ${customer.name} owes does not change and no new cash is recorded.`
+    )) return;
+
+    const cacheKey = `${customer.id}:${sale.id}`;
+    const keys = creditApplyKeys[cacheKey] || {
+      batch_id: newClientKey(),
+      client_key_invoice: newClientKey(),
+      client_key_credit: newClientKey(),
+    };
+    if (!creditApplyKeys[cacheKey]) {
+      setCreditApplyKeys(prev => ({ ...prev, [cacheKey]: keys }));
+    }
+
+    setApplyingCredit(cacheKey);
+    let data, error;
+    try {
+      ({ data, error } = await withTimeout(supabase.rpc('apply_credit', {
+        p_apply: {
+          customerId: customer.id,
+          saleId: sale.id,
+          amount,
+          date: localDateString(),
+          ...keys,
+        },
+      })));
+    } finally {
+      setApplyingCredit('');
+    }
+
+    if (error || !data?.payments?.length) {
+      console.error('❌ Error applying credit:', error);
+      alert(saveFailureMessage(
+        error,
+        'Could not apply this credit — nothing was changed. The invoice and the credit are both exactly as they were.',
+        "the customer's payment history",
+        true
+      ));
+      return;
+    }
+
+    setCreditApplyKeys(prev => {
+      const next = { ...prev };
+      delete next[cacheKey];
+      return next;
+    });
+    setState({ ...state, ...applyBatchRows(data) });
+  };
+
+  // Reverse a whole receipt — every allocation, any credit it held, and both
+  // legs of a credit application. One transaction, so the receipt cannot come
+  // apart halfway.
+  //
+  // A batched payment is never deleted one row at a time, even where the
+  // database would allow it. Half a lump sum is not a state anyone asked for,
+  // and half a credit application is one the books cannot represent at all
+  // (migration 025, section 7). Correcting a receipt means reversing it and
+  // re-entering it, which is how every other immutable money record in this app
+  // is corrected.
+  const handleDeletePaymentBatch = async (batchId) => {
+    const rows = state.payments.filter(p => p.batch_id === batchId);
+    if (rows.length === 0) return;
+
+    const customer = state.customers.find(c => c.id === rows[0].customerId);
+    const isCreditApplication = rows.some(p => p.kind === 'credit_applied');
+    const cash = toCents(rows.reduce((sum, p) => sum + (p.amount || 0), 0));
+
+    const confirmMsg = isCreditApplication
+      ? `Reverse this credit application${customer ? ` for ${customer.name}` : ''}?\n\n` +
+        `The invoice goes back to unpaid and the KES ${toCents(rows.find(p => p.saleId)?.amount || 0).toLocaleString()} returns to their credit. ` +
+        `What they owe overall does not change. This cannot be undone.`
+      : `Delete this receipt of KES ${cash.toLocaleString()}${customer ? ` from ${customer.name}` : ''}?\n\n` +
+        `All ${rows.length} line${rows.length === 1 ? '' : 's'} are reversed together: every invoice it settled goes back to outstanding` +
+        `${rows.some(p => p.kind === 'on_account') ? ', and any amount held as credit is removed' : ''}. ` +
+        `Cash collected drops by KES ${cash.toLocaleString()}. This cannot be undone.`;
+
+    if (!confirm(confirmMsg)) return;
+
+    const { data, error } = await withTimeout(
+      supabase.rpc('delete_payment_batch', { p_batch_id: batchId })
+    );
+    if (error) {
+      console.error('❌ Error deleting receipt:', error);
+      alert('Could not delete this receipt — nothing was changed. Every payment, invoice and balance is exactly as it was.\n\n' + (error.message || 'Unknown error'));
+      return;
+    }
+
+    const removed = new Set(rows.map(p => p.id));
+    const updatedSales = new Map((data?.sales || []).map(s => [s.id, s]));
+    const updatedCustomers = new Map((data?.customers || []).map(c => [c.id, c]));
+
+    setState({
+      ...state,
+      payments: state.payments.filter(p => !removed.has(p.id)),
+      sales: state.sales.map(s => updatedSales.get(s.id) || s),
+      customers: state.customers.map(c => updatedCustomers.get(c.id) || c),
+    });
+    console.log('✅ Receipt deleted and reversed in Supabase');
+  };
+
   const handleDeletePayment = async (id) => {
     const payment = state.payments.find(p => p.id === id);
     if (!payment) return;
+
+    // Part of a receipt — reverse the whole thing, never one line of it.
+    if (payment.batch_id) return handleDeletePaymentBatch(payment.batch_id);
 
     const customer = state.customers.find(c => c.id === payment.customerId);
     const sale = state.sales.find(s => s.id === payment.saleId);
@@ -4768,7 +5162,10 @@ export default function NorthernWaterSystemApp() {
                             </button>
                             {open && g.items.map((p, i) => (
                               <div key={i} className="flex justify-between text-xs py-1 pl-5 border-t border-slate-100">
-                                <span className="text-slate-500">{p.customer}{p.method ? ` · ${p.method}` : ''}</span>
+                                <span className="text-slate-500">
+                                  {p.customer}{p.method ? ` · ${p.method}` : ''}
+                                  {p.onAccount && <span className="text-emerald-600"> · on account</span>}
+                                </span>
                                 <span className="text-sky-600">KES {p.amount.toLocaleString()}</span>
                               </div>
                             ))}
@@ -5459,7 +5856,7 @@ export default function NorthernWaterSystemApp() {
               />
               <StatCard
                 label="Received This Month"
-                value={`KES ${visiblePayments.filter(p => (p.date || '').slice(0, 7) === localMonthPrefix()).reduce((sum, p) => sum + p.amount, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                value={`KES ${visiblePayments.filter(isCashMovement).filter(p => (p.date || '').slice(0, 7) === localMonthPrefix()).reduce((sum, p) => sum + p.amount, 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                 icon={DollarSign}
                 accent="sky"
                 sub="debt payments this month"
@@ -5631,6 +6028,9 @@ export default function NorthernWaterSystemApp() {
                   if (!paymentsFilterDate) return null;
                   const dayList = visiblePayments
                     .filter(p => p.date === paymentsFilterDate)
+                    // Credit applications are not collections — see isCashMovement.
+                    // They are shown on the customer's card, where they belong.
+                    .filter(isCashMovement)
                     .filter(p => {
                       if (!paymentsSearch) return true;
                       const c = state.customers.find(c => c.id === p.customerId);
@@ -5648,6 +6048,7 @@ export default function NorthernWaterSystemApp() {
                   {(() => {
                     const list = visiblePayments
                       .filter(p => !paymentsFilterDate || p.date === paymentsFilterDate)
+                      .filter(isCashMovement)
                       .filter(p => {
                         if (!paymentsSearch) return true;
                         const c = state.customers.find(c => c.id === p.customerId);
@@ -5672,8 +6073,15 @@ export default function NorthernWaterSystemApp() {
                             <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">{payment.method}</span>
                             {sale ? (
                               <button onClick={() => setInvoiceDetail(sale)} className="bg-sky-50 text-sky-700 underline px-2 py-1 rounded hover:bg-sky-100 transition">{sale.invoiceNumber}</button>
+                            ) : payment.kind === 'on_account' ? (
+                              <span className="bg-emerald-50 text-emerald-700 px-2 py-1 rounded" title="Received but not yet applied to an invoice">Held as credit</span>
                             ) : (
                               <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">N/A</span>
+                            )}
+                            {/* One receipt settling several invoices shows as one
+                                line per invoice; this is what ties them together. */}
+                            {payment.batch_id && (
+                              <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">Part of a receipt</span>
                             )}
                             {payment.reference && <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded">Ref: {payment.reference}</span>}
                             {/* RLS only permits admin to delete payments. */}
@@ -6477,7 +6885,11 @@ export default function NorthernWaterSystemApp() {
                       <div className="divide-y divide-slate-100">
                         {linkedPayments.map(p => (
                           <div key={p.id} className="flex justify-between items-center py-2 text-sm">
-                            <span className="text-slate-400 text-xs">{p.date} · {p.method}</span>
+                            {/* A credit application carries no method — no money
+                                moved on this date, it was received earlier. */}
+                            <span className="text-slate-400 text-xs">
+                              {p.date}{p.kind === 'credit_applied' ? ' · from credit held' : p.method ? ` · ${p.method}` : ''}
+                            </span>
                             <span className="text-emerald-600 font-medium">KES {p.amount.toLocaleString()}</span>
                           </div>
                         ))}
@@ -6502,6 +6914,8 @@ export default function NorthernWaterSystemApp() {
           const fmt = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
           const initials = (customer.name || '?').split(' ').filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase();
           const owed = Math.max(0, -(customer.balance || 0));
+          // Money received from this customer that is not yet against an invoice.
+          const held = toCents(creditHeld(customer.id));
 
           // visibleSales / visiblePayments, never state.*: the card must not
           // show a sales user records their own tabs would hide from them.
@@ -6535,10 +6949,34 @@ export default function NorthernWaterSystemApp() {
             }
           });
           payments.forEach(p => {
+            // The leg of a credit application that drains the pool. Its twin,
+            // below, carries the whole event as one line, so this one is not
+            // shown — rendering both would put a payment and an equal negative
+            // payment side by side for something that moved no money.
+            if (p.kind === 'credit_applied' && !p.saleId) return;
+
+            // The other leg. Credit 0, deliberately: the money was credited to
+            // this customer when it arrived as an on-account payment, and
+            // applying it only decides which invoice it sits against. Giving it
+            // a credit here would count the same money twice, and the running
+            // balance would drift away from customers.balance.
+            if (p.kind === 'credit_applied') {
+              const target = sales.find(s => s.id === p.saleId);
+              ledger.push({
+                date: p.date, order: 1,
+                ref: target?.invoiceNumber || `Sale #${p.saleId}`,
+                desc: `Credit applied · KES ${fmt(p.amount)}`,
+                debit: 0, credit: 0, memo: true, batchId: p.batch_id,
+              });
+              return;
+            }
+
             ledger.push({
               date: p.date, order: 1,
               ref: p.reference || p.invoiceNumber || '',
-              desc: `Payment${p.method ? ' · ' + String(p.method).replace(/_/g, ' ') : ''}`,
+              desc: p.kind === 'on_account'
+                ? `Payment on account${p.method ? ' · ' + String(p.method).replace(/_/g, ' ') : ''}`
+                : `Payment${p.method ? ' · ' + String(p.method).replace(/_/g, ' ') : ''}`,
               debit: 0, credit: p.amount || 0,
             });
           });
@@ -6598,6 +7036,20 @@ export default function NorthernWaterSystemApp() {
                       {owed > 0 ? '' : (customer.balance || 0) > 0 ? ' in credit' : ''}
                     </span>
                   </div>
+
+                  {/* Held credit is shown separately from the balance, not folded
+                      into it. The balance already nets it off against what they
+                      owe, so a customer can be holding credit AND owing money at
+                      the same time — this is the figure that can be applied. */}
+                  {held > 0 && (
+                    <div className="mt-2 flex items-baseline justify-between bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                      <span className="text-emerald-700 text-xs">
+                        Unapplied credit
+                        <span className="text-emerald-600/70"> · paid but not yet against an invoice</span>
+                      </span>
+                      <span className="text-emerald-700 text-lg font-bold">KES {fmt(held)}</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Actions */}
@@ -6673,24 +7125,39 @@ export default function NorthernWaterSystemApp() {
                           const label = outstanding <= 0 ? 'Paid' : (s.paid || 0) > 0 ? 'Part paid' : 'Unpaid';
                           const colour = outstanding <= 0 ? 'emerald' : (s.paid || 0) > 0 ? 'amber' : 'rose';
                           return (
-                            <button
-                              key={s.id}
-                              onClick={() => { setCustomerDetail(null); setInvoiceDetail(s); }}
-                              className="w-full text-left px-3 py-2.5 hover:bg-slate-50 transition flex items-center justify-between gap-3"
-                            >
-                              <div className="min-w-0">
-                                <p className="text-slate-900 text-sm font-medium truncate">{s.invoiceNumber || `Sale #${s.id}`}</p>
-                                <p className="text-slate-400 text-xs">{s.date}</p>
-                              </div>
-                              <div className="flex items-center gap-3 flex-shrink-0">
-                                <div className="text-right">
-                                  <p className="text-slate-900 text-sm font-semibold">KES {fmt(s.total)}</p>
-                                  {outstanding > 0 && <p className="text-rose-600 text-xs">KES {fmt(outstanding)} owing</p>}
+                            <div key={s.id} className="flex items-center">
+                              <button
+                                onClick={() => { setCustomerDetail(null); setInvoiceDetail(s); }}
+                                className="flex-1 min-w-0 text-left px-3 py-2.5 hover:bg-slate-50 transition flex items-center justify-between gap-3"
+                              >
+                                <div className="min-w-0">
+                                  <p className="text-slate-900 text-sm font-medium truncate">{s.invoiceNumber || `Sale #${s.id}`}</p>
+                                  <p className="text-slate-400 text-xs">{s.date}</p>
                                 </div>
-                                <Badge color={colour}>{label}</Badge>
-                                <ChevronRight className="w-4 h-4 text-slate-300" />
-                              </div>
-                            </button>
+                                <div className="flex items-center gap-3 flex-shrink-0">
+                                  <div className="text-right">
+                                    <p className="text-slate-900 text-sm font-semibold">KES {fmt(s.total)}</p>
+                                    {outstanding > 0 && <p className="text-rose-600 text-xs">KES {fmt(outstanding)} owing</p>}
+                                  </div>
+                                  <Badge color={colour}>{label}</Badge>
+                                  <ChevronRight className="w-4 h-4 text-slate-300" />
+                                </div>
+                              </button>
+                              {/* Held credit is never applied automatically —
+                                  recording a sale does not spend it. This is the
+                                  prompt, and it is a separate button because the
+                                  row itself opens the invoice. */}
+                              {held > 0 && outstanding > 0 && (
+                                <button
+                                  onClick={() => handleApplyCredit(customer, s)}
+                                  disabled={applyingCredit === `${customer.id}:${s.id}`}
+                                  title={`Settle this invoice using KES ${fmt(Math.min(held, outstanding))} of the credit ${customer.name} is holding`}
+                                  className="flex-shrink-0 mr-2 px-2 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded hover:bg-emerald-100 transition disabled:opacity-50"
+                                >
+                                  Apply credit
+                                </button>
+                              )}
+                            </div>
                           );
                         })}
                       </div>
@@ -6718,10 +7185,30 @@ export default function NorthernWaterSystemApp() {
                               {ledger.map((e, i) => {
                                 runningBalance += e.debit - e.credit;
                                 return (
-                                  <tr key={i} className="border-t border-slate-100">
+                                  <tr key={i} className={`border-t border-slate-100 ${e.memo ? 'bg-emerald-50/40' : ''}`}>
                                     <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{e.date || '—'}</td>
                                     <td className="px-3 py-2 text-slate-600">{e.ref || '—'}</td>
-                                    <td className="px-3 py-2 text-slate-600">{e.desc}</td>
+                                    <td className="px-3 py-2 text-slate-600">
+                                      {e.desc}
+                                      {/* A credit application moved no money, so it
+                                          carries no charge and no payment — say so,
+                                          rather than leaving two dashes to explain
+                                          themselves. Only admin may reverse it, and
+                                          only as a whole (migration 025, section 7). */}
+                                      {e.memo && (
+                                        <>
+                                          <span className="text-emerald-700/70"> · already-received money, balance unchanged</span>
+                                          {role === 'admin' && e.batchId && (
+                                            <button
+                                              onClick={() => handleDeletePaymentBatch(e.batchId)}
+                                              className="ml-2 text-rose-600 hover:text-rose-700 underline"
+                                            >
+                                              reverse
+                                            </button>
+                                          )}
+                                        </>
+                                      )}
+                                    </td>
                                     <td className="px-3 py-2 text-right text-slate-900">{e.debit ? fmt(e.debit) : '—'}</td>
                                     <td className="px-3 py-2 text-right text-emerald-600">{e.credit ? fmt(e.credit) : '—'}</td>
                                     <td className="px-3 py-2 text-right font-semibold text-slate-900">{fmt(runningBalance)}</td>
@@ -6732,7 +7219,8 @@ export default function NorthernWaterSystemApp() {
                           </table>
                         </div>
                         <p className="text-slate-400 text-xs mt-2">
-                          Every invoice and payment on this account, oldest first. The closing balance is what the customer owes today.
+                          Every invoice and payment on this account, oldest first. The closing balance is what the customer owes today
+                          {held > 0 && `, after netting off the KES ${fmt(held)} they are holding in credit`}.
                         </p>
                       </>
                     )
@@ -7361,6 +7849,41 @@ export default function NorthernWaterSystemApp() {
               {/* Payment Modal */}
               {modalType === 'payment' && (
                 <>
+                  {/* Two modes, one modal. Single is the original flow and is
+                      untouched; lump sum takes one amount for one customer and
+                      splits it across everything they owe. */}
+                  <div className="flex gap-2 p-1 bg-slate-100 rounded-lg">
+                    {[
+                      { key: 'single', label: 'One invoice' },
+                      { key: 'bulk', label: 'Lump sum' },
+                    ].map(({ key, label }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setFormData(prev => ({
+                          ...prev,
+                          mode: key,
+                          // Re-split on entering lump-sum mode so the table is
+                          // never stale against the amount already typed.
+                          ...(key === 'bulk'
+                            ? { allocations: allocateFifo(prev.customerId, prev.amount, prev.allocations || []) }
+                            : {}),
+                        }))}
+                        className={`flex-1 px-3 py-1.5 text-sm font-medium rounded-md transition ${
+                          (formData.mode || 'single') === key
+                            ? 'bg-white text-slate-900 shadow-sm'
+                            : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {modalType === 'payment' && formData.mode !== 'bulk' && (
+                <>
                   <div>
                     <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Sale</label>
                     <input
@@ -7460,6 +7983,173 @@ export default function NorthernWaterSystemApp() {
                   )}
                 </>
               )}
+
+              {/* Lump-sum Payment — one receipt, several invoices */}
+              {modalType === 'payment' && formData.mode === 'bulk' && (() => {
+                const customer = state.customers.find(c => c.id === parseInt(formData.customerId));
+                const invoices = customer ? outstandingInvoices(customer.id) : [];
+                const amountOf = (saleId) =>
+                  (formData.allocations || []).find(a => a.saleId === saleId)?.amount || 0;
+                const received = toCents(formData.amount);
+                const allocated = toCents(invoices.reduce((sum, s) => sum + toCents(amountOf(s.id)), 0));
+                const remainder = toCents(received - allocated);
+                const owedTotal = toCents(invoices.reduce((sum, s) => sum + toCents(s.total - s.paid), 0));
+
+                return (
+                  <>
+                    <div>
+                      <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Customer</label>
+                      <input
+                        type="text"
+                        value={paymentCustomerSearch}
+                        onChange={(e) => setPaymentCustomerSearch(e.target.value)}
+                        placeholder="Search customer by name, location, or phone..."
+                        className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm placeholder-slate-400 mb-2"
+                      />
+                      <div className="max-h-40 overflow-y-auto border border-slate-300 rounded-lg divide-y divide-slate-100">
+                        {paymentCustomerOptions().map(c => {
+                          const selected = parseInt(formData.customerId) === c.id;
+                          const owes = Math.max(0, -(c.balance || 0));
+                          return (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => setBulkAmount(formData.amount, c.id)}
+                              className={`w-full text-left px-3 py-2 text-sm transition flex justify-between items-center ${
+                                selected ? 'bg-sky-500/20 text-slate-900' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span>{c.name} <span className="text-xs text-slate-400">{c.location}</span></span>
+                              {owes > 0 && <span className="text-xs font-semibold text-rose-600">KES {owes.toLocaleString()}</span>}
+                            </button>
+                          );
+                        })}
+                        {paymentCustomerOptions().length === 0 && (
+                          <p className="text-slate-500 text-sm text-center py-3">No matching customers</p>
+                        )}
+                      </div>
+                    </div>
+
+                    {customer && (
+                      <>
+                        <div>
+                          <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Amount received</label>
+                          <input
+                            type="number"
+                            value={formData.amount || 0}
+                            onChange={(e) => setBulkAmount(Number(e.target.value) || 0)}
+                            className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                          />
+                          <p className="text-slate-400 text-xs mt-1">
+                            {customer.name} currently owes KES {owedTotal.toLocaleString()} across {invoices.length} invoice{invoices.length === 1 ? '' : 's'}.
+                          </p>
+                        </div>
+
+                        <div className="bg-slate-50 rounded-lg p-3 md:p-4 border border-slate-100">
+                          <div className="flex justify-between items-center mb-3">
+                            <h4 className="text-slate-900 font-semibold text-sm">How it is split</h4>
+                            {invoices.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setBulkAmount(formData.amount)}
+                                className="text-xs text-sky-600 hover:text-sky-700 underline"
+                              >
+                                Reset to oldest first
+                              </button>
+                            )}
+                          </div>
+
+                          {invoices.length === 0 ? (
+                            <p className="text-slate-500 text-xs py-2">
+                              No outstanding invoices. The whole amount will be held as credit against their next one.
+                            </p>
+                          ) : (
+                            <div className="space-y-2">
+                              {invoices.map(s => {
+                                const due = toCents(s.total - s.paid);
+                                const value = toCents(amountOf(s.id));
+                                return (
+                                  <div key={s.id} className="flex items-center gap-2">
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-slate-900 text-xs font-medium truncate">{s.invoiceNumber || `Sale #${s.id}`}</p>
+                                      <p className="text-slate-400 text-[11px]">{s.date} · KES {due.toLocaleString()} owing</p>
+                                    </div>
+                                    <input
+                                      type="number"
+                                      value={value || 0}
+                                      onChange={(e) => setAllocation(s.id, Number(e.target.value) || 0)}
+                                      className={`w-28 bg-white border rounded px-2 py-1 text-sm text-right ${
+                                        value > due ? 'border-rose-400 text-rose-600' : 'border-slate-300 text-slate-900'
+                                      }`}
+                                    />
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+
+                          <div className="mt-3 pt-3 border-t border-slate-200 space-y-1 text-xs">
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Allocated to invoices</span>
+                              <span className="text-slate-900 font-semibold">KES {allocated.toLocaleString()}</span>
+                            </div>
+                            {/* The remainder is never parked silently — it is on
+                                screen before saving, and confirmed again on save. */}
+                            {remainder > 0 && (
+                              <div className="flex justify-between">
+                                <span className="text-emerald-700">Held as credit for the next invoice</span>
+                                <span className="text-emerald-700 font-semibold">KES {remainder.toLocaleString()}</span>
+                              </div>
+                            )}
+                            {remainder < 0 && (
+                              <div className="flex justify-between">
+                                <span className="text-rose-600">Over-allocated — reduce the split</span>
+                                <span className="text-rose-600 font-semibold">KES {Math.abs(remainder).toLocaleString()}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Method</label>
+                          <select
+                            value={formData.method || 'cash'}
+                            onChange={(e) => setFormData({ ...formData, method: e.target.value })}
+                            className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                          >
+                            <option value="cash">Cash</option>
+                            <option value="bank_transfer">Bank Transfer</option>
+                            <option value="cheque">Cheque</option>
+                            <option value="mpesa">M-Pesa</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Reference</label>
+                          <input
+                            type="text"
+                            value={formData.reference || ''}
+                            onChange={(e) => setFormData({ ...formData, reference: e.target.value })}
+                            className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                            placeholder="TRF-123"
+                          />
+                          <p className="text-slate-400 text-xs mt-1">Entered once and copied onto every line of this receipt.</p>
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Date</label>
+                          <input
+                            type="date"
+                            value={formData.date || ''}
+                            onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                            className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                          />
+                        </div>
+                      </>
+                    )}
+                  </>
+                );
+              })()}
 
               {/* Production Modal */}
               {modalType === 'production' && (

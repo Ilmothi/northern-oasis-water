@@ -124,11 +124,33 @@ baseline by default.
 | File | What it does |
 |------|--------------|
 | `018_settle_customer_balances.sql` | Corrects the five customer balances that disagree with their sales ledger. **Debtors and Aging Debtors rise by KES 5,450 on apply.** Requires `017` |
+| `024_lump_sum_payments.sql` | `payments.batch_id` + `record_bulk_payment` / `delete_payment_batch`, so one receipt can settle several invoices in a single transaction. Every payment row still names a `saleId`, so nothing downstream changes shape |
+| `025_on_account_credit.sql` | Overpayment becomes held credit. Adds `payments.kind`, makes `payments."saleId"` nullable, and **extends the balance formula** to `-sum(sales.total - sales.paid) + unapplied credit`. Adds `apply_credit`; guards `delete_payment` and `delete_sale` against stranding half a credit application. Requires `024` |
 
-`018` is now the only file left in this section, and it is a data correction
-rather than a schema or policy change — nothing else waits on it. `019`, `020`
-and `021` moved to the applied table on 2026-08-04; `022` and `023` on
-2026-08-14.
+`018` is a data correction rather than a schema or policy change — nothing else
+waits on it. `019`, `020` and `021` moved to the applied table on 2026-08-04;
+`022` and `023` on 2026-08-14.
+
+`024` and `025` are the lump-sum payment work (branch `lump-sum-payments`).
+**Both must be applied before that client merges** — `main` auto-deploys, and
+the client calls `record_bulk_payment` and `apply_credit`, so merging first
+breaks payment saving outright. This is the `015`/`016` ordering, not `017`'s.
+
+`024` is shippable on its own if `025` needs more review: lump sums that settle
+exactly work, and overpayment keeps failing exactly as it does today.
+
+`025` changes a formula rather than adding a function, which puts it in the same
+class as `017` and deserves the same care. Two things before applying it:
+
+- Run the **read-only pre-flight query at the head of the file**. Its shape
+  constraint is added `NOT VALID` so the apply cannot fail on historical rows,
+  and it should only be validated afterwards if no existing payment row has a
+  null `saleId`, a null `customerId`, or a non-positive amount.
+- Run **check 4 in its verification block**, which proves no customer's balance
+  moved as a result of the formula change. Nobody holds credit at apply time, so
+  the new term is zero for everyone and every balance must be unchanged. Keep
+  that query — once credit is in use it stops being an equality and becomes the
+  reconciliation between `customers.balance` and the credit pool.
 
 ### 017 aftermath — two live defects, and what they have in common
 
