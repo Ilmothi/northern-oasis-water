@@ -435,6 +435,12 @@ export default function NorthernWaterSystemApp() {
   const [casualRange, setCasualRange] = useState({ start: '', end: '' });
   const [casualRate, setCasualRate] = useState(0);
   const [payrollPayments, setPayrollPayments] = useState([]);
+  // Staff profiles, keyed by user id, used only to turn a record's `created_by`
+  // into a person's name. Loaded at login like everything else. RLS decides what
+  // lands here: an admin gets every profile, anyone else gets their own row and
+  // nothing more (001's profiles_select_own / profiles_select_admin). So this is
+  // empty-but-for-yourself for non-admins by construction, not by a UI check.
+  const [staffById, setStaffById] = useState({});
 
   // ===== AUTH STATE =====
   const [session, setSession] = useState(null);
@@ -698,6 +704,54 @@ export default function NorthernWaterSystemApp() {
   // sales, payments and production only). Where it does, pressing Save again is
   // genuinely safe and staff should be told so. Where it does not, the honest
   // advice is to go and look first, so the flag defaults to false.
+  // ===== RECORD ATTRIBUTION =====
+  //
+  // Who entered a record. ADMIN ONLY, and not by a UI check alone: `staffById`
+  // is populated from `profiles`, whose SELECT policies (001) give an admin every
+  // row and everyone else only their own. A manager who got past the role test
+  // below would still have no names to look up. The UI gate is convenience; the
+  // boundary is `profiles_select_admin`.
+  //
+  // Returns a string to show, or null when the viewer should see no line at all.
+  //
+  // Two honest non-answers, kept distinct because they mean different things:
+  //   'Not recorded' — the row predates attribution (migration 006 left existing
+  //                    rows null), or was written by a path that never stamped it.
+  //   'Unknown user' — it IS stamped, but no profile matches: the account was
+  //                    removed, or a profiles row was never created for it.
+  //
+  // Email is the last name-like field on purpose — it is what the app already
+  // uses to identify a person (the header, and `adjusted_by` on stock
+  // adjustments). If even that is missing the id stub is shown rather than
+  // "Unknown user", because the profile IS known here; only its label is not,
+  // and two such accounts must not collapse into one indistinguishable label.
+  const recordedBy = (createdBy) => {
+    if (userProfile?.role !== 'admin') return null;
+    if (!createdBy) return 'Not recorded';
+    const staff = staffById[createdBy];
+    if (!staff) return 'Unknown user';
+    return staff.full_name || staff.name || staff.email || `User ${String(createdBy).slice(0, 8)}`;
+  };
+
+  // How the stamp got there, which is not the same question as who it names.
+  //
+  // Sales, production runs and consignment movements are stamped by the database
+  // from the session (migrations 015/016/019) and cannot be forged. Payments and
+  // expenses take `created_by` from the client payload — 019 looked at that and
+  // deliberately left it alone. Both are honest in normal use; only the first
+  // kind is evidence. Shown as a tooltip rather than body text, so the
+  // distinction is available without putting a caveat on every row.
+  const ATTRIBUTION_NOTE = {
+    server: 'Stamped by the database from the signed-in session — cannot be altered by the app.',
+    client: 'Taken from the signed-in session at the time of entry.',
+  };
+
+  const recordedByLine = (createdBy, source = 'server', className = 'text-slate-400 text-xs mt-1') => {
+    const who = recordedBy(createdBy);
+    if (!who) return null;
+    return <p className={className} title={ATTRIBUTION_NOTE[source]}>Recorded by {who}</p>;
+  };
+
   const saveFailureMessage = (error, refusedMessage, whereToCheck, replaySafe = false) => {
     if (error?.timedOut) {
       return `The connection was lost while saving.\n\n` +
@@ -847,6 +901,18 @@ export default function NorthernWaterSystemApp() {
       if (isAdmin) {
         const { data: payData } = await supabase.from('payroll_payments').select('*');
         if (payData) setPayrollPayments(payData);
+      }
+
+      // Staff names for the "Recorded by" lines. Requested only for admins,
+      // because for anyone else RLS returns just their own row and the query
+      // would be a wasted round trip. Note the UI gate is convenience: the
+      // security boundary is profiles_select_admin, which is what actually
+      // stops a manager reading colleagues' identities.
+      if (isAdmin) {
+        const { data: staffData } = await supabase.from('profiles').select('*');
+        if (staffData) {
+          setStaffById(Object.fromEntries(staffData.map(p => [p.id, p])));
+        }
       }
 
       // Cost settings — all roles (used in production cost calculations)
@@ -5665,6 +5731,7 @@ export default function NorthernWaterSystemApp() {
                         ))}
                       </div>
                       {log.notes && <p className="text-slate-500 text-xs italic">{log.notes}</p>}
+                      {recordedByLine(log.created_by, 'server')}
                       {/* RLS only permits admin to delete production logs.
                           stopPropagation so deleting does not also open the
                           run card behind the confirmation. */}
@@ -5836,6 +5903,7 @@ export default function NorthernWaterSystemApp() {
                             </div>
                           ))}
                         </div>
+                        {recordedByLine(sale.created_by, 'server', 'text-slate-400 text-xs pt-2')}
                         <div className="flex justify-end gap-1 pt-2 mt-2 border-t border-slate-100">
                           <button
                             onClick={() => downloadInvoiceAsPDF(sale)}
@@ -6133,6 +6201,7 @@ export default function NorthernWaterSystemApp() {
                               </button>
                             )}
                           </div>
+                          {recordedByLine(payment.created_by, 'client', 'text-slate-400 text-xs mt-2')}
                         </div>
                       );
                     })
@@ -6271,6 +6340,7 @@ export default function NorthernWaterSystemApp() {
                           </div>
                         </div>
                       </div>
+                      {recordedByLine(expense.created_by, 'client')}
                     </div>
                   ))
                 )}
@@ -6934,6 +7004,13 @@ export default function NorthernWaterSystemApp() {
                       </div>
                     </div>
                   )}
+
+                  {recordedBy(invoiceDetail.created_by) && (
+                    <div className="border-t border-slate-100 pt-3">
+                      <p className="text-slate-500 text-xs mb-1">Recorded by</p>
+                      <p className="text-slate-600 text-sm" title={ATTRIBUTION_NOTE.server}>{recordedBy(invoiceDetail.created_by)}</p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -7386,6 +7463,13 @@ export default function NorthernWaterSystemApp() {
                     <div>
                       <p className="text-slate-500 text-xs mb-1">Notes</p>
                       <p className="text-slate-600 text-sm italic">{log.notes}</p>
+                    </div>
+                  )}
+
+                  {recordedBy(log.created_by) && (
+                    <div>
+                      <p className="text-slate-500 text-xs mb-1">Recorded by</p>
+                      <p className="text-slate-600 text-sm" title={ATTRIBUTION_NOTE.server}>{recordedBy(log.created_by)}</p>
                     </div>
                   )}
 
