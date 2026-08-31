@@ -126,6 +126,7 @@ baseline by default.
 | `018_settle_customer_balances.sql` | Corrects the five customer balances that disagree with their sales ledger. **Debtors and Aging Debtors rise by KES 5,450 on apply.** Requires `017` |
 | `024_lump_sum_payments.sql` | `payments.batch_id` + `record_bulk_payment` / `delete_payment_batch`, so one receipt can settle several invoices in a single transaction. Every payment row still names a `saleId`, so nothing downstream changes shape |
 | `025_on_account_credit.sql` | Overpayment becomes held credit. Adds `payments.kind`, makes `payments."saleId"` nullable, and **extends the balance formula** to `-sum(sales.total - sales.paid) + unapplied credit`. Adds `apply_credit`; guards `delete_payment` and `delete_sale` against stranding half a credit application. Requires `024` |
+| `026_production_requires_materials.sql` | Refuses a production run that would drive any raw material below zero, by wiring `020`'s `assert_stock_not_negative` into `record_production` — the last decreasing write path without it. Closes the gap `020` deliberately deferred. **No figure moves; it only refuses future writes.** Requires `020` and `021` |
 
 `018` is a data correction rather than a schema or policy change — nothing else
 waits on it. `019`, `020` and `021` moved to the applied table on 2026-08-04;
@@ -135,6 +136,14 @@ waits on it. `019`, `020` and `021` moved to the applied table on 2026-08-04;
 **Both must be applied before that client merges** — `main` auto-deploys, and
 the client calls `record_bulk_payment` and `apply_credit`, so merging first
 breaks payment saving outright. This is the `015`/`016` ordering, not `017`'s.
+
+`026` is a one-line behaviour change carrying a long header, because its risk is
+operational rather than technical: once it is live, a wrong raw material figure
+STOPS production instead of quietly going negative. Run its pre-flight `0b`
+first — every row that query returns is a recipe line which will start refusing
+runs on apply. It stands alone and blocks nothing else. No client change is
+needed and none should be added; the client's stock figures are a login-time
+snapshot, so a client-side pre-check would refuse runs the database accepts.
 
 `024` is shippable on its own if `025` needs more review: lump sums that settle
 exactly work, and overpayment keeps failing exactly as it does today.
