@@ -206,6 +206,11 @@ const initialState = {
   // Stock on hand at a shop is derived by summing this (see getConsignmentOnHand).
   consignmentMovements: [],
 
+  // Explicit corrections to a customer balance — the third term of the balance
+  // formula (migration 027). Not cash and not revenue: these move Debtors and
+  // Aging only, never Cash Collected, the P&L or stock.
+  customerAdjustments: [],
+
   locations: ['Loglogo', 'Marsabit', 'Laisamis', 'Korr', 'Merille'],
 
   // Pricing is now entered manually per sale - no auto-pricing from location
@@ -574,6 +579,30 @@ export default function NorthernWaterSystemApp() {
       ? state.payments.filter(p => customerInMyLocation(p.customerId))
       : state.payments.filter(p => p.created_by === myUserId);
 
+  // Scoped like visibleCustomers, NOT like visibleSales/visiblePayments. An
+  // adjustment is an attribute of a customer's balance rather than a
+  // transaction someone recorded, so it has to be visible wherever that
+  // customer's balance is. Falling back to "only my own records" would hide
+  // every adjustment from a sales user with no location — they can still see
+  // the customer and the balance, so their ledger would silently stop adding up.
+  const visibleAdjustments = role !== 'sales'
+    ? state.customerAdjustments
+    : myLocation
+      ? state.customerAdjustments.filter(a => customerInMyLocation(a.customerId))
+      : state.customerAdjustments;
+
+  // Every balance adjustment posted against one customer, oldest first.
+  const adjustmentsFor = (customerId) =>
+    visibleAdjustments
+      .filter(a => a.customerId === customerId)
+      .slice()
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (a.id || 0) - (b.id || 0)));
+
+  // The third term of the balance formula (migration 027), computed the same
+  // way the database does. Positive reduces debt, negative deepens it.
+  const adjustmentsTotal = (customerId) =>
+    toCents(adjustmentsFor(customerId).reduce((sum, a) => sum + (a.amount || 0), 0));
+
   // Customers visible to a sales user (for the debts list): their location only,
   // or all of their own debtors if no location set. Admin/manager see all.
   const visibleCustomers = role !== 'sales'
@@ -854,6 +883,13 @@ export default function NorthernWaterSystemApp() {
         supabase.from('payments').select('*'),
       ]);
 
+      // Balance adjustments are tier 1 deliberately, for every role. RLS scopes
+      // a sales user to their own location. The customer card and the statement
+      // both reconcile their running total against customers.balance, so a
+      // hidden adjustment would make the ledger disagree with the balance
+      // printed at the bottom of it.
+      const { data: adjustmentsData } = await supabase.from('customer_adjustments').select('*');
+
       // Replace state whenever the fetch SUCCEEDED (data is an array, possibly
       // empty) — keying off length left stale/default records showing when a
       // table was genuinely empty. On a failed fetch data is null: keep prev.
@@ -862,6 +898,7 @@ export default function NorthernWaterSystemApp() {
         ...(customersData && { customers: customersData }),
         ...(salesData && { sales: salesData }),
         ...(paymentsData && { payments: paymentsData }),
+        ...(adjustmentsData && { customerAdjustments: adjustmentsData }),
       }));
 
       // Tier 2: admin + manager — operational records, fetched in parallel
@@ -1612,13 +1649,24 @@ export default function NorthernWaterSystemApp() {
       byLocation[loc].total += d.debt;
     });
 
+    // How much of the debt above rests on a balance adjustment rather than on
+    // an invoice (migration 027). Reported so a correction can never become a
+    // quiet hole in the figures: anyone reading this report can see how much of
+    // it is asserted rather than invoiced, and go and look at the reasons.
+    const adjustmentsApplied = toCents(
+      debtors.reduce((sum, d) => sum + adjustmentsTotal(d.id), 0)
+    );
+    const adjustedAccounts = debtors.filter(d => adjustmentsTotal(d.id) !== 0).length;
+
     return {
       title: 'Aging Debtors Report',
       date: new Date().toLocaleDateString(),
       locationLabel: locationFilter === 'all' ? 'All Locations' : locationFilter,
       data: debtors,
       byLocation,
-      total: debtors.reduce((sum, d) => sum + d.debt, 0)
+      total: debtors.reduce((sum, d) => sum + d.debt, 0),
+      adjustmentsApplied,
+      adjustedAccounts
     };
   };
 
@@ -2757,12 +2805,16 @@ export default function NorthernWaterSystemApp() {
   // off entirely, so this is a "what you owe us" document, not a trading history.
   //
   // Balance Due is the sum of the Outstanding column, less any payments the
-  // customer has made that are not yet against an invoice. That is by
-  // construction the same figure `recompute_customer_balance` derives for
-  // `customers.balance` (migration 017 for the first term, 025 for the second:
-  // balance = -sum(sales.total - sales.paid) + unapplied credit). So the
-  // statement always reconciles with the balance shown in the UI and the Aging
-  // Debtors report — there is no separate calculation that could drift from it.
+  // customer has made that are not yet against an invoice, less any balance
+  // adjustment posted against the account. That is by construction the same
+  // figure `recompute_customer_balance` derives for `customers.balance`
+  // (migration 017 for the first term, 025 for the second, 027 for the third:
+  // balance = -sum(sales.total - sales.paid) + unapplied credit + adjustments).
+  // So the statement always reconciles with the balance shown in the UI and the
+  // Aging Debtors report — there is no separate calculation that could drift
+  // from it. Leaving adjustments out would hand the customer a document whose
+  // own total disagreed with the account, which is the one thing a statement
+  // must never do.
   // Read-only — renders existing records, changes nothing.
   const downloadAccountStatementAsPDF = (customer) => {
     if (!customer) return;
@@ -2812,7 +2864,13 @@ export default function NorthernWaterSystemApp() {
     // debt of every customer holding credit, and stop matching customers.balance
     // — the reconciliation this document's header promises. See migration 025.
     const onAccount = toCents(creditHeld(customer.id));
-    const closing = toCents(totalCharged - totalPaid - onAccount); // positive => customer owes
+    // Balance adjustments (migration 027). Like the on-account line above, these
+    // appear nowhere in the invoice rows — they exist precisely because no
+    // invoice or payment carries them. A positive adjustment reduces the debt,
+    // so it is subtracted here exactly as its sign works in the formula.
+    const adjustments = adjustmentsFor(customer.id);
+    const adjusted = adjustmentsTotal(customer.id);
+    const closing = toCents(totalCharged - totalPaid - onAccount - adjusted); // positive => customer owes
 
     const htmlContent = `
       <!DOCTYPE html>
@@ -2902,12 +2960,14 @@ export default function NorthernWaterSystemApp() {
             <div class="row"><span>Invoiced</span><span>KES ${fmt(totalCharged)}</span></div>
             <div class="row"><span>Paid</span><span>KES ${fmt(totalPaid)}</span></div>
             ${onAccount > 0 ? `<div class="row"><span>Payments on account (not yet applied)</span><span>KES ${fmt(onAccount)}</span></div>` : ''}
+            ${adjusted !== 0 ? `<div class="row"><span>${adjusted > 0 ? 'Balance adjustment (in your favour)' : 'Balance adjustment'}</span><span>KES ${fmt(Math.abs(adjusted))}</span></div>` : ''}
             <div class="row grand"><span>${closing >= 0 ? 'Balance Due' : 'Credit Balance'}</span><span class="${closing > 0 ? 'owed' : closing < 0 ? 'credit' : ''}">KES ${fmt(Math.abs(closing))}</span></div>
           </div>
 
           <div class="footer">
             <p>This statement lists only invoices that are still unsettled as at the date shown above. Invoices paid in full are not shown. Totals cover the invoices listed.</p>
             ${onAccount > 0 ? `<p>Payments on account are amounts you have paid that are not yet set against a particular invoice. They have been deducted from the balance due.</p>` : ''}
+            ${adjusted !== 0 ? `<p>A balance adjustment is a correction agreed on this account${adjustments.length === 1 && adjustments[0].reason ? `: ${escapeHtml(adjustments[0].reason)}` : ''}. It has been applied to the balance due.</p>` : ''}
             <p>${COMPANY.name}</p>
           </div>
         </div>
@@ -4023,6 +4083,130 @@ export default function NorthernWaterSystemApp() {
     console.log('✅ Payment deleted and reversed in Supabase');
   };
 
+  // Balance adjustments (migration 027)
+  //
+  // An adjustment is the only way to move a balance to a figure the invoices
+  // and payments do not support — an opening balance, or a correction whose
+  // underlying detail cannot be reconstructed. It is NOT cash and NOT revenue:
+  // Cash Collected, the P&L and every stock figure are untouched. Debtors and
+  // Aging move by exactly the amount posted.
+  //
+  // Admin only, enforced in the database: record_customer_adjustment gates on
+  // the caller's role and refuses everyone else. The UI check below only keeps
+  // the button out of the way.
+  const handleAddAdjustment = (customer) => {
+    setModalType('adjustment');
+    setFormData({
+      customerId: customer.id,
+      customerName: customer.name,
+      currentBalance: customer.balance || 0,
+      mode: 'target',          // 'target' = type the book figure, 'delta' = type the movement
+      targetBalance: '',
+      amount: '',
+      date: localDateString(),
+      reason: '',
+      kind: 'opening_balance',
+      clientKey: newClientKey(),
+    });
+    setShowModal(true);
+  };
+
+  // What the posted adjustment will actually be, in either input mode. Target
+  // mode is the one that matches the job: the correct balance is known, so the
+  // movement is derived rather than worked out on paper.
+  const adjustmentDelta = () => {
+    if (formData.mode === 'delta') return toCents(Number(formData.amount) || 0);
+    if (formData.targetBalance === '' || formData.targetBalance === null) return 0;
+    return toCents(Number(formData.targetBalance) - Number(formData.currentBalance || 0));
+  };
+
+  const handleSaveAdjustment = async () => {
+    const delta = adjustmentDelta();
+    const reason = (formData.reason || '').trim();
+
+    if (!delta) {
+      alert('This adjustment would not move the balance. Enter a different figure, or close the form.');
+      return;
+    }
+    if (!reason) {
+      alert('Please give a reason. It is the only explanation this correction will ever carry.');
+      return;
+    }
+
+    const customer = state.customers.find(c => c.id === formData.customerId);
+    const after = toCents((customer?.balance || 0) + delta);
+    const owed = (n) => (n < 0
+      ? `owing KES ${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : n > 0
+        ? `holding KES ${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} credit`
+        : 'settled');
+
+    if (!confirm(
+      `Adjust ${customer?.name || 'this customer'}'s balance?\n\n` +
+      `From: ${owed(customer?.balance || 0)}\n` +
+      `To:   ${owed(after)}\n\n` +
+      `This changes Debtors and Aging Debtors by KES ${Math.abs(delta).toLocaleString()}. ` +
+      `It does NOT change cash collected, the P&L or any stock figure.\n\n` +
+      `Reason: ${reason}`
+    )) return;
+
+    const { data, error } = await supabase.rpc('record_customer_adjustment', {
+      p_adj: {
+        customerId: formData.customerId,
+        amount: delta,
+        date: formData.date || localDateString(),
+        reason,
+        kind: formData.kind || 'opening_balance',
+        client_key: formData.clientKey || null,
+      },
+    });
+
+    if (error) {
+      console.error('❌ Error recording balance adjustment:', error);
+      alert('Could not record this adjustment — nothing was changed. The balance is as it was.\n\n' + (error.message || 'Unknown error'));
+      return;
+    }
+
+    setState({
+      ...state,
+      customerAdjustments: data?.replayed
+        ? state.customerAdjustments.some(a => a.id === data.adjustment.id)
+          ? state.customerAdjustments
+          : [...state.customerAdjustments, data.adjustment]
+        : [...state.customerAdjustments, data.adjustment],
+      ...applyRpcRows(data),
+    });
+    setShowModal(false);
+    console.log('✅ Balance adjustment recorded in Supabase');
+  };
+
+  const handleDeleteAdjustment = async (id) => {
+    const adj = state.customerAdjustments.find(a => a.id === id);
+    if (!adj) return;
+    const customer = state.customers.find(c => c.id === adj.customerId);
+
+    if (!confirm(
+      `Remove this balance adjustment of KES ${Math.abs(adj.amount).toLocaleString()}` +
+      `${customer ? ` on ${customer.name}` : ''}?\n\n` +
+      `The balance goes back to what the invoices and payments support. ` +
+      `Debtors and Aging change by the same amount. Cash and the P&L are unaffected.`
+    )) return;
+
+    const { data, error } = await supabase.rpc('delete_customer_adjustment', { p_id: id });
+    if (error) {
+      console.error('❌ Error removing balance adjustment:', error);
+      alert('Could not remove this adjustment — nothing was changed.\n\n' + (error.message || 'Unknown error'));
+      return;
+    }
+
+    setState({
+      ...state,
+      customerAdjustments: state.customerAdjustments.filter(a => a.id !== id),
+      ...applyRpcRows(data),
+    });
+    console.log('✅ Balance adjustment removed in Supabase');
+  };
+
   // Production
   const handleAddProduction = () => {
     setModalType('production');
@@ -5096,6 +5280,25 @@ export default function NorthernWaterSystemApp() {
                             <p className="text-rose-700 text-xl md:text-2xl font-bold">KES {reportData.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
                           </div>
                         </div>
+
+                        {/* How much of the figure above is asserted rather than
+                            invoiced. Shown so a balance correction stays visible
+                            in the report it changes. */}
+                        {!!reportData.adjustmentsApplied && (
+                          <div className="bg-white border border-slate-200 rounded-xl p-3 md:p-4">
+                            <div className="flex justify-between items-center gap-3">
+                              <div>
+                                <p className="text-slate-700 font-medium text-sm">Includes balance adjustments</p>
+                                <p className="text-slate-400 text-xs">
+                                  {reportData.adjustedAccounts} account{reportData.adjustedAccounts === 1 ? '' : 's'} corrected to a figure the invoices do not show. Open the customer card for the reason.
+                                </p>
+                              </div>
+                              <p className="text-slate-700 font-semibold text-sm whitespace-nowrap">
+                                KES {Math.abs(reportData.adjustmentsApplied).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                              </p>
+                            </div>
+                          </div>
+                        )}
                       </>
                     )}
                   </div>
@@ -7110,6 +7313,25 @@ export default function NorthernWaterSystemApp() {
               debit: 0, credit: p.amount || 0,
             });
           });
+          // Balance adjustments (migration 027). Without these rows the running
+          // total below would drift away from customers.balance the moment one
+          // is posted, because the balance has a third term this ledger would
+          // not know about. A positive adjustment reduces debt, so it sits in
+          // the credit column, exactly as its sign does in the formula.
+          adjustmentsFor(customer.id).forEach(a => {
+            ledger.push({
+              date: a.date, order: 2,
+              ref: a.kind === 'write_off' ? 'Write-off' : 'Adjustment',
+              desc: `Balance adjustment · ${a.reason}`,
+              debit: a.amount < 0 ? -a.amount : 0,
+              credit: a.amount > 0 ? a.amount : 0,
+              adjustmentId: a.id,
+              // Stamped server-side by record_customer_adjustment, so this one
+              // is evidence rather than a claim.
+              createdBy: a.created_by,
+            });
+          });
+
           ledger.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order));
           let runningBalance = 0;
 
@@ -7219,6 +7441,17 @@ export default function NorthernWaterSystemApp() {
                   >
                     <Edit2 className="w-3.5 h-3.5" /> Edit
                   </button>
+                  {/* Admin only, and the database says so too — the RPC refuses
+                      any other role. This button is convenience, not the gate. */}
+                  {role === 'admin' && (
+                    <button
+                      onClick={() => { setCustomerDetail(null); handleAddAdjustment(customer); }}
+                      className="flex items-center gap-1.5 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 font-medium px-3 py-1.5 rounded-lg transition text-xs"
+                      title="Correct this balance to a known-correct figure"
+                    >
+                      <Save className="w-3.5 h-3.5" /> Adjust Balance
+                    </button>
+                  )}
                   {customer.is_consignee && (
                     <p className="w-full text-slate-400 text-xs mt-1">
                       Consignment shop — record what it sells under Inventory → Consignment → Report Sold.
@@ -7338,6 +7571,22 @@ export default function NorthernWaterSystemApp() {
                                           )}
                                         </>
                                       )}
+                                      {/* A balance adjustment carries no cash and
+                                          no stock, so removing it simply lets the
+                                          balance fall back to what the invoices
+                                          and payments support. Admin only, in the
+                                          database as well as here. */}
+                                      {e.adjustmentId && role === 'admin' && (
+                                        <>
+                                          <button
+                                            onClick={() => handleDeleteAdjustment(e.adjustmentId)}
+                                            className="ml-2 text-rose-600 hover:text-rose-700 underline"
+                                          >
+                                            remove
+                                          </button>
+                                          {recordedByLine(e.createdBy, 'server', 'text-slate-400 text-[11px] mt-0.5')}
+                                        </>
+                                      )}
                                     </td>
                                     <td className="px-3 py-2 text-right text-slate-900">{e.debit ? fmt(e.debit) : '—'}</td>
                                     <td className="px-3 py-2 text-right text-emerald-600">{e.credit ? fmt(e.credit) : '—'}</td>
@@ -7350,7 +7599,8 @@ export default function NorthernWaterSystemApp() {
                         </div>
                         <p className="text-slate-400 text-xs mt-2">
                           Every invoice and payment on this account, oldest first. The closing balance is what the customer owes today
-                          {held > 0 && `, after netting off the KES ${fmt(held)} they are holding in credit`}.
+                          {held > 0 && `, after netting off the KES ${fmt(held)} they are holding in credit`}
+                          {adjustmentsTotal(customer.id) !== 0 && `, including KES ${fmt(Math.abs(adjustmentsTotal(customer.id)))} of balance adjustments`}.
                         </p>
                       </>
                     )
@@ -7720,6 +7970,7 @@ export default function NorthernWaterSystemApp() {
                 {modalType === 'expense' && (editingExpense ? 'Edit Expense' : 'New Expense')}
                 {modalType === 'customer' && (editingCustomer ? 'Edit' : 'New Customer')}
                 {modalType === 'adjust' && 'Adjust Stock'}
+                {modalType === 'adjustment' && 'Adjust Balance'}
                 {modalType === 'consignment' && formData.consignAction === 'deliver' && 'Deliver to Shop'}
                 {modalType === 'consignment' && formData.consignAction === 'sold' && 'Report Stock Sold'}
                 {modalType === 'consignment' && formData.consignAction === 'return' && 'Take Stock Back'}
@@ -8571,6 +8822,144 @@ export default function NorthernWaterSystemApp() {
                 </>
               )}
 
+              {/* Balance adjustment (migration 027). Target mode is the default
+                  because the job this exists for is "make this account read what
+                  the book says" — the movement is derived rather than worked out
+                  on paper, which is where the arithmetic slips. */}
+              {modalType === 'adjustment' && (() => {
+                const cur = Number(formData.currentBalance || 0);
+                const delta = adjustmentDelta();
+                const after = toCents(cur + delta);
+                const money = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                const describe = (n) => (n < 0 ? `owes KES ${money(Math.abs(n))}` : n > 0 ? `holds KES ${money(n)} credit` : 'settled');
+
+                return (
+                  <>
+                    <div className="bg-slate-50 rounded-lg p-3">
+                      <p className="text-slate-900 text-sm font-semibold">{formData.customerName}</p>
+                      <p className="text-slate-500 text-xs mt-1">Currently {describe(cur)}</p>
+                    </div>
+
+                    <div className="flex gap-2">
+                      {[['target', 'Set to correct balance'], ['delta', 'Enter an amount']].map(([key, label]) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => setFormData({ ...formData, mode: key })}
+                          className={`flex-1 px-3 py-2 rounded-lg border text-xs font-medium transition ${
+                            formData.mode === key
+                              ? 'bg-sky-50 border-sky-300 text-sky-700'
+                              : 'bg-white border-slate-300 text-slate-500 hover:bg-slate-50'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {formData.mode === 'delta' ? (
+                      <div>
+                        <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">
+                          Adjustment amount
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={formData.amount ?? ''}
+                          onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                          placeholder="e.g. -2520 to add debt, 2520 to reduce it"
+                        />
+                        <p className="text-slate-400 text-xs mt-1">
+                          Positive reduces what they owe. Negative increases it.
+                        </p>
+                      </div>
+                    ) : (
+                      <div>
+                        <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">
+                          Correct balance, from the book
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={formData.targetBalance ?? ''}
+                          onChange={(e) => setFormData({ ...formData, targetBalance: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                          placeholder="e.g. -2220 if they owe 2,220"
+                        />
+                        <p className="text-slate-400 text-xs mt-1">
+                          Enter it as a negative number if the customer owes money, positive if they hold credit.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Always show what will actually be posted. The sign
+                        convention trips people up, and this is the line that
+                        catches a figure typed the wrong way round. */}
+                    {delta !== 0 && (
+                      <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-1 text-xs">
+                        <div className="flex justify-between"><span className="text-slate-500">Now</span><span className="text-slate-700">{describe(cur)}</span></div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Adjustment</span>
+                          <span className={delta > 0 ? 'text-emerald-600 font-semibold' : 'text-rose-600 font-semibold'}>
+                            {delta > 0 ? '+' : '−'}KES {money(Math.abs(delta))}
+                          </span>
+                        </div>
+                        <div className="flex justify-between pt-1 border-t border-slate-100">
+                          <span className="text-slate-700 font-semibold">After</span>
+                          <span className="text-slate-900 font-bold">{describe(after)}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Reason</label>
+                      <input
+                        type="text"
+                        value={formData.reason || ''}
+                        onChange={(e) => setFormData({ ...formData, reason: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                        placeholder="e.g. Opening balance correction per manual book, June 2026"
+                      />
+                      <p className="text-slate-400 text-xs mt-1">
+                        Required. This is the only explanation the balance will ever carry, and it appears on the customer&apos;s statement.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Date</label>
+                        <input
+                          type="date"
+                          value={formData.date || ''}
+                          onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Type</label>
+                        <select
+                          value={formData.kind || 'opening_balance'}
+                          onChange={(e) => setFormData({ ...formData, kind: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                        >
+                          <option value="opening_balance">Opening balance</option>
+                          <option value="correction">Data correction</option>
+                          <option value="write_off">Write-off</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                      <p className="text-amber-800 text-xs">
+                        This changes <strong>Debtors and Aging Debtors</strong> only. Cash collected, the P&amp;L and every
+                        stock figure stay exactly as they are — an adjustment is not a payment and not a sale.
+                      </p>
+                    </div>
+                  </>
+                );
+              })()}
+
               {modalType === 'adjust' && (
                 <>
                   <div className="bg-slate-50 rounded-lg p-3">
@@ -8807,6 +9196,7 @@ export default function NorthernWaterSystemApp() {
                   else if (modalType === 'expense') await handleSaveExpense();
                   else if (modalType === 'customer') await handleSaveCustomer();
                   else if (modalType === 'adjust') await handleStockAdjustment();
+                  else if (modalType === 'adjustment') await handleSaveAdjustment();
                   else if (modalType === 'consignment') await handleSaveConsignment();
                   else if (modalType === 'employee') await handleSaveEmployee();
                 })}

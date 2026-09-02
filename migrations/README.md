@@ -123,13 +123,30 @@ baseline by default.
 
 | File | What it does |
 |------|--------------|
-| `018_settle_customer_balances.sql` | Corrects the five customer balances that disagree with their sales ledger. **Debtors and Aging Debtors rise by KES 5,450 on apply.** Requires `017` |
+| `018_settle_customer_balances.sql` | 🛑 **DO NOT APPLY — superseded, and now actively destructive.** See the warning below |
 | `024_lump_sum_payments.sql` | `payments.batch_id` + `record_bulk_payment` / `delete_payment_batch`, so one receipt can settle several invoices in a single transaction. Every payment row still names a `saleId`, so nothing downstream changes shape |
 | `025_on_account_credit.sql` | Overpayment becomes held credit. Adds `payments.kind`, makes `payments."saleId"` nullable, and **extends the balance formula** to `-sum(sales.total - sales.paid) + unapplied credit`. Adds `apply_credit`; guards `delete_payment` and `delete_sale` against stranding half a credit application. Requires `024` |
 | `026_production_requires_materials.sql` | Refuses a production run that would drive any raw material below zero, by wiring `020`'s `assert_stock_not_negative` into `record_production` — the last decreasing write path without it. Closes the gap `020` deliberately deferred. **No figure moves; it only refuses future writes.** Requires `020` and `021` |
+| `027_customer_adjustments.sql` | New `customer_adjustments` table (RLS + policies defined in the same file) and **a third term in the balance formula**: `-sum(unpaid invoices) + credit held + adjustments`. Adds admin-only `record_customer_adjustment` / `delete_customer_adjustment`, both failing CLOSED on a null role. Inert on apply — the new term is zero until an adjustment is posted. Moves Debtors and Aging only; **never** Cash Collected, the P&L or stock. Requires `025`. Apply BEFORE the client that adds the adjustment UI |
 
-`018` is a data correction rather than a schema or policy change — nothing else
-waits on it. `019`, `020` and `021` moved to the applied table on 2026-08-04;
+### 🛑 `018_settle_customer_balances.sql` must not be applied
+
+It hard-codes the ONE-term formula from `017`
+(`balance = -sum(sales.total - sales.paid)`) and recomputes live rather than
+replaying the July figures.
+
+* After `025` it would **zero the credit term** for anyone holding credit.
+* After `027` it would additionally **zero the adjustment term**, silently
+  undoing every balance correction entered through the new flow — the exact
+  corrections it was originally written to make.
+
+Its "expect 5 rows" verification and per-id expected figures are also long out
+of date: four of those five balances self-healed once `017` made the figure
+derived-on-write, leaving only id 97. Anything it was meant to achieve is now
+done by posting an adjustment through `027`. Keep the file for its history;
+do not run it.
+
+`019`, `020` and `021` moved to the applied table on 2026-08-04;
 `022` and `023` on 2026-08-14.
 
 `024` and `025` are the lump-sum payment work (branch `lump-sum-payments`).
