@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { BarChart3, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, ShoppingCart, Wallet, Search, Filter, ChevronRight, ChevronDown, Maximize2, Minimize2 } from 'lucide-react';
+import { BarChart3, Banknote, Package, Users, DollarSign, ClipboardList, TrendingUp, Plus, Edit2, Trash2, X, Save, Download, ShoppingCart, Wallet, Search, Filter, ChevronRight, ChevronDown, Maximize2, Minimize2 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import { OASIS_LOGO } from './oasisLogo';
 import { PRINT_FONT_FACES, PRINT_FONT_STACK } from './printFont';
@@ -1612,15 +1612,11 @@ export default function NorthernWaterSystemApp() {
     };
   };
 
-  const generateCashCollectedReport = () => {
-    // With no date range selected, default to the current month (not all time)
-    // so the summary cards and the day lists below them stay in sync.
-    const monthPrefix = localMonthPrefix();
-    const inPeriod = (d) => {
-      if (!dateRange.start || !dateRange.end) return (d || '').slice(0, 7) === monthPrefix;
-      return d >= dateRange.start && d <= dateRange.end;
-    };
-
+  // Cash actually collected in a window, split into money taken at the point of
+  // sale and money received later against debts. `inPeriod(date)` defines the
+  // window. The dashboard card and the Cash Collected report both read this, so
+  // the two can never drift apart.
+  const collectCashInPeriod = (inPeriod) => {
     // Cash sales: sales paid on the spot (paid > 0 at sale), counted on sale date
     let cashSalesTotal = 0;
     const cashSalesList = [];
@@ -1672,16 +1668,30 @@ export default function NorthernWaterSystemApp() {
     });
 
     return {
-      title: 'Cash Collected Report',
-      date: new Date().toLocaleDateString(),
-      period: (dateRange.start && dateRange.end)
-        ? `${dateRange.start} to ${dateRange.end}`
-        : `This Month (${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })})`,
       cashSalesTotal,
       debtPaymentsTotal,
       totalCollected: cashSalesTotal + debtPaymentsTotal,
       cashSalesList: cashSalesList.sort((a, b) => new Date(b.date) - new Date(a.date)),
       debtPaymentsList: debtPaymentsList.sort((a, b) => new Date(b.date) - new Date(a.date))
+    };
+  };
+
+  const generateCashCollectedReport = () => {
+    // With no date range selected, default to the current month (not all time)
+    // so the summary cards and the day lists below them stay in sync.
+    const monthPrefix = localMonthPrefix();
+    const inPeriod = (d) => {
+      if (!dateRange.start || !dateRange.end) return (d || '').slice(0, 7) === monthPrefix;
+      return d >= dateRange.start && d <= dateRange.end;
+    };
+
+    return {
+      title: 'Cash Collected Report',
+      date: new Date().toLocaleDateString(),
+      period: (dateRange.start && dateRange.end)
+        ? `${dateRange.start} to ${dateRange.end}`
+        : `This Month (${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })})`,
+      ...collectCashInPeriod(inPeriod)
     };
   };
 
@@ -4463,20 +4473,25 @@ export default function NorthernWaterSystemApp() {
         })()}
 
         {activeTab === 'dashboard' && (() => {
-          // Sales and costs cards show month-to-date, not all-time (customers
-          // and debts are point-in-time balances, so they stay as-is).
+          // Sales, cash and costs cards show month-to-date, not all-time
+          // (customers and debts are point-in-time balances, so they stay as-is).
           const monthPrefix = localMonthPrefix();
           const inMonth = (d) => (d || '').slice(0, 7) === monthPrefix;
           const monthSalesTotal = state.sales.filter(s => inMonth(s.date)).reduce((sum, s) => sum + s.total, 0);
           const monthCostsTotal = state.expenses.filter(e => inMonth(e.date)).reduce((sum, e) => sum + e.amount, 0)
             + state.purchases.filter(p => inMonth(p.date)).reduce((sum, p) => sum + p.totalAmount, 0);
+          // Cash in hand this month, split into money taken at the till and
+          // money collected against old debts. Same maths as the Cash Collected
+          // report, so the card and the report can never disagree.
+          const monthCash = collectCashInPeriod(inMonth);
           return (
           <div className="space-y-4 md:space-y-6">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 md:gap-4">
               {[
                 { id: 'customers', label: 'Customers', value: state.customers.length.toLocaleString(), accent: 'sky', icon: Users, sub: 'total accounts' },
                 { id: 'debt', label: 'Outstanding Debts', value: `KES ${state.customers.reduce((sum, c) => sum + Math.max(0, -c.balance), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'rose', icon: Wallet, sub: 'across debtors' },
                 { id: 'sales', label: 'Sales', value: `KES ${monthSalesTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'emerald', icon: DollarSign, sub: 'this month' },
+                { id: 'cash', label: 'Cash Collected', value: `KES ${monthCash.totalCollected.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'emerald', icon: Banknote, sub: `KES ${monthCash.cashSalesTotal.toLocaleString()} cash sales + KES ${monthCash.debtPaymentsTotal.toLocaleString()} off debts · this month` },
                 { id: 'costs', label: 'Operating Costs', value: `KES ${monthCostsTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, accent: 'amber', icon: ShoppingCart, sub: 'expenses + purchases · this month' },
               ].map((card, i) => (
                 <StatCard
@@ -7449,6 +7464,7 @@ export default function NorthernWaterSystemApp() {
           const monthExpenses = state.expenses.filter(e => inMonth(e.date));
           const monthExpensesTotal = monthExpenses.reduce((sum, e) => sum + e.amount, 0);
           const monthPurchasesTotal = state.purchases.filter(p => inMonth(p.date)).reduce((sum, p) => sum + p.totalAmount, 0);
+          const monthCash = collectCashInPeriod(inMonth);
           return (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setBreakdownCard(null)}>
             <div className="bg-white border border-slate-300 rounded-xl p-5 md:p-6 max-w-lg w-full max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
@@ -7457,6 +7473,7 @@ export default function NorthernWaterSystemApp() {
                   {breakdownCard === 'customers' && 'All Customers'}
                   {breakdownCard === 'debt' && 'Outstanding Debts'}
                   {breakdownCard === 'sales' && "This Month's Sales"}
+                  {breakdownCard === 'cash' && "This Month's Cash Collected"}
                   {breakdownCard === 'costs' && "This Month's Costs"}
                 </h3>
                 <button onClick={() => setBreakdownCard(null)} className="text-slate-500 hover:text-slate-900">
@@ -7524,6 +7541,51 @@ export default function NorthernWaterSystemApp() {
                   <div className="flex justify-between p-2 bg-emerald-50 rounded border border-emerald-200 mt-2 text-sm">
                     <span className="text-emerald-600 font-semibold">Total Sales</span>
                     <span className="text-emerald-600 font-bold">KES {monthSales.reduce((sum, s) => sum + s.total, 0).toLocaleString()}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Cash breakdown — what actually came in this month, and where from */}
+              {breakdownCard === 'cash' && (
+                <div className="space-y-2">
+                  <div className="flex justify-between p-2 bg-slate-50 rounded text-sm">
+                    <span className="text-slate-500">Cash Sales (paid at the till)</span>
+                    <span className="text-slate-900 font-semibold">KES {monthCash.cashSalesTotal.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between p-2 bg-slate-50 rounded text-sm">
+                    <span className="text-slate-500">Collected off Debts</span>
+                    <span className="text-slate-900 font-semibold">KES {monthCash.debtPaymentsTotal.toLocaleString()}</span>
+                  </div>
+
+                  <p className="text-slate-500 text-xs font-semibold mt-3 mb-1">Cash Sales</p>
+                  {monthCash.cashSalesList.length === 0 ? (
+                    <p className="text-slate-400 text-xs py-1">No cash sales this month</p>
+                  ) : monthCash.cashSalesList.map((c, i) => (
+                    <div key={`cs-${i}`} className="flex justify-between items-center p-2 bg-slate-100/20 rounded text-xs">
+                      <div>
+                        <p className="text-slate-900">{c.invoice} · {c.customer}</p>
+                        <p className="text-slate-500">{c.date}{c.method ? ` · ${c.method}` : ''}</p>
+                      </div>
+                      <span className="text-emerald-600">KES {c.amount.toLocaleString()}</span>
+                    </div>
+                  ))}
+
+                  <p className="text-slate-500 text-xs font-semibold mt-3 mb-1">Debt Payments</p>
+                  {monthCash.debtPaymentsList.length === 0 ? (
+                    <p className="text-slate-400 text-xs py-1">No debt payments this month</p>
+                  ) : monthCash.debtPaymentsList.map((d, i) => (
+                    <div key={`dp-${i}`} className="flex justify-between items-center p-2 bg-slate-100/20 rounded text-xs">
+                      <div>
+                        <p className="text-slate-900">{d.customer}{d.onAccount ? ' · on account' : ''}</p>
+                        <p className="text-slate-500">{d.date}{d.method ? ` · ${d.method}` : ''}{d.reference ? ` · ${d.reference}` : ''}</p>
+                      </div>
+                      <span className="text-emerald-600">KES {d.amount.toLocaleString()}</span>
+                    </div>
+                  ))}
+
+                  <div className="flex justify-between p-2 bg-emerald-50 rounded border border-emerald-200 mt-2 text-sm">
+                    <span className="text-emerald-600 font-semibold">Total Cash Collected</span>
+                    <span className="text-emerald-600 font-bold">KES {monthCash.totalCollected.toLocaleString()}</span>
                   </div>
                 </div>
               )}
