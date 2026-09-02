@@ -561,22 +561,41 @@ commit;
 --    Anything returned here is PRE-EXISTING drift, not something this file did
 --    — id 97 is the known one. Compare against block 0d before concluding.
 --
--- 3. The table is protected. As a NON-admin (or from any client), a direct
---    write must be refused:
+--    USE A REAL CUSTOMER ID IN CHECKS 3 AND 4. Substitute <real_id> below for
+--    an id that exists. With a non-existent id, a gate that FAILED OPEN would
+--    be stopped by the foreign key instead and return
+--    `violates foreign key constraint`, which reads like a refusal and is not
+--    one. The whole point of these two checks is to tell those apart.
 --
+-- 3. The table is protected — no direct writes, only the RPCs.
+--
+--    NOTE: the Supabase SQL Editor connects as the table OWNER and bypasses
+--    both RLS and table grants, so a plain insert there proves nothing. Assume
+--    the role first, and roll back either way:
+--
+--      begin;
+--      set local role authenticated;
 --      insert into customer_adjustments ("customerId", amount, reason)
---      values (1, 100, 'should not work');
+--      values (<real_id>, 100, 'should not work');
+--      rollback;
 --
---    Expect: permission denied. If this succeeds, section 5 did not apply.
+--    Expect: `permission denied for table customer_adjustments`. If the insert
+--    is accepted, section 5's revoke did not apply.
 --
--- 4. The gate fails closed. From the SQL Editor, where auth.uid() is NULL:
+-- 4. The gate fails closed. From the SQL Editor, where auth.uid() is NULL and
+--    therefore get_my_role() is NULL:
 --
 --      select record_customer_adjustment(
---        '{"customerId":1,"amount":100,"reason":"gate test"}'::jsonb);
+--        ('{"amount":100,"reason":"gate test","customerId":' || <real_id> || '}')::jsonb);
 --
---    Expect: 'only an admin may adjust a customer balance'. If this INSERTS,
---    the gate was written with `<>` instead of `is distinct from` — stop and
---    fix it before anyone uses the feature.
+--    Expect exactly: 'only an admin may adjust a customer balance'.
+--
+--    ANY other outcome is a failure. A returned row means the gate was written
+--    `<>` instead of `is distinct from` and NULL skipped the branch — stop, and
+--    do not merge the client. If it did insert, remove the row:
+--
+--      delete from customer_adjustments where reason = 'gate test';
+--      select recompute_customer_balance(<real_id>);   -- as an admin, from the app
 --
 -- 5. End to end, from the app as an admin, on ONE account first:
 --    a. note the balance,
