@@ -116,14 +116,24 @@
 --
 --     Expect: recompute_customer_balance | t | {"search_path=public, pg_temp"}
 --
--- 0b. Confirm the CURRENT function really is the two-term version. Read the
---     body and check it sums both `sales` and the `"saleId" is null` payments.
---     Do not trust the README — a migration in this database was recorded as
---     applied when it was not, and was caught only by introspection.
+-- 0b. Read the CURRENT function body and diff it against section 2 below.
+--     They must be identical except for `v_adjust` — its declaration, its
+--     select, and its term in the final UPDATE.
 --
 --       select prosrc from pg_proc p
 --         join pg_namespace n on n.oid = p.pronamespace
 --        where n.nspname = 'public' and proname = 'recompute_customer_balance';
+--
+--     THIS CHECK ALREADY EARNED ITS KEEP. Run on 2026-09-02, it showed that
+--     production carries a `for update` row lock and a `return null` for a
+--     missing customer that the text of `025` in this directory does not have.
+--     Section 2 was drafted from `025` and would have silently REMOVED that
+--     lock, reintroducing a lost-update race on balances while adding a term.
+--     Section 2 is now built on the live body instead.
+--
+--     The lesson generalises: this directory is a record of intent, not of
+--     production. Never write `create or replace` against a function you have
+--     not just read out of `pg_proc`.
 --
 -- 0c. Confirm the table does not already exist under a different definition.
 --     Expect zero rows on a first apply.
@@ -206,8 +216,28 @@ create unique index if not exists customer_adjustments_client_key_uniq
 -- =============================================================================
 -- SECTION 2: recompute_customer_balance — the third term
 --
--- Replaces the `025` version. The first two terms are copied from it verbatim;
--- the ONLY change is v_adjust and its inclusion in the final UPDATE.
+-- Built on the LIVE function body, read out of `pg_proc` on 2026-09-02, NOT on
+-- the text of `025` in this directory. THEY ARE NOT THE SAME, and the live one
+-- is the one that matters. What production carries and `025` does not:
+--
+--   * `perform 1 from customers where id = p_customer_id for update;` — a row
+--     lock, so two concurrent money writes against one customer serialise here
+--     instead of racing to set a balance each derived from a stale read. This
+--     is the same class of lost update that `009` fixed for inventory. Dropping
+--     it while adding a term would have traded one bug for an older one.
+--   * `if not found then return null; end if;` — a missing customer returns
+--     null rather than falling through to a location check and a no-op update.
+--   * `v_role := coalesce(get_my_role(), '')` — the null role is flattened
+--     before it is tested, which fails closed the same way the `is distinct
+--     from` comparisons do. Both belts are kept.
+--
+-- Everything above is preserved verbatim. The ONLY changes are `v_adjust`, its
+-- select, and its term in the final UPDATE.
+--
+-- That the repo's `025` and production disagree is worth recording: this file
+-- was drafted against `025` and would have silently removed the row lock. It
+-- was caught by pre-flight check 0b, which reads `prosrc` from the live
+-- catalog. Do not skip that check on the next migration either.
 --
 -- The `v_credit < 0` guard is deliberately left exactly as it was. It is about
 -- the credit pool specifically, and an adjustment must not be able to mask an
@@ -221,45 +251,46 @@ security definer
 set search_path = public, pg_temp
 as $$
 declare
-  v_sales   numeric;
-  v_credit  numeric;
-  v_adjust  numeric;
-  v_role    text;
-  v_loc     text;
-  result    jsonb;
+  v_role     text;
+  v_location text;
+  v_sales    numeric;
+  v_credit   numeric;
+  v_adjust   numeric;
+  result     jsonb;
 begin
   if p_customer_id is null then
     raise exception 'recompute_customer_balance: customer id is required';
   end if;
 
-  v_role := get_my_role();
-
-  -- Fails closed on a NULL role. See the header note.
+  v_role := coalesce(get_my_role(), '');
   if v_role is distinct from 'admin'
      and v_role is distinct from 'manager'
      and v_role is distinct from 'sales' then
     raise exception 'recompute_customer_balance: not permitted';
   end if;
 
+  perform 1 from customers where id = p_customer_id for update;
+  if not found then
+    return null;
+  end if;
+
   if v_role = 'sales' then
-    v_loc := get_my_location();
-    if v_loc is not null
-       and not exists (
-         select 1 from customers c
-          where c.id = p_customer_id and c.location = v_loc
-       ) then
+    v_location := get_my_location();
+    if v_location is not null
+       and (select location from customers where id = p_customer_id)
+           is distinct from v_location then
       raise exception 'recompute_customer_balance: customer % is outside your location', p_customer_id;
     end if;
   end if;
 
-  -- Term 1: what is still unpaid on this customer's invoices.
   select -coalesce(sum(s.total - coalesce(s.paid, 0)), 0)
     into v_sales
     from sales s
    where s."customerId" = p_customer_id;
 
-  -- Term 2: unapplied credit. On-account receipts are positive, the draining
-  -- leg of an application is negative, so the sum is what is still held.
+  -- Unapplied credit: every payment row that names no invoice. On-account
+  -- receipts are positive, the draining leg of an application is negative, so
+  -- the sum is what is still held.
   select coalesce(sum(p.amount), 0)
     into v_credit
     from payments p
@@ -273,7 +304,8 @@ begin
 
   -- Term 3 (027): explicit corrections. No guard on the sign — an adjustment
   -- exists precisely to move a balance to a figure the transactions do not
-  -- support, and either direction is legitimate.
+  -- support, and either direction is legitimate. Covered by the row lock taken
+  -- above, like the two terms before it.
   select coalesce(sum(a.amount), 0)
     into v_adjust
     from customer_adjustments a
