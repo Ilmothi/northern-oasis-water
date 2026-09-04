@@ -781,6 +781,27 @@ export default function NorthernWaterSystemApp() {
     return <p className={className} title={ATTRIBUTION_NOTE[source]}>Recorded by {who}</p>;
   };
 
+  // Who to print as the dispatching person on a delivery note.
+  //
+  // The sale's `created_by` is who entered it, which at the counter is the
+  // person handing the goods over. Turning that id into a NAME is limited by
+  // profiles RLS, not by a UI rule: an admin can read every profile, everyone
+  // else only their own row (001's profiles_select_own / profiles_select_admin).
+  // So a sales user printing a note for their own sale gets their name from
+  // `userProfile`, and anyone printing someone else's sale gets null — the note
+  // then rules a blank line to write the name on, which is honest, rather than
+  // printing the name of whoever happens to be at the screen.
+  const dispatchedByName = (sale) => {
+    const createdBy = sale?.created_by;
+    if (!createdBy) return null;
+    if (createdBy === session?.user?.id) {
+      return userProfile?.full_name || userProfile?.name || userProfile?.email || null;
+    }
+    const staff = staffById[createdBy];
+    if (!staff) return null;
+    return staff.full_name || staff.name || staff.email || null;
+  };
+
   const saveFailureMessage = (error, refusedMessage, whereToCheck, replaySafe = false) => {
     if (error?.timedOut) {
       return `The connection was lost while saving.\n\n` +
@@ -2797,6 +2818,161 @@ export default function NorthernWaterSystemApp() {
     `;
 
     openPrintDocument(htmlContent, 'Please allow pop-ups for this site to download the invoice.');
+  };
+
+  // Build a printable delivery note for a sale and open it for printing / PDF.
+  //
+  // A goods document, not a money one: it lists what left the store and carries
+  // the two signatures of the handover. Unit prices, totals and balance are
+  // deliberately absent — the invoice states the money, this states the goods.
+  // Read-only: renders an existing sale, changes no records.
+  //
+  // The dispatch date is the SALE date, not today's. A note reprinted next week
+  // has to still say when the goods actually went out, or a signed copy and a
+  // reprint of the same delivery would disagree.
+  const downloadDeliveryNoteAsPDF = (sale) => {
+    if (!sale) return;
+    const customer = state.customers.find(c => c.id === sale.customerId);
+    const dispatcher = dispatchedByName(sale);
+
+    const rows = sale.items.map(item => `
+        <tr>
+          <td>${SIZE_LABELS[item.size] || item.size}</td>
+          <td style="text-align:center;">${item.quantity}</td>
+        </tr>`).join('');
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Delivery Note ${escapeHtml(sale.invoiceNumber)}</title>
+        <style>
+          * { box-sizing: border-box; }${PRINT_FONT_FACES}
+          body { font-family: ${PRINT_FONT_STACK}; font-variant-numeric: tabular-nums lining-nums; margin: 0; padding: 32px; color: #1e293b; background: #fff; }
+          .note { max-width: 760px; margin: 0 auto; }
+          .top { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #0369a1; padding-bottom: 16px; }
+          .brand { display: flex; gap: 14px; align-items: center; }
+          .brand img { width: 72px; height: 72px; border-radius: 50%; }
+          .brand h1 { margin: 0; font-size: 20px; color: #0369a1; }
+          .brand p { margin: 2px 0 0; font-size: 12px; color: #64748b; }
+          .seller { text-align: right; font-size: 12px; color: #475569; }
+          .seller strong { color: #0f172a; }
+          .title { text-align: right; margin-top: 18px; }
+          .title h2 { margin: 0; font-size: 28px; letter-spacing: 2px; color: #0f172a; }
+          .meta { margin-top: 6px; font-size: 13px; color: #475569; }
+          .parties { display: flex; justify-content: space-between; gap: 32px; margin-top: 24px; }
+          .parties .label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 4px; }
+          .parties .name { font-size: 16px; font-weight: bold; color: #0f172a; }
+          .parties .sub { font-size: 13px; color: #64748b; }
+          .parties .dispatch { text-align: right; }
+          table { width: 100%; border-collapse: collapse; margin-top: 24px; font-size: 13px; }
+          thead th { background: #0369a1; color: #fff; padding: 10px 12px; text-align: left; }
+          thead th:nth-child(2) { text-align: center; width: 140px; }
+          tbody td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; }
+          tbody tr:nth-child(even) { background: #f8fafc; }
+          .declaration { margin-top: 22px; font-size: 12px; color: #475569; }
+          /* The signatures are the point of the document, so they must never be
+             orphaned onto a second page away from the goods they attest to. */
+          .signatures { display: flex; gap: 40px; margin-top: 36px; page-break-inside: avoid; }
+          .signatures > div { flex: 1; }
+          .signatures .who { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 12px; }
+          .signatures .field { margin-top: 14px; }
+          .signatures .field .cap { font-size: 11px; color: #64748b; }
+          .signatures .filled { font-size: 14px; font-weight: 600; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; }
+          .signatures .blank { border-bottom: 1px solid #94a3b8; height: 26px; }
+          .footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid #e2e8f0; font-size: 11px; color: #94a3b8; text-align: center; }
+          @media print { body { padding: 0; } .note { max-width: 100%; } }
+        </style>
+      </head>
+      <body>
+        <div class="note">
+          <div class="top">
+            <div class="brand">
+              <img src="${OASIS_LOGO}" alt="OASIS Springs" />
+              <div>
+                <h1>${COMPANY.name}</h1>
+                <p>${COMPANY.brand}</p>
+              </div>
+            </div>
+            <div class="seller">
+              <p><strong>Tel:</strong> ${COMPANY.phone}</p>
+              <p><strong>KRA PIN:</strong> ${COMPANY.kraPin}</p>
+            </div>
+          </div>
+
+          <div class="title">
+            <h2>DELIVERY NOTE</h2>
+            <div class="meta"><strong>Ref: ${escapeHtml(sale.invoiceNumber)}</strong></div>
+          </div>
+
+          <div class="parties">
+            <div>
+              <div class="label">Deliver To</div>
+              <div class="name">${escapeHtml(customer?.name || 'Walk-in Customer')}</div>
+              ${customer?.location ? `<div class="sub">${escapeHtml(customer.location)}</div>` : ''}
+              ${customer?.phone ? `<div class="sub">Tel: ${escapeHtml(customer.phone)}</div>` : ''}
+            </div>
+            <div class="dispatch">
+              <div class="label">Dispatch Date</div>
+              <div class="name">${escapeHtml(sale.date)}</div>
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr><th>Description</th><th>Quantity</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+
+          <p class="declaration">Received the goods listed above in good condition and in the quantities shown.</p>
+
+          <div class="signatures">
+            <div>
+              <div class="who">Dispatched By</div>
+              <div class="field">
+                <div class="cap">Name</div>
+                ${dispatcher
+                  ? `<div class="filled">${escapeHtml(dispatcher)}</div>`
+                  : `<div class="blank"></div>`}
+              </div>
+              <div class="field">
+                <div class="cap">Signature</div>
+                <div class="blank"></div>
+              </div>
+              <div class="field">
+                <div class="cap">Date</div>
+                <div class="filled">${escapeHtml(sale.date)}</div>
+              </div>
+            </div>
+            <div>
+              <div class="who">Received By (Customer)</div>
+              <div class="field">
+                <div class="cap">Name</div>
+                <div class="blank"></div>
+              </div>
+              <div class="field">
+                <div class="cap">Signature</div>
+                <div class="blank"></div>
+              </div>
+              <div class="field">
+                <div class="cap">Date</div>
+                <div class="blank"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="footer">
+            <p>This is a delivery note, not a demand for payment. Invoice ${escapeHtml(sale.invoiceNumber)} covers the amount due.</p>
+            <p>${COMPANY.name}</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    openPrintDocument(htmlContent, 'Please allow pop-ups for this site to download the delivery note.');
   };
 
   // Build a printable customer account statement listing only invoices that are
@@ -6129,6 +6305,12 @@ export default function NorthernWaterSystemApp() {
                           >
                             <Download className="w-3 h-3" /> Invoice PDF
                           </button>
+                          <button
+                            onClick={() => downloadDeliveryNoteAsPDF(sale)}
+                            className="flex items-center gap-1 text-xs text-slate-600 hover:text-slate-800 hover:bg-slate-100 px-2 py-1 rounded transition"
+                          >
+                            <Download className="w-3 h-3" /> Delivery Note
+                          </button>
                           {/* RLS only permits admin to delete sales — showing the
                               button to managers produced silent failures. */}
                           {role === 'admin' && (
@@ -7168,10 +7350,16 @@ export default function NorthernWaterSystemApp() {
                   </div>
                   <div className="flex items-center gap-2">
                     <button
+                      onClick={() => downloadDeliveryNoteAsPDF(invoiceDetail)}
+                      className="flex items-center gap-1.5 border border-slate-200 hover:bg-slate-50 text-slate-600 font-medium px-3 py-1.5 rounded-lg transition text-xs"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Delivery Note
+                    </button>
+                    <button
                       onClick={() => downloadInvoiceAsPDF(invoiceDetail)}
                       className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-600 text-white font-medium px-3 py-1.5 rounded-lg transition text-xs"
                     >
-                      <Download className="w-3.5 h-3.5" /> Download / Print
+                      <Download className="w-3.5 h-3.5" /> Invoice
                     </button>
                     <button onClick={() => setInvoiceDetail(null)} className="text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
                   </div>
