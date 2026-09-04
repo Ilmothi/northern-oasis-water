@@ -260,6 +260,25 @@ const SIZE_LABELS = {
   'refill_20L': 'Water Refill 20L'
 };
 
+// Descriptions used on the customer-facing printed documents (invoice, delivery
+// note, statement), where the short on-screen label is not enough to describe what changed
+// hands. The bottled sizes are sold, costed and stocked BY THE CARTON — a sale
+// line's quantity is a carton count, which is why COGS is quantity × cost per
+// carton — so a customer signing for "1.5L × 3" is signing for three cartons,
+// not three bottles, and the document has to say so.
+//
+// 18.9L and the refills are single bottles (BOTTLES_PER_CARTON of 1) and are
+// left exactly as they are. Screen labels are unchanged; this applies to the
+// printed documents only.
+const DOC_SIZE_LABELS = {
+  ...SIZE_LABELS,
+  '0.5L': '0.5L Carton',
+  '1.5L': '1.5L Carton',
+  '5L': '5L Carton'
+};
+
+const documentSizeLabel = (size) => DOC_SIZE_LABELS[size] || size;
+
 // Expense types, each tagged with its P&L treatment:
 //   'operating'  -> counts in the P&L as an operating expense (below gross profit)
 //   'cogs'       -> a raw-material / purchase cost (already in carton costs); recorded but NOT operating
@@ -2717,7 +2736,7 @@ export default function NorthernWaterSystemApp() {
       const amount = item.subtotal || (item.quantity * item.price);
       return `
         <tr>
-          <td>${SIZE_LABELS[item.size] || item.size}</td>
+          <td>${documentSizeLabel(item.size)}</td>
           <td style="text-align:center;">${item.quantity}</td>
           <td style="text-align:right;">${fmt(item.price)}</td>
           <td style="text-align:right;">${fmt(amount)}</td>
@@ -2837,7 +2856,7 @@ export default function NorthernWaterSystemApp() {
 
     const rows = sale.items.map(item => `
         <tr>
-          <td>${SIZE_LABELS[item.size] || item.size}</td>
+          <td>${documentSizeLabel(item.size)}</td>
           <td style="text-align:center;">${item.quantity}</td>
         </tr>`).join('');
 
@@ -3008,7 +3027,7 @@ export default function NorthernWaterSystemApp() {
       .map(s => {
         const charged = s.total || 0;
         const paid = s.paid || 0;
-        const items = (s.items || []).map(i => `${i.quantity}× ${SIZE_LABELS[i.size] || i.size}`).join(', ');
+        const items = (s.items || []).map(i => `${i.quantity}× ${documentSizeLabel(i.size)}`).join(', ');
         return {
           date: s.date,
           ref: s.invoiceNumber || `Sale #${s.id}`,
