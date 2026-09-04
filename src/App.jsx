@@ -261,7 +261,7 @@ const SIZE_LABELS = {
 };
 
 // Descriptions used on the customer-facing printed documents (invoice, delivery
-// note), where the short on-screen label is not enough to describe what changed
+// note, statement), where the short on-screen label is not enough to describe what changed
 // hands. The bottled sizes are sold, costed and stocked BY THE CARTON — a sale
 // line's quantity is a carton count, which is why COGS is quantity × cost per
 // carton — so a customer signing for "1.5L × 3" is signing for three cartons,
@@ -3027,7 +3027,7 @@ export default function NorthernWaterSystemApp() {
       .map(s => {
         const charged = s.total || 0;
         const paid = s.paid || 0;
-        const items = (s.items || []).map(i => `${i.quantity}× ${SIZE_LABELS[i.size] || i.size}`).join(', ');
+        const items = (s.items || []).map(i => `${i.quantity}× ${documentSizeLabel(i.size)}`).join(', ');
         return {
           date: s.date,
           ref: s.invoiceNumber || `Sale #${s.id}`,
