@@ -721,11 +721,21 @@ commit;
 --    not found" check instead, which reads like a refusal and is not one. The
 --    whole point of this check is to tell those two apart.
 --
+--    ROLL THESE BACK. A gate that refuses aborts its own transaction anyway, so
+--    the wrapper costs nothing in the expected case — but if the gate FAILS
+--    OPEN, the bare call writes a real Salary expense into the P&L and a real
+--    payroll row, and you would be cleaning up the thing you were testing for.
+--    Check 4 below is wrapped for the same reason.
+--
+--      begin;
 --      select record_salary_payment(
 --        '{"employeeId":<real_permanent_id>,"month":"2026-01"}'::jsonb);
+--      rollback;
 --
+--      begin;
 --      select record_casual_payout(
 --        '{"start":"2026-01-01","end":"2026-01-07"}'::jsonb);
+--      rollback;
 --
 --    Expect exactly 'only an admin may record a salary payment' and 'only an
 --    admin may record a casual payout'.
@@ -767,4 +777,10 @@ commit;
 --
 --    Expect the same count as before the attempt. Under the old code this is
 --    exactly where the second Salary expense appeared.
+--
+--    Unlike check 5, this one needs no rollback wrapper and cannot be given one
+--    — it runs through the app. It does not need one: the RPC is a single
+--    transaction, so the unique violation on the payroll row takes the expense
+--    down with it. That self-rollback IS the property under test. If an expense
+--    survives this, the function is not atomic and the finding is not closed.
 -- =============================================================================
