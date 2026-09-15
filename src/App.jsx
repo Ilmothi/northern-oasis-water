@@ -671,22 +671,32 @@ export default function NorthernWaterSystemApp() {
   };
 
   // Persist a stock change as deltas. Pass the pre-change and post-change blobs;
-  // returns the fresh { rawMaterials, finishedGoods } from the server, or null
-  // on error (caller decides how to surface it). A no-op change returns the
-  // current state unchanged without a round-trip.
+  // returns { inventory, error } — the fresh { rawMaterials, finishedGoods } from
+  // the server, or a null `inventory` and the error that stopped it. A no-op
+  // change returns the current state unchanged without a round-trip.
+  //
+  // It returns the error rather than just null because a caller cannot write an
+  // honest message without it: a refusal and a timeout call for opposite advice
+  // here. See `inventoryFailureMessage`.
   const persistInventoryDeltas = async (prev, next) => {
     const changes = [];
     diffInventoryLeaves('rawMaterials', prev.rawMaterials, next.rawMaterials, [], changes);
     diffInventoryLeaves('finishedGoods', prev.finishedGoods, next.finishedGoods, [], changes);
     if (changes.length === 0) {
-      return { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods };
+      return {
+        inventory: { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
+        error: null,
+      };
     }
-    const { data, error } = await supabase.rpc('apply_inventory_deltas', { changes });
+    const { data, error } = await withTimeout(supabase.rpc('apply_inventory_deltas', { changes }));
     if (error || !data) {
       console.error('❌ Error applying inventory deltas:', error);
-      return null;
+      return { inventory: null, error: error || { message: 'The server returned no stock figures.' } };
     }
-    return { rawMaterials: data.rawMaterials, finishedGoods: data.finishedGoods };
+    return {
+      inventory: { rawMaterials: data.rawMaterials, finishedGoods: data.finishedGoods },
+      error: null,
+    };
   };
 
   // Merge the authoritative rows a money RPC returns (migration 011) back into
@@ -862,6 +872,36 @@ export default function NorthernWaterSystemApp() {
         `still there, delete it again — asking twice is safe.`;
     }
     return `${refusedMessage}\n\n${error?.message || 'Unknown error'}`;
+  };
+
+  // The stock-side sibling, and the one with teeth. `apply_inventory_deltas`
+  // applies a CHANGE, not a figure, so it is the only write in the app that is
+  // actively unsafe to repeat: sending +40 cartons twice adds 80.
+  //
+  // That inverts the advice these messages have always given. On an ordinary
+  // refusal nothing moved, the quantities are still right, and "run a stock
+  // adjustment to correct it" is correct. On a TIMEOUT the delta may well have
+  // landed, and that same sentence becomes the instruction that breaks the
+  // books — a correction stacked on top of a change that did apply moves the
+  // figures twice, and stock has no audit trail that would make it obvious
+  // afterwards.
+  //
+  // So the timeout branch says the opposite of the refusal branch: look first,
+  // touch nothing.
+  //
+  // `recordOutcome` names what DID succeed ("The purchase was saved"), because
+  // by the time stock is written the record itself is already committed and
+  // saying so is half the information the operator needs.
+  const inventoryFailureMessage = (error, recordOutcome) => {
+    if (error?.timedOut) {
+      return `${recordOutcome}, but the connection was lost while updating stock.\n\n` +
+        `THE STOCK MAY OR MAY NOT HAVE BEEN UPDATED — we never heard back.\n\n` +
+        `Reload and check the quantities BEFORE adjusting anything. A stock ` +
+        `adjustment on top of a change that did apply would move the figures twice.`;
+    }
+    return `${recordOutcome}, but the stock could not be updated — the quantities ` +
+      `are unchanged. Run a stock adjustment to correct them, or reload.\n\n` +
+      `${error?.message || 'Unknown error'}`;
   };
 
   // Identifies one filled-in form, so the database can recognise a resend of
@@ -1582,12 +1622,24 @@ export default function NorthernWaterSystemApp() {
     }
 
     // Set the absolute quantity server-side and re-sync state from the result.
-    const { data, error: rpcError } = await supabase.rpc('set_inventory_value', {
+    const { data, error: rpcError } = await withTimeout(supabase.rpc('set_inventory_value', {
       p_id: invId, p_path: path, p_value: qty
-    });
+    }));
     if (rpcError || !data) {
       console.error('❌ Error setting stock value:', rpcError);
-      alert('The adjustment was logged, but the stock quantity could not be updated. Please retry the adjustment.\n\n' + (rpcError?.message || 'Unknown error'));
+      // Deliberately NOT inventoryFailureMessage. This RPC sets an absolute
+      // figure rather than a delta, which makes it the one stock write that is
+      // safe to repeat — setting 120 twice still leaves 120. So where the delta
+      // path has to say "look before you touch anything", this one can tell the
+      // operator to simply do it again, which is far more useful advice.
+      alert(rpcError?.timedOut
+        ? 'The adjustment was logged, but the connection was lost while setting the quantity.\n\n' +
+          'THE STOCK MAY OR MAY NOT HAVE BEEN UPDATED. Reload and check.\n\n' +
+          'Entering the same count again is safe — this sets the figure rather than ' +
+          'changing it by an amount, so repeating it cannot move the stock twice. ' +
+          'It will leave a second entry in the adjustment log.'
+        : 'The adjustment was logged, but the stock quantity could not be updated — ' +
+          'it is unchanged. Please retry the adjustment.\n\n' + (rpcError?.message || 'Unknown error'));
       return;
     }
     console.log('✅ Stock adjustment saved');
@@ -1632,12 +1684,12 @@ export default function NorthernWaterSystemApp() {
       applyPurchaseItemsToRawMaterials(updatedRawMaterials, editingPurchase.items, -1);
       applyPurchaseItemsToRawMaterials(updatedRawMaterials, validItems, +1);
 
-      const fresh = await persistInventoryDeltas(
+      const { inventory: fresh, error: invError } = await persistInventoryDeltas(
         { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
         { rawMaterials: updatedRawMaterials, finishedGoods: state.finishedGoods }
       );
       if (!fresh) {
-        alert('The purchase was updated, but the raw-material stock could not be adjusted. Please run a stock adjustment or reload.');
+        alert(inventoryFailureMessage(invError, 'The purchase was updated'));
       }
       const updatedPurchases = state.purchases.map(p =>
         p.id === editingPurchase.id ? { ...editingPurchase, ...formData, items: validItems, totalAmount } : p
@@ -1678,12 +1730,12 @@ export default function NorthernWaterSystemApp() {
       const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
       applyPurchaseItemsToRawMaterials(updatedRawMaterials, validItems, +1);
 
-      const fresh = await persistInventoryDeltas(
+      const { inventory: fresh, error: invError } = await persistInventoryDeltas(
         { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
         { rawMaterials: updatedRawMaterials, finishedGoods: state.finishedGoods }
       );
       if (!fresh) {
-        alert('The purchase was saved, but the raw-material stock could not be updated. Please run a stock adjustment or reload.');
+        alert(inventoryFailureMessage(invError, 'The purchase was saved'));
       }
       setState({
         ...state,
@@ -1714,12 +1766,12 @@ export default function NorthernWaterSystemApp() {
     const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
     applyPurchaseItemsToRawMaterials(updatedRawMaterials, purchase.items, -1);
 
-    const fresh = await persistInventoryDeltas(
+    const { inventory: fresh, error: invError } = await persistInventoryDeltas(
       { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
       { rawMaterials: updatedRawMaterials, finishedGoods: state.finishedGoods }
     );
     if (!fresh) {
-      alert('The purchase was deleted, but the raw-material stock could not be reversed. Please run a stock adjustment or reload.');
+      alert(inventoryFailureMessage(invError, 'The purchase was deleted'));
     }
     setState({
       ...state,
