@@ -53,6 +53,7 @@ functions** (`prosecdef`, `proconfig`). See `docs/audit-2026-07-30-rls.md`.
 | `025_on_account_credit.sql` | Overpayment becomes held credit. Adds `payments.kind`, makes `payments."saleId"` nullable, and **extends the balance formula** to `-sum(sales.total - sales.paid) + unapplied credit`. Adds `apply_credit`; guards `delete_payment` and `delete_sale` against stranding half a credit application. **Applied 2026-08-29**, probe-verified, PR #37 (`5658b7d`). 🛑 **Never re-apply** — `027` added a third term that a re-apply of this file would silently remove |
 | `026_production_requires_materials.sql` | Refuses a production run that would drive any raw material below zero, by wiring `020`'s `assert_stock_not_negative` into `record_production` — the last decreasing write path without it. Closes the gap `020` deliberately deferred. No figure moved; it only refuses future writes. **Applied 2026-08-31**, PR #39 (`beb0ae9`) |
 | `027_customer_adjustments.sql` | New `customer_adjustments` table (RLS + policies defined in the same file) and **a third term in the balance formula**: `-sum(unpaid invoices) + credit held + adjustments`. Adds admin-only `record_customer_adjustment` / `delete_customer_adjustment`, both failing CLOSED on a null role. Inert on apply — the term is zero until an adjustment is posted. Moved Debtors and Aging only; never Cash Collected, the P&L or stock. **Applied 2026-09-02**, PR #43 (`f77c7c2`); the Loglogo corrections were entered the same day |
+| `028_atomic_payroll.sql` | Closes the payroll gap — finding 1 of `docs/audit-2026-09-08.md`, open since 2026-08-08. Unique index on `payroll_payments (type, employee_id, period_label)`, `expenses.client_key` for idempotency, and atomic `record_salary_payment` / `record_casual_payout`, so a Salary expense can no longer be left standing without its payroll row. Both gates fail CLOSED on a null role. Net pay, casual pay and the runs a payout covers are DERIVED server-side; the client sends its own figure only as a cross-check. No figure moves — it only refuses future duplicates. **Applied 2026-09-15**, ahead of its client (branch `guard-payroll`), which is the safe order and the one the file requires |
 
 Apply dates were not recorded before this file existed. Known: `007` on
 2026-07-02; `008` and `009` on 2026-07-22; `010`, `011` and `012` on 2026-07-28;
@@ -128,7 +129,9 @@ baseline by default.
 | File | What it does |
 |------|--------------|
 | `018_settle_customer_balances.sql` | 🛑 **DO NOT APPLY — superseded, and now actively destructive.** See the warning below |
-| `028_atomic_payroll.sql` | Closes the payroll gap — finding 1 of `docs/audit-2026-09-08.md`, open since 2026-08-08. Unique index on `payroll_payments (type, employee_id, period_label)`, `expenses.client_key` for idempotency, and atomic `record_salary_payment` / `record_casual_payout`, so a Salary expense can no longer be left standing without its payroll row. Both gates fail CLOSED on a null role. Net pay, casual pay and the runs a payout covers are now DERIVED server-side; the client sends its own figure only as a cross-check. **No figure moves — it only refuses future duplicates.** Requires `021` and `027`. Apply BEFORE its client, which has no fallback path |
+
+`018` is the only file in this table, and it is not outstanding work — it is a
+file that must never run. There is nothing here waiting to be applied.
 
 > **Corrected 2026-09-15.** This table listed `024`–`027` as pending for two
 > weeks after all four went live — finding 2 of `docs/audit-2026-09-08.md`. They
@@ -160,7 +163,8 @@ do not run it.
 `019`, `020` and `021` moved to the applied table on 2026-08-04;
 `022` and `023` on 2026-08-14. `024`, `025`, `026` and `027` were applied between
 2026-08-29 and 2026-09-02 but were only **moved to the applied table on
-2026-09-15**, a fortnight late — see the correction note above.
+2026-09-15**, a fortnight late — see the correction note above. `028` was applied
+and recorded the same day, which is how it should go.
 
 > **The notes that follow on `024`–`027` are pre-apply guidance, kept as
 > history.** All four are live; nothing below is still to be done. The pre-flight
