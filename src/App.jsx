@@ -3684,7 +3684,7 @@ export default function NorthernWaterSystemApp() {
     // cartons — once as plant stock, once as consignment stock, both feeding
     // calculateTotalAssets. created_by and the stock delta are set server-side,
     // and the "enough at the plant" limit is re-checked there under the row lock.
-    const { data, error } = await supabase.rpc('consignment_move_stock', {
+    const { data, error } = await withTimeout(supabase.rpc('consignment_move_stock', {
       p_shop_id: shopId,
       p_type: 'deliver',
       p_movements: lines.map(l => ({
@@ -3693,11 +3693,15 @@ export default function NorthernWaterSystemApp() {
         date: formData.date || localDateString(),
         note: formData.note || null,
       })),
-    });
+    }));
 
     if (error || !data?.movements) {
       console.error('❌ Error saving consignment delivery:', error);
-      alert('Could not record this delivery — nothing was changed. Please try again.\n\n' + (error?.message || 'Unknown error'));
+      alert(saveFailureMessage(
+        error,
+        'Could not record this delivery — nothing was changed. The plant stock and the shop\'s stock are both as they were.',
+        "this shop's stock movements"
+      ));
       return;
     }
 
@@ -3731,7 +3735,7 @@ export default function NorthernWaterSystemApp() {
     // much" limit is re-derived server-side from the ledger after the rows are
     // inserted, so a stale local copy of the movements can no longer let a shop
     // hand back more than it has.
-    const { data, error } = await supabase.rpc('consignment_move_stock', {
+    const { data, error } = await withTimeout(supabase.rpc('consignment_move_stock', {
       p_shop_id: shopId,
       p_type: 'return',
       p_movements: lines.map(l => ({
@@ -3740,11 +3744,15 @@ export default function NorthernWaterSystemApp() {
         date: formData.date || localDateString(),
         note: formData.note || null,
       })),
-    });
+    }));
 
     if (error || !data?.movements) {
       console.error('❌ Error saving consignment return:', error);
-      alert('Could not record this take-back — nothing was changed. Please try again.\n\n' + (error?.message || 'Unknown error'));
+      alert(saveFailureMessage(
+        error,
+        'Could not record this take-back — nothing was changed. The shop\'s stock and the plant stock are both as they were.',
+        "this shop's stock movements"
+      ));
       return;
     }
 
@@ -3808,12 +3816,16 @@ export default function NorthernWaterSystemApp() {
 
     // One transaction: the sale, the 'sold' movements that reference it, and the
     // shop's debt. The books and the stock ledger can no longer separate.
-    const { data, error } = await supabase.rpc('consignment_post_sale', {
+    const { data, error } = await withTimeout(supabase.rpc('consignment_post_sale', {
       p_sale: newSale, p_movements: rows,
-    });
+    }));
     if (error || !data?.sale) {
       console.error('❌ Error recording consignment sale:', error);
-      alert('Could not record this sale — nothing was changed. The shop\'s stock and balance are as they were.\n\n' + (error?.message || 'Unknown error'));
+      alert(saveFailureMessage(
+        error,
+        'Could not record this sale — nothing was changed. The shop\'s stock and balance are as they were.',
+        "this shop's sales"
+      ));
       return;
     }
 
@@ -3877,12 +3889,16 @@ export default function NorthernWaterSystemApp() {
     // the seeded stock and the debt reduction all land together. The server
     // reduces the balance by -(total - paid), which for a negative total is a
     // credit. Only an admin may post either half (migration 010).
-    const { data, error } = await supabase.rpc('consignment_post_sale', {
+    const { data, error } = await withTimeout(supabase.rpc('consignment_post_sale', {
       p_sale: creditNote, p_movements: rows,
-    });
+    }));
     if (error || !data?.sale) {
       console.error('❌ Error recording reconciliation:', error);
-      alert('Could not record the reconciliation — nothing was changed. The shop\'s stock and debt are as they were.\n\n' + (error?.message || 'Unknown error'));
+      alert(saveFailureMessage(
+        error,
+        'Could not record the reconciliation — nothing was changed. The shop\'s stock and debt are as they were.',
+        "this shop's movement history"
+      ));
       return;
     }
 
@@ -4397,7 +4413,7 @@ export default function NorthernWaterSystemApp() {
       `Reason: ${reason}`
     )) return;
 
-    const { data, error } = await supabase.rpc('record_customer_adjustment', {
+    const { data, error } = await withTimeout(supabase.rpc('record_customer_adjustment', {
       p_adj: {
         customerId: formData.customerId,
         amount: delta,
@@ -4406,11 +4422,18 @@ export default function NorthernWaterSystemApp() {
         kind: formData.kind || 'opening_balance',
         client_key: formData.clientKey || null,
       },
-    });
+    }));
 
     if (error) {
       console.error('❌ Error recording balance adjustment:', error);
-      alert('Could not record this adjustment — nothing was changed. The balance is as it was.\n\n' + (error.message || 'Unknown error'));
+      // replaySafe: this form carries a client_key (027), so pressing Save again
+      // after a lost connection is genuinely safe and staff should be told so.
+      alert(saveFailureMessage(
+        error,
+        'Could not record this adjustment — nothing was changed. The balance is as it was.',
+        "this customer's balance history",
+        true
+      ));
       return;
     }
 
@@ -4439,10 +4462,19 @@ export default function NorthernWaterSystemApp() {
       `Debtors and Aging change by the same amount. Cash and the P&L are unaffected.`
     )) return;
 
-    const { data, error } = await supabase.rpc('delete_customer_adjustment', { p_id: id });
+    const { data, error } = await withTimeout(supabase.rpc('delete_customer_adjustment', { p_id: id }));
     if (error) {
       console.error('❌ Error removing balance adjustment:', error);
-      alert('Could not remove this adjustment — nothing was changed.\n\n' + (error.message || 'Unknown error'));
+      // Not saveFailureMessage: every word of its timeout branch is about a form
+      // that might get saved twice, and none of it is true of a delete. The
+      // honest advice here is different — a removal that already happened cannot
+      // happen again, so the risk is not a duplicate, it is not knowing which
+      // side of the line you are on.
+      alert(error.timedOut
+        ? 'The connection was lost while removing this adjustment.\n\n' +
+          'THIS MAY OR MAY NOT HAVE BEEN REMOVED. Reload and look at the customer: ' +
+          'if the adjustment is gone it worked, and if it is still there, remove it again.'
+        : 'Could not remove this adjustment — nothing was changed.\n\n' + (error.message || 'Unknown error'));
       return;
     }
 
