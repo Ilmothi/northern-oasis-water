@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Word lock files (left behind when an audit doc is open in Word)
+~$*
