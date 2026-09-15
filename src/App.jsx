@@ -842,6 +842,28 @@ export default function NorthernWaterSystemApp() {
     return `${refusedMessage}\n\n${error?.message || 'Unknown error'}`;
   };
 
+  // The delete-side sibling of the above, and it exists because that helper's
+  // timeout wording is wrong here in every particular.
+  //
+  // A save that may or may not have landed risks a DUPLICATE, so its advice has
+  // to be about not entering the record twice. A delete that may or may not have
+  // landed cannot happen twice — the row is either gone or it is not, and asking
+  // again for the same row to be deleted is harmless either way. So the only
+  // thing at risk is knowing which side of the line you are on, and the only
+  // useful advice is to go and look.
+  //
+  // `whatToCheck` completes "Reload and check ..." and should name the thing the
+  // operator can see, not the table it lives in.
+  const deleteFailureMessage = (error, refusedMessage, whatToCheck) => {
+    if (error?.timedOut) {
+      return `The connection was lost while deleting.\n\n` +
+        `THIS MAY OR MAY NOT HAVE BEEN DELETED — we never heard back.\n\n` +
+        `Reload and check ${whatToCheck}. If it is gone, it worked. If it is ` +
+        `still there, delete it again — asking twice is safe.`;
+    }
+    return `${refusedMessage}\n\n${error?.message || 'Unknown error'}`;
+  };
+
   // Identifies one filled-in form, so the database can recognise a resend of
   // that same form and return what it already saved instead of saving it again.
   // Generated when the form opens and kept for as long as it stays open, which
@@ -3403,10 +3425,14 @@ export default function NorthernWaterSystemApp() {
     // One transaction: linked payments, the sale, the returned cartons and the
     // balance reversal all succeed together or none of them happen. There is no
     // longer a "payments deleted but sale survived" state to compensate for.
-    const { data, error } = await supabase.rpc('delete_sale', { p_sale_id: id });
+    const { data, error } = await withTimeout(supabase.rpc('delete_sale', { p_sale_id: id }));
     if (error) {
       console.error('❌ Error deleting sale:', error);
-      alert('Could not delete this sale — nothing was changed. The sale, its payments, the stock and the balance are all as they were.\n\n' + (error.message || 'Unknown error'));
+      alert(deleteFailureMessage(
+        error,
+        'Could not delete this sale — nothing was changed. The sale, its payments, the stock and the balance are all as they were.',
+        "the customer's sales"
+      ));
       return;
     }
 
@@ -3435,10 +3461,14 @@ export default function NorthernWaterSystemApp() {
     if (!log) return;
     if (!confirm('Delete this production log? This will reverse the raw materials used and the finished goods produced. This cannot be undone.')) return;
 
-    const { data, error } = await supabase.rpc('delete_production', { p_id: id });
+    const { data, error } = await withTimeout(supabase.rpc('delete_production', { p_id: id }));
     if (error) {
       console.error('❌ Error deleting production log:', error);
-      alert('Could not delete this production log — nothing was changed. Please try again.\n\n' + (error.message || 'Unknown error'));
+      alert(deleteFailureMessage(
+        error,
+        'Could not delete this production log — nothing was changed. The raw materials and finished goods are exactly as they were.',
+        'the production log list'
+      ));
       return;
     }
 
@@ -4293,7 +4323,11 @@ export default function NorthernWaterSystemApp() {
     );
     if (error) {
       console.error('❌ Error deleting receipt:', error);
-      alert('Could not delete this receipt — nothing was changed. Every payment, invoice and balance is exactly as it was.\n\n' + (error.message || 'Unknown error'));
+      alert(deleteFailureMessage(
+        error,
+        'Could not delete this receipt — nothing was changed. Every payment, invoice and balance is exactly as it was.',
+        "the customer's payment history"
+      ));
       return;
     }
 
@@ -4330,10 +4364,14 @@ export default function NorthernWaterSystemApp() {
     // One transaction: the payment row, the invoice's paid/status and the
     // customer's balance are reversed together, so the payment can no longer
     // vanish while the invoice still shows it as paid.
-    const { data, error } = await supabase.rpc('delete_payment', { p_payment_id: id });
+    const { data, error } = await withTimeout(supabase.rpc('delete_payment', { p_payment_id: id }));
     if (error) {
       console.error('❌ Error deleting payment:', error);
-      alert('Could not delete this payment — nothing was changed. The payment, the invoice and the balance are all as they were.\n\n' + (error.message || 'Unknown error'));
+      alert(deleteFailureMessage(
+        error,
+        'Could not delete this payment — nothing was changed. The payment, the invoice and the balance are all as they were.',
+        "the customer's payment history"
+      ));
       return;
     }
 
@@ -4465,16 +4503,11 @@ export default function NorthernWaterSystemApp() {
     const { data, error } = await withTimeout(supabase.rpc('delete_customer_adjustment', { p_id: id }));
     if (error) {
       console.error('❌ Error removing balance adjustment:', error);
-      // Not saveFailureMessage: every word of its timeout branch is about a form
-      // that might get saved twice, and none of it is true of a delete. The
-      // honest advice here is different — a removal that already happened cannot
-      // happen again, so the risk is not a duplicate, it is not knowing which
-      // side of the line you are on.
-      alert(error.timedOut
-        ? 'The connection was lost while removing this adjustment.\n\n' +
-          'THIS MAY OR MAY NOT HAVE BEEN REMOVED. Reload and look at the customer: ' +
-          'if the adjustment is gone it worked, and if it is still there, remove it again.'
-        : 'Could not remove this adjustment — nothing was changed.\n\n' + (error.message || 'Unknown error'));
+      alert(deleteFailureMessage(
+        error,
+        'Could not remove this adjustment — nothing was changed. The balance is as it was.',
+        "the customer's balance history"
+      ));
       return;
     }
 
