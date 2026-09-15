@@ -671,22 +671,32 @@ export default function NorthernWaterSystemApp() {
   };
 
   // Persist a stock change as deltas. Pass the pre-change and post-change blobs;
-  // returns the fresh { rawMaterials, finishedGoods } from the server, or null
-  // on error (caller decides how to surface it). A no-op change returns the
-  // current state unchanged without a round-trip.
+  // returns { inventory, error } — the fresh { rawMaterials, finishedGoods } from
+  // the server, or a null `inventory` and the error that stopped it. A no-op
+  // change returns the current state unchanged without a round-trip.
+  //
+  // It returns the error rather than just null because a caller cannot write an
+  // honest message without it: a refusal and a timeout call for opposite advice
+  // here. See `inventoryFailureMessage`.
   const persistInventoryDeltas = async (prev, next) => {
     const changes = [];
     diffInventoryLeaves('rawMaterials', prev.rawMaterials, next.rawMaterials, [], changes);
     diffInventoryLeaves('finishedGoods', prev.finishedGoods, next.finishedGoods, [], changes);
     if (changes.length === 0) {
-      return { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods };
+      return {
+        inventory: { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
+        error: null,
+      };
     }
-    const { data, error } = await supabase.rpc('apply_inventory_deltas', { changes });
+    const { data, error } = await withTimeout(supabase.rpc('apply_inventory_deltas', { changes }));
     if (error || !data) {
       console.error('❌ Error applying inventory deltas:', error);
-      return null;
+      return { inventory: null, error: error || { message: 'The server returned no stock figures.' } };
     }
-    return { rawMaterials: data.rawMaterials, finishedGoods: data.finishedGoods };
+    return {
+      inventory: { rawMaterials: data.rawMaterials, finishedGoods: data.finishedGoods },
+      error: null,
+    };
   };
 
   // Merge the authoritative rows a money RPC returns (migration 011) back into
@@ -840,6 +850,58 @@ export default function NorthernWaterSystemApp() {
           : 'If it is already there, close this form — pressing Save again would record it a second time.');
     }
     return `${refusedMessage}\n\n${error?.message || 'Unknown error'}`;
+  };
+
+  // The delete-side sibling of the above, and it exists because that helper's
+  // timeout wording is wrong here in every particular.
+  //
+  // A save that may or may not have landed risks a DUPLICATE, so its advice has
+  // to be about not entering the record twice. A delete that may or may not have
+  // landed cannot happen twice — the row is either gone or it is not, and asking
+  // again for the same row to be deleted is harmless either way. So the only
+  // thing at risk is knowing which side of the line you are on, and the only
+  // useful advice is to go and look.
+  //
+  // `whatToCheck` completes "Reload and check ..." and should name the thing the
+  // operator can see, not the table it lives in.
+  const deleteFailureMessage = (error, refusedMessage, whatToCheck) => {
+    if (error?.timedOut) {
+      return `The connection was lost while deleting.\n\n` +
+        `THIS MAY OR MAY NOT HAVE BEEN DELETED — we never heard back.\n\n` +
+        `Reload and check ${whatToCheck}. If it is gone, it worked. If it is ` +
+        `still there, delete it again — asking twice is safe.`;
+    }
+    return `${refusedMessage}\n\n${error?.message || 'Unknown error'}`;
+  };
+
+  // The stock-side sibling, and the one with teeth. `apply_inventory_deltas`
+  // applies a CHANGE, not a figure, so it is the only write in the app that is
+  // actively unsafe to repeat: sending +40 cartons twice adds 80.
+  //
+  // That inverts the advice these messages have always given. On an ordinary
+  // refusal nothing moved, the quantities are still right, and "run a stock
+  // adjustment to correct it" is correct. On a TIMEOUT the delta may well have
+  // landed, and that same sentence becomes the instruction that breaks the
+  // books — a correction stacked on top of a change that did apply moves the
+  // figures twice, and stock has no audit trail that would make it obvious
+  // afterwards.
+  //
+  // So the timeout branch says the opposite of the refusal branch: look first,
+  // touch nothing.
+  //
+  // `recordOutcome` names what DID succeed ("The purchase was saved"), because
+  // by the time stock is written the record itself is already committed and
+  // saying so is half the information the operator needs.
+  const inventoryFailureMessage = (error, recordOutcome) => {
+    if (error?.timedOut) {
+      return `${recordOutcome}, but the connection was lost while updating stock.\n\n` +
+        `THE STOCK MAY OR MAY NOT HAVE BEEN UPDATED — we never heard back.\n\n` +
+        `Reload and check the quantities BEFORE adjusting anything. A stock ` +
+        `adjustment on top of a change that did apply would move the figures twice.`;
+    }
+    return `${recordOutcome}, but the stock could not be updated — the quantities ` +
+      `are unchanged. Run a stock adjustment to correct them, or reload.\n\n` +
+      `${error?.message || 'Unknown error'}`;
   };
 
   // Identifies one filled-in form, so the database can recognise a resend of
@@ -1560,12 +1622,24 @@ export default function NorthernWaterSystemApp() {
     }
 
     // Set the absolute quantity server-side and re-sync state from the result.
-    const { data, error: rpcError } = await supabase.rpc('set_inventory_value', {
+    const { data, error: rpcError } = await withTimeout(supabase.rpc('set_inventory_value', {
       p_id: invId, p_path: path, p_value: qty
-    });
+    }));
     if (rpcError || !data) {
       console.error('❌ Error setting stock value:', rpcError);
-      alert('The adjustment was logged, but the stock quantity could not be updated. Please retry the adjustment.\n\n' + (rpcError?.message || 'Unknown error'));
+      // Deliberately NOT inventoryFailureMessage. This RPC sets an absolute
+      // figure rather than a delta, which makes it the one stock write that is
+      // safe to repeat — setting 120 twice still leaves 120. So where the delta
+      // path has to say "look before you touch anything", this one can tell the
+      // operator to simply do it again, which is far more useful advice.
+      alert(rpcError?.timedOut
+        ? 'The adjustment was logged, but the connection was lost while setting the quantity.\n\n' +
+          'THE STOCK MAY OR MAY NOT HAVE BEEN UPDATED. Reload and check.\n\n' +
+          'Entering the same count again is safe — this sets the figure rather than ' +
+          'changing it by an amount, so repeating it cannot move the stock twice. ' +
+          'It will leave a second entry in the adjustment log.'
+        : 'The adjustment was logged, but the stock quantity could not be updated — ' +
+          'it is unchanged. Please retry the adjustment.\n\n' + (rpcError?.message || 'Unknown error'));
       return;
     }
     console.log('✅ Stock adjustment saved');
@@ -1610,12 +1684,12 @@ export default function NorthernWaterSystemApp() {
       applyPurchaseItemsToRawMaterials(updatedRawMaterials, editingPurchase.items, -1);
       applyPurchaseItemsToRawMaterials(updatedRawMaterials, validItems, +1);
 
-      const fresh = await persistInventoryDeltas(
+      const { inventory: fresh, error: invError } = await persistInventoryDeltas(
         { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
         { rawMaterials: updatedRawMaterials, finishedGoods: state.finishedGoods }
       );
       if (!fresh) {
-        alert('The purchase was updated, but the raw-material stock could not be adjusted. Please run a stock adjustment or reload.');
+        alert(inventoryFailureMessage(invError, 'The purchase was updated'));
       }
       const updatedPurchases = state.purchases.map(p =>
         p.id === editingPurchase.id ? { ...editingPurchase, ...formData, items: validItems, totalAmount } : p
@@ -1656,12 +1730,12 @@ export default function NorthernWaterSystemApp() {
       const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
       applyPurchaseItemsToRawMaterials(updatedRawMaterials, validItems, +1);
 
-      const fresh = await persistInventoryDeltas(
+      const { inventory: fresh, error: invError } = await persistInventoryDeltas(
         { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
         { rawMaterials: updatedRawMaterials, finishedGoods: state.finishedGoods }
       );
       if (!fresh) {
-        alert('The purchase was saved, but the raw-material stock could not be updated. Please run a stock adjustment or reload.');
+        alert(inventoryFailureMessage(invError, 'The purchase was saved'));
       }
       setState({
         ...state,
@@ -1692,12 +1766,12 @@ export default function NorthernWaterSystemApp() {
     const updatedRawMaterials = JSON.parse(JSON.stringify(state.rawMaterials));
     applyPurchaseItemsToRawMaterials(updatedRawMaterials, purchase.items, -1);
 
-    const fresh = await persistInventoryDeltas(
+    const { inventory: fresh, error: invError } = await persistInventoryDeltas(
       { rawMaterials: state.rawMaterials, finishedGoods: state.finishedGoods },
       { rawMaterials: updatedRawMaterials, finishedGoods: state.finishedGoods }
     );
     if (!fresh) {
-      alert('The purchase was deleted, but the raw-material stock could not be reversed. Please run a stock adjustment or reload.');
+      alert(inventoryFailureMessage(invError, 'The purchase was deleted'));
     }
     setState({
       ...state,
@@ -3403,10 +3477,14 @@ export default function NorthernWaterSystemApp() {
     // One transaction: linked payments, the sale, the returned cartons and the
     // balance reversal all succeed together or none of them happen. There is no
     // longer a "payments deleted but sale survived" state to compensate for.
-    const { data, error } = await supabase.rpc('delete_sale', { p_sale_id: id });
+    const { data, error } = await withTimeout(supabase.rpc('delete_sale', { p_sale_id: id }));
     if (error) {
       console.error('❌ Error deleting sale:', error);
-      alert('Could not delete this sale — nothing was changed. The sale, its payments, the stock and the balance are all as they were.\n\n' + (error.message || 'Unknown error'));
+      alert(deleteFailureMessage(
+        error,
+        'Could not delete this sale — nothing was changed. The sale, its payments, the stock and the balance are all as they were.',
+        "the customer's sales"
+      ));
       return;
     }
 
@@ -3435,10 +3513,14 @@ export default function NorthernWaterSystemApp() {
     if (!log) return;
     if (!confirm('Delete this production log? This will reverse the raw materials used and the finished goods produced. This cannot be undone.')) return;
 
-    const { data, error } = await supabase.rpc('delete_production', { p_id: id });
+    const { data, error } = await withTimeout(supabase.rpc('delete_production', { p_id: id }));
     if (error) {
       console.error('❌ Error deleting production log:', error);
-      alert('Could not delete this production log — nothing was changed. Please try again.\n\n' + (error.message || 'Unknown error'));
+      alert(deleteFailureMessage(
+        error,
+        'Could not delete this production log — nothing was changed. The raw materials and finished goods are exactly as they were.',
+        'the production log list'
+      ));
       return;
     }
 
@@ -3684,7 +3766,7 @@ export default function NorthernWaterSystemApp() {
     // cartons — once as plant stock, once as consignment stock, both feeding
     // calculateTotalAssets. created_by and the stock delta are set server-side,
     // and the "enough at the plant" limit is re-checked there under the row lock.
-    const { data, error } = await supabase.rpc('consignment_move_stock', {
+    const { data, error } = await withTimeout(supabase.rpc('consignment_move_stock', {
       p_shop_id: shopId,
       p_type: 'deliver',
       p_movements: lines.map(l => ({
@@ -3693,11 +3775,15 @@ export default function NorthernWaterSystemApp() {
         date: formData.date || localDateString(),
         note: formData.note || null,
       })),
-    });
+    }));
 
     if (error || !data?.movements) {
       console.error('❌ Error saving consignment delivery:', error);
-      alert('Could not record this delivery — nothing was changed. Please try again.\n\n' + (error?.message || 'Unknown error'));
+      alert(saveFailureMessage(
+        error,
+        'Could not record this delivery — nothing was changed. The plant stock and the shop\'s stock are both as they were.',
+        "this shop's stock movements"
+      ));
       return;
     }
 
@@ -3731,7 +3817,7 @@ export default function NorthernWaterSystemApp() {
     // much" limit is re-derived server-side from the ledger after the rows are
     // inserted, so a stale local copy of the movements can no longer let a shop
     // hand back more than it has.
-    const { data, error } = await supabase.rpc('consignment_move_stock', {
+    const { data, error } = await withTimeout(supabase.rpc('consignment_move_stock', {
       p_shop_id: shopId,
       p_type: 'return',
       p_movements: lines.map(l => ({
@@ -3740,11 +3826,15 @@ export default function NorthernWaterSystemApp() {
         date: formData.date || localDateString(),
         note: formData.note || null,
       })),
-    });
+    }));
 
     if (error || !data?.movements) {
       console.error('❌ Error saving consignment return:', error);
-      alert('Could not record this take-back — nothing was changed. Please try again.\n\n' + (error?.message || 'Unknown error'));
+      alert(saveFailureMessage(
+        error,
+        'Could not record this take-back — nothing was changed. The shop\'s stock and the plant stock are both as they were.',
+        "this shop's stock movements"
+      ));
       return;
     }
 
@@ -3808,12 +3898,16 @@ export default function NorthernWaterSystemApp() {
 
     // One transaction: the sale, the 'sold' movements that reference it, and the
     // shop's debt. The books and the stock ledger can no longer separate.
-    const { data, error } = await supabase.rpc('consignment_post_sale', {
+    const { data, error } = await withTimeout(supabase.rpc('consignment_post_sale', {
       p_sale: newSale, p_movements: rows,
-    });
+    }));
     if (error || !data?.sale) {
       console.error('❌ Error recording consignment sale:', error);
-      alert('Could not record this sale — nothing was changed. The shop\'s stock and balance are as they were.\n\n' + (error?.message || 'Unknown error'));
+      alert(saveFailureMessage(
+        error,
+        'Could not record this sale — nothing was changed. The shop\'s stock and balance are as they were.',
+        "this shop's sales"
+      ));
       return;
     }
 
@@ -3877,12 +3971,16 @@ export default function NorthernWaterSystemApp() {
     // the seeded stock and the debt reduction all land together. The server
     // reduces the balance by -(total - paid), which for a negative total is a
     // credit. Only an admin may post either half (migration 010).
-    const { data, error } = await supabase.rpc('consignment_post_sale', {
+    const { data, error } = await withTimeout(supabase.rpc('consignment_post_sale', {
       p_sale: creditNote, p_movements: rows,
-    });
+    }));
     if (error || !data?.sale) {
       console.error('❌ Error recording reconciliation:', error);
-      alert('Could not record the reconciliation — nothing was changed. The shop\'s stock and debt are as they were.\n\n' + (error?.message || 'Unknown error'));
+      alert(saveFailureMessage(
+        error,
+        'Could not record the reconciliation — nothing was changed. The shop\'s stock and debt are as they were.',
+        "this shop's movement history"
+      ));
       return;
     }
 
@@ -4277,7 +4375,11 @@ export default function NorthernWaterSystemApp() {
     );
     if (error) {
       console.error('❌ Error deleting receipt:', error);
-      alert('Could not delete this receipt — nothing was changed. Every payment, invoice and balance is exactly as it was.\n\n' + (error.message || 'Unknown error'));
+      alert(deleteFailureMessage(
+        error,
+        'Could not delete this receipt — nothing was changed. Every payment, invoice and balance is exactly as it was.',
+        "the customer's payment history"
+      ));
       return;
     }
 
@@ -4314,10 +4416,14 @@ export default function NorthernWaterSystemApp() {
     // One transaction: the payment row, the invoice's paid/status and the
     // customer's balance are reversed together, so the payment can no longer
     // vanish while the invoice still shows it as paid.
-    const { data, error } = await supabase.rpc('delete_payment', { p_payment_id: id });
+    const { data, error } = await withTimeout(supabase.rpc('delete_payment', { p_payment_id: id }));
     if (error) {
       console.error('❌ Error deleting payment:', error);
-      alert('Could not delete this payment — nothing was changed. The payment, the invoice and the balance are all as they were.\n\n' + (error.message || 'Unknown error'));
+      alert(deleteFailureMessage(
+        error,
+        'Could not delete this payment — nothing was changed. The payment, the invoice and the balance are all as they were.',
+        "the customer's payment history"
+      ));
       return;
     }
 
@@ -4397,7 +4503,7 @@ export default function NorthernWaterSystemApp() {
       `Reason: ${reason}`
     )) return;
 
-    const { data, error } = await supabase.rpc('record_customer_adjustment', {
+    const { data, error } = await withTimeout(supabase.rpc('record_customer_adjustment', {
       p_adj: {
         customerId: formData.customerId,
         amount: delta,
@@ -4406,11 +4512,18 @@ export default function NorthernWaterSystemApp() {
         kind: formData.kind || 'opening_balance',
         client_key: formData.clientKey || null,
       },
-    });
+    }));
 
     if (error) {
       console.error('❌ Error recording balance adjustment:', error);
-      alert('Could not record this adjustment — nothing was changed. The balance is as it was.\n\n' + (error.message || 'Unknown error'));
+      // replaySafe: this form carries a client_key (027), so pressing Save again
+      // after a lost connection is genuinely safe and staff should be told so.
+      alert(saveFailureMessage(
+        error,
+        'Could not record this adjustment — nothing was changed. The balance is as it was.',
+        "this customer's balance history",
+        true
+      ));
       return;
     }
 
@@ -4439,10 +4552,14 @@ export default function NorthernWaterSystemApp() {
       `Debtors and Aging change by the same amount. Cash and the P&L are unaffected.`
     )) return;
 
-    const { data, error } = await supabase.rpc('delete_customer_adjustment', { p_id: id });
+    const { data, error } = await withTimeout(supabase.rpc('delete_customer_adjustment', { p_id: id }));
     if (error) {
       console.error('❌ Error removing balance adjustment:', error);
-      alert('Could not remove this adjustment — nothing was changed.\n\n' + (error.message || 'Unknown error'));
+      alert(deleteFailureMessage(
+        error,
+        'Could not remove this adjustment — nothing was changed. The balance is as it was.',
+        "the customer's balance history"
+      ));
       return;
     }
 
