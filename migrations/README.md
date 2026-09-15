@@ -128,6 +128,13 @@ baseline by default.
 | `025_on_account_credit.sql` | Overpayment becomes held credit. Adds `payments.kind`, makes `payments."saleId"` nullable, and **extends the balance formula** to `-sum(sales.total - sales.paid) + unapplied credit`. Adds `apply_credit`; guards `delete_payment` and `delete_sale` against stranding half a credit application. Requires `024` |
 | `026_production_requires_materials.sql` | Refuses a production run that would drive any raw material below zero, by wiring `020`'s `assert_stock_not_negative` into `record_production` — the last decreasing write path without it. Closes the gap `020` deliberately deferred. **No figure moves; it only refuses future writes.** Requires `020` and `021` |
 | `027_customer_adjustments.sql` | New `customer_adjustments` table (RLS + policies defined in the same file) and **a third term in the balance formula**: `-sum(unpaid invoices) + credit held + adjustments`. Adds admin-only `record_customer_adjustment` / `delete_customer_adjustment`, both failing CLOSED on a null role. Inert on apply — the new term is zero until an adjustment is posted. Moves Debtors and Aging only; **never** Cash Collected, the P&L or stock. Requires `025`. Apply BEFORE the client that adds the adjustment UI |
+| `028_atomic_payroll.sql` | Closes the payroll gap — finding 1 of `docs/audit-2026-09-08.md`, open since 2026-08-08. Unique index on `payroll_payments (type, employee_id, period_label)`, `expenses.client_key` for idempotency, and atomic `record_salary_payment` / `record_casual_payout`, so a Salary expense can no longer be left standing without its payroll row. Both gates fail CLOSED on a null role. Net pay, casual pay and the runs a payout covers are now DERIVED server-side; the client sends its own figure only as a cross-check. **No figure moves — it only refuses future duplicates.** Requires `021` and `027`. Apply BEFORE its client, which has no fallback path |
+
+> ⚠️ **This table is known to be wrong for `024`–`027`.** All four are live in
+> production (finding 2 of `docs/audit-2026-09-08.md`); only `018` and `028` are
+> genuinely unapplied. Re-applying `025` on the strength of this table would
+> revert the balance formula. Correcting the four rows is a separate change and
+> is deliberately not bundled with the payroll fix.
 
 ### 🛑 `018_settle_customer_balances.sql` must not be applied
 

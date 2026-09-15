@@ -497,6 +497,16 @@ export default function NorthernWaterSystemApp() {
   // credit is the one save that does not go through the modal's Save button, so
   // it carries its own in-flight flag rather than sharing `saving`.
   const [applyingCredit, setApplyingCredit] = useState('');
+  // The same two things for payroll, which is the other pair of buttons outside
+  // the modal — and was, until migration 028, the only money path in the app
+  // with no double-submit guard at all.
+  //
+  // Keys are held per employee+month and per date range until the write
+  // succeeds, so a retry after a lost connection carries the SAME key and the
+  // database returns what it already recorded instead of paying a second time.
+  // `recordingPayroll` is "salary:<empId>:<month>" or "casual:<start>:<end>".
+  const [payrollKeys, setPayrollKeys] = useState({});
+  const [recordingPayroll, setRecordingPayroll] = useState('');
 
   // Declared before the session useEffect below so the effect never references
   // it inside its temporal dead zone (react-hooks/immutability).
@@ -1203,51 +1213,112 @@ export default function NorthernWaterSystemApp() {
   const isSalaryPaid = (empId, month) =>
     payrollPayments.some(p => p.type === 'salary' && p.employee_id === empId && p.period_label === month);
 
+  // Merge what migration 028 returned into local state.
+  //
+  // Everything is matched by id rather than appended, because this also runs on
+  // a REPLAY — where the rows may already be here — and a retry the database
+  // correctly refused to record twice must not appear twice in the browser
+  // either.
+  const applyPayrollResult = (result) => {
+    const expense = result.expense;
+    const rows = result.payroll || [];
+    const runIds = result.runIds || [];
+
+    if (rows.length > 0) {
+      setPayrollPayments(prev => {
+        const byId = new Map(prev.map(p => [p.id, p]));
+        rows.forEach(r => byId.set(r.id, r));
+        return [...byId.values()];
+      });
+    }
+    setState(prev => ({
+      ...prev,
+      expenses: prev.expenses.some(e => e.id === expense.id)
+        ? prev.expenses.map(e => (e.id === expense.id ? expense : e))
+        : [...prev.expenses, expense],
+      productionLogs: runIds.length === 0
+        ? prev.productionLogs
+        : prev.productionLogs.map(log => (runIds.includes(log.id)
+          ? { ...log, casual_paid: true, casual_expense_id: expense.id }
+          : log)),
+    }));
+  };
+
   // Record a permanent salary payment: logs it AND creates a Salary expense.
-  // (Double-payment of casuals is prevented per production run via the
-  // casual_paid flag, not by comparing payout date ranges.)
+  //
+  // One transaction since migration 028. The two used to be separate round
+  // trips, and a failure between them left the Salary expense standing with no
+  // payroll row — which made `isSalaryPaid` read false, put "Record Payment"
+  // back on the screen, and invited a second expense for a salary paid once.
+  // That state is now unreachable: if the payroll row cannot be written the
+  // expense rolls back with it.
+  //
+  // The amount is a CROSS-CHECK, not the source. The database derives net pay
+  // from the employee's rate and their advances and refuses the write if this
+  // screen disagrees by more than a cent — which means the browser is holding
+  // stale data, since it only loads once per login.
   const recordSalaryPayment = async (emp, month, netAmount) => {
     if (netAmount <= 0) { alert('Nothing to pay for this month.'); return; }
     if (isSalaryPaid(emp.id, month)) { alert('Salary already recorded for this employee this month.'); return; }
     if (!confirm(`Record salary payment of KES ${netAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} for ${emp.name} (${month})? This also creates a Salary expense.`)) return;
 
-    const datePaid = localDateString();
-    const newExpense = {
-      date: datePaid,
-      category: 'operating',
-      subcategory: 'Salary',
-      description: `Salary - ${emp.name} (${month})`,
-      amount: netAmount,
-      advance_employee_id: null,
-      created_by: session?.user?.id || null
-    };
-    const payment = {
-      type: 'salary', employee_id: emp.id, employee_name: emp.name,
-      period_label: month, period_start: `${month}-01`, period_end: `${month}-28`,
-      amount: netAmount, date_paid: datePaid
-    };
+    const cacheKey = `salary:${emp.id}:${month}`;
+    const key = payrollKeys[cacheKey] || newClientKey();
+    if (!payrollKeys[cacheKey]) {
+      setPayrollKeys(prev => ({ ...prev, [cacheKey]: key }));
+    }
 
-    // Persist the expense first so payroll links to its real (DB-assigned) id.
-    const { data: savedExpense, error: expError } = await supabase
-      .from('expenses').insert([newExpense]).select().single();
-    if (expError || !savedExpense) {
-      console.error('❌ Error recording salary payment:', expError);
-      alert('Error recording payment — nothing was saved.');
+    setRecordingPayroll(cacheKey);
+    let data, error;
+    try {
+      ({ data, error } = await withTimeout(supabase.rpc('record_salary_payment', {
+        p_pay: {
+          employeeId: emp.id,
+          month,
+          amount: netAmount,
+          date: localDateString(),
+          client_key: key,
+        },
+      })));
+    } finally {
+      setRecordingPayroll('');
+    }
+
+    if (error || !data?.expense) {
+      console.error('❌ Error recording salary payment:', error);
+      alert(saveFailureMessage(
+        error,
+        `Could not record this salary — nothing was saved. No Salary expense was created and ${month} is still unpaid for ${emp.name}.`,
+        "this employee's payroll history in HR",
+        true
+      ));
       return;
     }
-    const { data, error: payError } = await supabase
-      .from('payroll_payments').insert([{ ...payment, expense_id: savedExpense.id }]).select();
-    if (payError) {
-      console.error('❌ Error recording salary payroll row:', payError);
-      alert('Expense saved but the payroll record failed — please check HR.');
-    }
-    setState({ ...state, expenses: [...state.expenses, savedExpense] });
-    if (data && data[0]) setPayrollPayments([...payrollPayments, data[0]]);
-    alert('Salary payment recorded.');
+
+    setPayrollKeys(prev => {
+      const next = { ...prev };
+      delete next[cacheKey];
+      return next;
+    });
+    applyPayrollResult(data);
+    alert(data.replayed
+      ? 'This salary was already recorded — it has NOT been paid twice.'
+      : 'Salary payment recorded.');
   };
 
   // Record a casual payout for a date range: logs each casual's payment AND
   // creates ONE Casual Labour expense for the total (casual labour is now a P&L cost).
+  //
+  // One transaction since migration 028. This used to be 2 + N round trips —
+  // the expense, the payroll rows, then a loop marking each production run paid
+  // — and a failure anywhere in that loop left runs showing "Pay Due" for work
+  // already paid for, which is why the old code had to end with an alert asking
+  // the operator not to record a second payout.
+  //
+  // Only the range goes to the server now. Who is owed what, the total, and
+  // which production runs the payout covers are all DERIVED there from one
+  // definition, so the runs paid for and the runs marked paid cannot disagree.
+  // The total below is sent only as a cross-check against that derivation.
   const recordCasualPayment = async (range) => {
     if (!range.start || !range.end) { alert('Pick a start and end date first.'); return; }
     const pay = getCasualPay(range);
@@ -1256,67 +1327,48 @@ export default function NorthernWaterSystemApp() {
     if (total <= 0) { alert('No unpaid casual pay to record for this range.'); return; }
     if (!confirm(`Record casual payout of KES ${total.toLocaleString('en-US', { minimumFractionDigits: 2 })} for ${range.start} to ${range.end}? This also creates a Casual Labour expense.`)) return;
 
-    const datePaid = localDateString();
-    const rangeLabel = `${range.start} to ${range.end}`;
-    const newExpense = {
-      date: datePaid,
-      category: 'operating',
-      subcategory: 'Casual Labour',
-      description: `Casual labour (${rangeLabel})`,
-      amount: total,
-      advance_employee_id: null,
-      created_by: session?.user?.id || null
-    };
+    const cacheKey = `casual:${range.start}:${range.end}`;
+    const key = payrollKeys[cacheKey] || newClientKey();
+    if (!payrollKeys[cacheKey]) {
+      setPayrollKeys(prev => ({ ...prev, [cacheKey]: key }));
+    }
 
-    // Identify the unpaid production runs being paid now, and mark them paid
-    const paidRunIds = state.productionLogs.filter(log => {
-      if (log.casual_paid) return false;
-      const d = log.date || '';
-      if (range.start && range.end && (d < range.start || d > range.end)) return false;
-      return (log.casuals || []).length > 0 &&
-        Object.values(log.items || {}).reduce((s, q) => s + (q || 0), 0) > 0;
-    }).map(log => log.id);
+    setRecordingPayroll(cacheKey);
+    let data, error;
+    try {
+      ({ data, error } = await withTimeout(supabase.rpc('record_casual_payout', {
+        p_payout: {
+          start: range.start,
+          end: range.end,
+          total: Number(total.toFixed(2)),
+          date: localDateString(),
+          client_key: key,
+        },
+      })));
+    } finally {
+      setRecordingPayroll('');
+    }
 
-    // Persist the expense first so payroll/production link to its real id.
-    const { data: savedExpense, error: expError } = await supabase
-      .from('expenses').insert([newExpense]).select().single();
-    if (expError || !savedExpense) {
-      console.error('❌ Error recording casual payment:', expError);
-      alert('Error recording payout — nothing was saved.');
+    if (error || !data?.expense) {
+      console.error('❌ Error recording casual payout:', error);
+      alert(saveFailureMessage(
+        error,
+        'Could not record this payout — nothing was saved. No Casual Labour expense was created and every production run in this range is still showing as due.',
+        'the casual payment history below',
+        true
+      ));
       return;
     }
-    const expenseId = savedExpense.id;
 
-    const updatedLogs = state.productionLogs.map(log =>
-      paidRunIds.includes(log.id) ? { ...log, casual_paid: true, casual_expense_id: expenseId } : log
-    );
-    const paymentRows = rows.map(e => ({
-      type: 'casual', employee_id: e.id, employee_name: e.name,
-      period_label: rangeLabel, period_start: range.start, period_end: range.end,
-      amount: pay[e.id].pay, date_paid: datePaid, expense_id: expenseId
-    }));
-
-    const { data, error: payError } = await supabase.from('payroll_payments').insert(paymentRows).select();
-    if (payError) {
-      console.error('❌ Error recording casual payroll rows:', payError);
-      alert('Expense saved but the payroll records failed — please check HR.');
-    }
-    let flagFailures = 0;
-    for (const runId of paidRunIds) {
-      const { error: flagError } = await supabase.from('production_logs')
-        .update({ casual_paid: true, casual_expense_id: expenseId }).eq('id', runId);
-      if (flagError) {
-        flagFailures++;
-        console.error('❌ Error marking production run paid:', runId, flagError);
-      }
-    }
-    if (flagFailures > 0) {
-      alert(`Payout recorded, but ${flagFailures} production run(s) could not be marked as paid — they may show as "Pay Due" again. Do NOT record a second payout for this range; please report this.`);
-    }
-
-    setState({ ...state, expenses: [...state.expenses, savedExpense], productionLogs: updatedLogs });
-    if (data) setPayrollPayments([...payrollPayments, ...data]);
-    alert('Casual payout recorded.');
+    setPayrollKeys(prev => {
+      const next = { ...prev };
+      delete next[cacheKey];
+      return next;
+    });
+    applyPayrollResult(data);
+    alert(data.replayed
+      ? 'This payout was already recorded — nobody has been paid twice.'
+      : 'Casual payout recorded.');
   };
 
   // ===== HR: Employee management (admin only) =====
@@ -7245,8 +7297,18 @@ export default function NorthernWaterSystemApp() {
                               {paid ? (
                                 <span className="text-emerald-600 text-xs font-medium">✓ Paid</span>
                               ) : (
-                                <button onClick={() => recordSalaryPayment(emp, hrMonth, net)} className="bg-sky-500 hover:bg-sky-600 text-white text-xs rounded-lg px-3 py-1.5">
-                                  Record Payment
+                                /* Outside the modal, so this button carries its
+                                   own copy of the modal's guard: `runSave` for
+                                   the in-flight ref (a second tap can land
+                                   before React has re-rendered `disabled`, so
+                                   the ref is what actually refuses it) and
+                                   `recordingPayroll` for which button to label. */
+                                <button
+                                  onClick={() => runSave(() => recordSalaryPayment(emp, hrMonth, net))}
+                                  disabled={saving}
+                                  className="bg-sky-500 hover:bg-sky-600 text-white text-xs rounded-lg px-3 py-1.5 disabled:bg-sky-300 disabled:cursor-not-allowed"
+                                >
+                                  {recordingPayroll === `salary:${emp.id}:${hrMonth}` ? 'Recording…' : 'Record Payment'}
                                 </button>
                               )}
                             </div>
@@ -7317,8 +7379,15 @@ export default function NorthernWaterSystemApp() {
                           <span className="text-slate-700 font-semibold text-sm">Total Casual Pay</span>
                           <span className="text-slate-900 font-bold">KES {grand.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
                         </div>
-                        <button onClick={() => recordCasualPayment(casualRange)} className="mt-3 w-full bg-sky-500 hover:bg-sky-600 text-white text-sm rounded-lg px-4 py-2">
-                          Record Payout for this Range
+                        {/* Same guard as the salary button above. */}
+                        <button
+                          onClick={() => runSave(() => recordCasualPayment(casualRange))}
+                          disabled={saving}
+                          className="mt-3 w-full bg-sky-500 hover:bg-sky-600 text-white text-sm rounded-lg px-4 py-2 disabled:bg-sky-300 disabled:cursor-not-allowed"
+                        >
+                          {recordingPayroll === `casual:${casualRange.start}:${casualRange.end}`
+                            ? 'Recording…'
+                            : 'Record Payout for this Range'}
                         </button>
                       </>
                     );
