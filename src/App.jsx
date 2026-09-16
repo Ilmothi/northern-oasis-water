@@ -1793,11 +1793,24 @@ export default function NorthernWaterSystemApp() {
         .filter(s => s.customerId === c.id && (s.paid || 0) < s.total)
         .sort((a, b) => new Date(a.date) - new Date(b.date));
 
-      let daysOverdue = 0;
-      if (unpaidSales.length > 0) {
-        const oldest = new Date(unpaidSales[0].date);
-        daysOverdue = Math.max(0, Math.floor((today - oldest) / (1000 * 60 * 60 * 24)));
-      }
+      // Age the debt from the OLDEST thing behind it, which is not always an
+      // invoice. Debt carried as a 027 opening-balance adjustment has no unpaid
+      // sale behind it by construction — that is why 027 exists, the per-invoice
+      // detail being unreconstructable. Anchoring on sales alone left those
+      // accounts at 0 days: a June book debt reported as current, wrong in the
+      // flattering direction, in the one report whose entire purpose is the age.
+      // Only debt-DEEPENING adjustments anchor; a positive one reduces debt and
+      // is not something to age. `adjustmentsFor` returns oldest-first.
+      const oldestAdjustment = adjustmentsFor(c.id).find(a => (a.amount || 0) < 0);
+
+      // Dates are ISO (YYYY-MM-DD), so a plain string sort is chronological —
+      // the same comparison `adjustmentsFor` itself sorts on.
+      const anchors = [unpaidSales[0]?.date, oldestAdjustment?.date]
+        .filter(Boolean)
+        .sort();
+      const daysOverdue = anchors.length
+        ? Math.max(0, Math.floor((today - new Date(anchors[0])) / (1000 * 60 * 60 * 24)))
+        : 0;
 
       return {
         ...c,
@@ -5654,7 +5667,7 @@ export default function NorthernWaterSystemApp() {
                               <div>
                                 <p className="text-slate-700 font-medium text-sm">Includes balance adjustments</p>
                                 <p className="text-slate-400 text-xs">
-                                  {reportData.adjustedAccounts} account{reportData.adjustedAccounts === 1 ? '' : 's'} corrected to a figure the invoices do not show. Open the customer card for the reason.
+                                  {reportData.adjustedAccounts} account{reportData.adjustedAccounts === 1 ? '' : 's'} corrected to a figure the invoices do not show, aged from the adjustment date. Open the customer card for the reason.
                                 </p>
                               </div>
                               <p className="text-slate-700 font-semibold text-sm whitespace-nowrap">
