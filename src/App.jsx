@@ -4461,7 +4461,7 @@ export default function NorthernWaterSystemApp() {
   // the caller's role and refuses everyone else. The UI check below only keeps
   // the button out of the way.
   const handleAddAdjustment = (customer) => {
-    setModalType('adjustment');
+    setModalType('balanceAdjustment');
     setFormData({
       customerId: customer.id,
       customerName: customer.name,
@@ -7246,7 +7246,7 @@ export default function NorthernWaterSystemApp() {
                     </div>
                     <button
                       onClick={() => {
-                        setModalType('adjust');
+                        setModalType('stockAdjust');
                         setFormData({ itemId: item.id, itemLabel: item.label, currentQty: item.qty, newQty: '', reason: '' });
                         setShowModal(true);
                       }}
@@ -8375,8 +8375,8 @@ export default function NorthernWaterSystemApp() {
                 {modalType === 'purchase' && (editingPurchase ? 'Edit Purchase' : 'New Purchase')}
                 {modalType === 'expense' && (editingExpense ? 'Edit Expense' : 'New Expense')}
                 {modalType === 'customer' && (editingCustomer ? 'Edit' : 'New Customer')}
-                {modalType === 'adjust' && 'Adjust Stock'}
-                {modalType === 'adjustment' && 'Adjust Balance'}
+                {modalType === 'stockAdjust' && 'Adjust Stock'}
+                {modalType === 'balanceAdjustment' && 'Adjust Balance'}
                 {modalType === 'consignment' && formData.consignAction === 'deliver' && 'Deliver to Shop'}
                 {modalType === 'consignment' && formData.consignAction === 'sold' && 'Report Stock Sold'}
                 {modalType === 'consignment' && formData.consignAction === 'return' && 'Take Stock Back'}
@@ -9232,7 +9232,7 @@ export default function NorthernWaterSystemApp() {
                   because the job this exists for is "make this account read what
                   the book says" — the movement is derived rather than worked out
                   on paper, which is where the arithmetic slips. */}
-              {modalType === 'adjustment' && (() => {
+              {modalType === 'balanceAdjustment' && (() => {
                 const cur = Number(formData.currentBalance || 0);
                 const delta = adjustmentDelta();
                 const after = toCents(cur + delta);
@@ -9366,7 +9366,7 @@ export default function NorthernWaterSystemApp() {
                 );
               })()}
 
-              {modalType === 'adjust' && (
+              {modalType === 'stockAdjust' && (
                 <>
                   <div className="bg-slate-50 rounded-lg p-3">
                     <p className="text-slate-900 text-sm font-semibold">{formData.itemLabel}</p>
@@ -9601,8 +9601,8 @@ export default function NorthernWaterSystemApp() {
                   else if (modalType === 'purchase') await handleSavePurchase();
                   else if (modalType === 'expense') await handleSaveExpense();
                   else if (modalType === 'customer') await handleSaveCustomer();
-                  else if (modalType === 'adjust') await handleStockAdjustment();
-                  else if (modalType === 'adjustment') await handleSaveAdjustment();
+                  else if (modalType === 'stockAdjust') await handleStockAdjustment();
+                  else if (modalType === 'balanceAdjustment') await handleSaveAdjustment();
                   else if (modalType === 'consignment') await handleSaveConsignment();
                   else if (modalType === 'employee') await handleSaveEmployee();
                 })}
