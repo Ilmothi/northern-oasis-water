@@ -124,12 +124,28 @@
 --         join pg_namespace n on n.oid = p.pronamespace
 --        where n.nspname = 'public' and proname = 'recompute_customer_balance';
 --
---     THIS CHECK ALREADY EARNED ITS KEEP. Run on 2026-09-02, it showed that
---     production carries a `for update` row lock and a `return null` for a
---     missing customer that the text of `025` in this directory does not have.
---     Section 2 was drafted from `025` and would have silently REMOVED that
---     lock, reintroducing a lost-update race on balances while adding a term.
---     Section 2 is now built on the live body instead.
+--     CORRECTED 2026-09-16 — finding 5 of `docs/audit-2026-09-08.md`.
+--     This check was recorded as having shown that production carries a
+--     `for update` row lock and a `return null` for a missing customer
+--     "that the text of `025` in this directory does not have".
+--
+--     THAT IS NOT TRUE OF `025`. Both are in it, at `025:271` and `025:272`,
+--     inside the real `recompute_customer_balance` at `025:247`. `025` has one
+--     commit in its history (`d0a3d64`) and was never amended, so it contained
+--     them when `027` was written. Diffing the two function bodies in this
+--     directory with comments and blank lines stripped gives exactly five
+--     changed lines, and every one is the adjustment term.
+--
+--     What the 2026-09-02 `prosrc` read actually showed is therefore UNKNOWN,
+--     and it is an OPEN QUESTION, not a settled one. Either the comparison was
+--     made against something other than `025`, or the live body differs from
+--     `025` in some way still unidentified — which would be a difference
+--     sitting in the balance function. Run the query above and diff it against
+--     `025:247`-`025:299` before trusting either answer.
+--
+--     Building section 2 on the live body was still the right instinct, and
+--     the lesson below stands on its own merits. What was wrong was the
+--     conclusion recorded about `025`.
 --
 --     The lesson generalises: this directory is a record of intent, not of
 --     production. Never write `create or replace` against a function you have
@@ -216,9 +232,17 @@ create unique index if not exists customer_adjustments_client_key_uniq
 -- =============================================================================
 -- SECTION 2: recompute_customer_balance — the third term
 --
--- Built on the LIVE function body, read out of `pg_proc` on 2026-09-02, NOT on
--- the text of `025` in this directory. THEY ARE NOT THE SAME, and the live one
--- is the one that matters. What production carries and `025` does not:
+-- Built on the LIVE function body, read out of `pg_proc` on 2026-09-02, rather
+-- than on the text of `025` in this directory — which is the right way round
+-- regardless of whether the two differ.
+--
+-- CORRECTED 2026-09-16 (finding 5 of `docs/audit-2026-09-08.md`). This header
+-- said "THEY ARE NOT THE SAME" and listed three things "production carries and
+-- `025` does not". All three are in `025`: `v_role := coalesce(get_my_role(),
+-- '')` at `025:264`, the row lock at `025:271`, the not-found guard at
+-- `025:272`. The list below is preserved because each item is a real and
+-- load-bearing part of this function — but it is a list of what section 2
+-- KEEPS, not of what `025` lacks:
 --
 --   * `perform 1 from customers where id = p_customer_id for update;` — a row
 --     lock, so two concurrent money writes against one customer serialise here
@@ -234,10 +258,15 @@ create unique index if not exists customer_adjustments_client_key_uniq
 -- Everything above is preserved verbatim. The ONLY changes are `v_adjust`, its
 -- select, and its term in the final UPDATE.
 --
--- That the repo's `025` and production disagree is worth recording: this file
--- was drafted against `025` and would have silently removed the row lock. It
--- was caught by pre-flight check 0b, which reads `prosrc` from the live
--- catalog. Do not skip that check on the next migration either.
+-- CORRECTED 2026-09-16. This paragraph recorded that "the repo's `025` and
+-- production disagree" and that this file would otherwise have silently removed
+-- the row lock. Neither claim survives checking: the lock is in `025:271`, so
+-- drafting against `025` would have preserved it. Whether the live body
+-- diverges from `025` in some other way is an open question — see check 0b.
+--
+-- What does survive, and is the reason the check stays: NEVER write
+-- `create or replace` against a function you have not just read out of
+-- `pg_proc`. That rule is right whether or not it caught anything here.
 --
 -- The `v_credit < 0` guard is deliberately left exactly as it was. It is about
 -- the credit pool specifically, and an adjustment must not be able to mask an
