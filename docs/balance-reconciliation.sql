@@ -31,7 +31,7 @@
 --
 --    LAST RUN 2026-09-16 against production: returned id 97 and nothing else.
 --    Update this line when you run it again; a control nobody records running
---    decays into a file nobody runs.
+--    decays into a file nobody runs. All three blocks were run that day.
 --
 --    The three terms mirror `recompute_customer_balance` exactly
 --    (`027:246`-`027:310`). If you change one, change the other:
@@ -65,6 +65,8 @@ select c.id, c.name, c.location, c.balance,
 --    so a row here means something wrote around the function.
 --
 --    EXPECT: no rows, now and forever.
+--
+--    LAST RUN 2026-09-16: no rows, as expected.
 -- ----------------------------------------------------------------------------
 select "customerId", sum(amount) as credit
   from payments
@@ -80,6 +82,10 @@ having sum(amount) < 0;
 --
 --    EXPECT: the Loglogo corrections entered 2026-09-02, and whatever has been
 --    posted since.
+--
+--    LAST RUN 2026-09-16: the Loglogo corrections plus the adjustments posted
+--    since, as expected. Read alongside A: every one of these accounts
+--    reconciles, so the adjustment term is landing in the balance correctly.
 -- ----------------------------------------------------------------------------
 select a.id, a."customerId", c.name, c.location,
        a.kind, a.amount, a.reason, a.date, a.created_at
