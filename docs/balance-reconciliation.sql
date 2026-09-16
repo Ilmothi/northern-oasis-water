@@ -29,6 +29,10 @@
 --    EXPECT: id 97 (understated by KES 2,520, pre-existing and known) and
 --    NOTHING ELSE. Any other row is a real defect -- do not dismiss it.
 --
+--    LAST RUN 2026-09-16 against production: returned id 97 and nothing else.
+--    Update this line when you run it again; a control nobody records running
+--    decays into a file nobody runs.
+--
 --    The three terms mirror `recompute_customer_balance` exactly
 --    (`027:246`-`027:310`). If you change one, change the other:
 --      v_sales  = -sum(total - paid) over all the customer's sales
