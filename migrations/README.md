@@ -24,6 +24,14 @@ Nothing here is verified against the database automatically. When it matters,
 check the live catalog: `pg_policies` for policies and **`pg_proc` for
 functions** (`prosecdef`, `proconfig`). See `docs/audit-2026-07-30-rls.md`.
 
+📏 **The standing balance check is `docs/balance-reconciliation.sql`.**
+It reconciles `customers.balance` against all THREE terms that derive it and is
+the maintained successor to `025` check 4, which is two-term and now reports
+every adjusted customer as drift. Run the file; do not run `025` check 4.
+**If a migration changes the balance formula again, change that file in the same
+migration** — a term added without it silently disables the only drift detector
+this system has. Finding 4 of `docs/audit-2026-09-08.md`.
+
 | File | What it does |
 |------|--------------|
 | `001_rls_policies.sql` | RLS enabled and policies defined for all twelve tables; `get_my_role()` / `get_my_location()` helpers |
@@ -50,7 +58,7 @@ functions** (`prosecdef`, `proconfig`). See `docs/audit-2026-07-30-rls.md`.
 | `022_production_run_materials.sql` | Adds `production_run_materials(id)`, a read-only function returning the raw materials a production run consumed, for the production run card. Purely additive — one new function, no table, column, policy or existing function touched |
 | `023_retire_stamps_and_ro_chemical.sql` | Redefines `production_bom_changes` without the KRA stamp and RO chemical lines — both materials are retired. **Changes the recipe**, so historical runs restate in the UI and reversing a pre-change run no longer credits either back. Leaves the `inventory_state` keys frozen rather than deleting them |
 | `024_lump_sum_payments.sql` | `payments.batch_id` + `record_bulk_payment` / `delete_payment_batch`, so one receipt can settle several invoices in a single transaction. Every payment row still names a `saleId`, so nothing downstream changes shape. **Applied 2026-08-29**, probe-verified, PR #37 (`5658b7d`) |
-| `025_on_account_credit.sql` | Overpayment becomes held credit. Adds `payments.kind`, makes `payments."saleId"` nullable, and **extends the balance formula** to `-sum(sales.total - sales.paid) + unapplied credit`. Adds `apply_credit`; guards `delete_payment` and `delete_sale` against stranding half a credit application. **Applied 2026-08-29**, probe-verified, PR #37 (`5658b7d`). 🛑 **Never re-apply** — `027` added a third term that a re-apply of this file would silently remove |
+| `025_on_account_credit.sql` | Overpayment becomes held credit. Adds `payments.kind`, makes `payments."saleId"` nullable, and **extends the balance formula** to `-sum(sales.total - sales.paid) + unapplied credit`. Adds `apply_credit`; guards `delete_payment` and `delete_sale` against stranding half a credit application. **Applied 2026-08-29**, probe-verified, PR #37 (`5658b7d`). 🛑 **Never re-apply** — `027` added a third term that a re-apply of this file would silently remove. Its check 4 is likewise superseded: use `docs/balance-reconciliation.sql` |
 | `026_production_requires_materials.sql` | Refuses a production run that would drive any raw material below zero, by wiring `020`'s `assert_stock_not_negative` into `record_production` — the last decreasing write path without it. Closes the gap `020` deliberately deferred. No figure moved; it only refuses future writes. **Applied 2026-08-31**, PR #39 (`beb0ae9`) |
 | `027_customer_adjustments.sql` | New `customer_adjustments` table (RLS + policies defined in the same file) and **a third term in the balance formula**: `-sum(unpaid invoices) + credit held + adjustments`. Adds admin-only `record_customer_adjustment` / `delete_customer_adjustment`, both failing CLOSED on a null role. Inert on apply — the term is zero until an adjustment is posted. Moved Debtors and Aging only; never Cash Collected, the P&L or stock. **Applied 2026-09-02**, PR #43 (`f77c7c2`); the Loglogo corrections were entered the same day |
 | `028_atomic_payroll.sql` | Closes the payroll gap — finding 1 of `docs/audit-2026-09-08.md`, open since 2026-08-08. Unique index on `payroll_payments (type, employee_id, period_label)`, `expenses.client_key` for idempotency, and atomic `record_salary_payment` / `record_casual_payout`, so a Salary expense can no longer be left standing without its payroll row. Both gates fail CLOSED on a null role. Net pay, casual pay and the runs a payout covers are DERIVED server-side; the client sends its own figure only as a cross-check. No figure moves — it only refuses future duplicates. **Applied 2026-09-15**, ahead of its client (branch `guard-payroll`), which is the safe order and the one the file requires |
