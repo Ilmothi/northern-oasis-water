@@ -31,6 +31,7 @@ every adjusted customer as drift. Run the file; do not run `025` check 4.
 **If a migration changes the balance formula again, change that file in the same
 migration** — a term added without it silently disables the only drift detector
 this system has. Finding 4 of `docs/audit-2026-09-08.md`.
+Last run 2026-09-16: returned id 97 only, as expected.
 
 | File | What it does |
 |------|--------------|
