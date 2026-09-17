@@ -3395,53 +3395,59 @@ export default function NorthernWaterSystemApp() {
     setShowModal(false);
   };
 
-  // Persist-first: the expense row is deleted (and the result checked) before
-  // any local change. Only after a confirmed delete are the linked payroll
-  // records removed and production runs un-flagged — previously a rejected
-  // expense delete could still un-flag runs, showing casual pay as due again
-  // and inviting a double payout.
+  // Delete an expense — and, if it was a payroll expense, everything hanging off
+  // it: the payroll records, and the "casual pay settled" flag on the production
+  // runs it paid for.
+  //
+  // One transaction since migration 029. This used to be 2 + N round trips with
+  // nothing joining them, so a failure part-way left a payroll row pointing at
+  // an expense that no longer existed, or a run flagged paid against one — and
+  // the code said so, in two alerts that could only ask the operator to go and
+  // check HR. There is no foreign key behind any of it; the database had no
+  // idea the three were related.
+  //
+  // It also applied its local changes optimistically while claiming not to:
+  // `setPayrollPayments` ran BEFORE the delete it was describing, so a refusal
+  // left the browser showing a payroll history the database still had. State is
+  // now applied from the RESULT — the ids the database says it actually touched.
+  //
+  // Finding 2 of docs/audit-2026-09-17.md.
   const handleDeleteExpense = async (id) => {
     if (!confirm('Delete this expense?')) return;
 
-    const { error: delError } = await supabase.from('expenses').delete().eq('id', id);
-    if (delError) {
-      console.error('❌ Error deleting expense:', delError);
-      alert('Could not delete this expense — nothing was changed. Please try again.\n\n' + (delError.message || 'Unknown error'));
+    const { data, error } = await withTimeout(supabase.rpc('delete_expense', { p_expense_id: id }));
+    if (error || !data) {
+      console.error('❌ Error deleting expense:', error);
+      alert(deleteFailureMessage(
+        error,
+        'Could not delete this expense — nothing was changed. The expense, any payroll records behind it and the production runs it paid for are all as they were.',
+        'the expense list'
+      ));
       return;
     }
 
-    // If this expense was created by a payroll payment, remove those payment
-    // records too, so salary "Paid" status and casual history stay accurate.
-    const linkedPayments = payrollPayments.filter(p => p.expense_id === id);
-    // If this was a casual payout, un-flag the production runs it paid for,
-    // so they return to "Pay Due".
-    const runsToUnflag = state.productionLogs.filter(log => log.casual_expense_id === id).map(log => log.id);
-    const updatedLogs = runsToUnflag.length > 0
-      ? state.productionLogs.map(log => log.casual_expense_id === id ? { ...log, casual_paid: false, casual_expense_id: null } : log)
-      : state.productionLogs;
+    const payrollIds = data.payrollIds || [];
+    const runIds = data.runIds || [];
 
-    if (linkedPayments.length > 0) {
-      setPayrollPayments(payrollPayments.filter(p => p.expense_id !== id));
-      const { error: payDelError } = await supabase.from('payroll_payments').delete().eq('expense_id', id);
-      if (payDelError) {
-        console.error('❌ Error deleting linked payroll records:', payDelError);
-        alert('Expense deleted, but its payroll records could not be removed — the HR "Paid" status may be wrong. Please check HR.');
-      }
-    }
-    for (const runId of runsToUnflag) {
-      const { error: unflagError } = await supabase.from('production_logs')
-        .update({ casual_paid: false, casual_expense_id: null }).eq('id', runId);
-      if (unflagError) {
-        console.error('❌ Error un-flagging production run:', unflagError);
-        alert('Expense deleted, but a production run could not be returned to "Pay Due". Please check the Casual Pay view.');
-      }
+    // Deleting something already gone succeeds rather than raising — that is
+    // what makes "delete it again, asking twice is safe" true. Say so, because
+    // the other way this happens is two admins on the same row.
+    if (data.alreadyGone) {
+      alert('This expense had already been deleted — nothing was deleted twice.');
     }
 
-    setState({
-      ...state,
-      expenses: state.expenses.filter(e => e.id !== id),
-      productionLogs: updatedLogs
-    });
+    if (payrollIds.length > 0) {
+      setPayrollPayments(prev => prev.filter(p => !payrollIds.includes(p.id)));
+    }
+    setState(prev => ({
+      ...prev,
+      expenses: prev.expenses.filter(e => e.id !== id),
+      productionLogs: runIds.length === 0
+        ? prev.productionLogs
+        : prev.productionLogs.map(log => (runIds.includes(log.id)
+          ? { ...log, casual_paid: false, casual_expense_id: null }
+          : log)),
+    }));
     console.log('✅ Expense deleted from Supabase');
   };
 
