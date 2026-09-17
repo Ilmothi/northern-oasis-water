@@ -1249,6 +1249,23 @@ export default function NorthernWaterSystemApp() {
 
   // Casual pay over a date range: for each production log in range, split
   // (total cartons in that run) equally among the casuals on duty, × shared rate.
+  //
+  // Pay is rounded to the cent PER EMPLOYEE, off that employee's total cartons —
+  // `round(sum(cartons) × rate, 2)`, which is character for character what
+  // `casual_pay_for_range` computes (migration 028, section 4). It has to be.
+  // `record_casual_payout` derives the payout itself and refuses the write if
+  // the total sent from here differs from its own by more than a cent, so any
+  // systematic difference in HOW the two round is a blocked payroll run.
+  //
+  // Accumulating unrounded and rounding once at the end — which is what this
+  // did — put the two out by up to half a cent PER PAYEE. That error
+  // accumulates across payees; the one-cent tolerance does not. Simulated over
+  // realistic payouts, about half were being refused, and the refusal told the
+  // operator to reload, which could never help: the difference was in the
+  // arithmetic, not in stale state. Finding 1 of docs/audit-2026-09-17.md.
+  //
+  // Rounding here rather than at the two call sites also makes the per-employee
+  // figures on screen the same numbers that land in `payroll_payments`.
   const getCasualPay = (range) => {
     const sharedRate = Number(casualRate) || 0;
     const result = {}; // empId -> { days, cartons, pay }
@@ -1265,8 +1282,12 @@ export default function NorthernWaterSystemApp() {
         if (!result[empId]) result[empId] = { days: 0, cartons: 0, pay: 0 };
         result[empId].days += 1;
         result[empId].cartons += sharePerCasual;
-        result[empId].pay += sharePerCasual * sharedRate;
       });
+    });
+    // Off the summed cartons, not off a running total of per-run products, so
+    // this is the same single multiplication the database performs.
+    Object.values(result).forEach(r => {
+      r.pay = Math.round(r.cartons * sharedRate * 100) / 100;
     });
     return result;
   };
@@ -1385,7 +1406,10 @@ export default function NorthernWaterSystemApp() {
     if (!range.start || !range.end) { alert('Pick a start and end date first.'); return; }
     const pay = getCasualPay(range);
     const rows = employees.filter(e => e.category === 'casual' && pay[e.id]);
-    const total = rows.reduce((s, e) => s + pay[e.id].pay, 0);
+    // The parts are already cent-rounded, so this only clears the float noise of
+    // adding them up — and it snaps it once, so the figure confirmed in the
+    // dialog below is the identical number sent as the cross-check.
+    const total = Number(rows.reduce((s, e) => s + pay[e.id].pay, 0).toFixed(2));
     if (total <= 0) { alert('No unpaid casual pay to record for this range.'); return; }
     if (!confirm(`Record casual payout of KES ${total.toLocaleString('en-US', { minimumFractionDigits: 2 })} for ${range.start} to ${range.end}? This also creates a Casual Labour expense.`)) return;
 
@@ -1402,7 +1426,7 @@ export default function NorthernWaterSystemApp() {
         p_payout: {
           start: range.start,
           end: range.end,
-          total: Number(total.toFixed(2)),
+          total,
           date: localDateString(),
           client_key: key,
         },
