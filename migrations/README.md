@@ -138,9 +138,19 @@ baseline by default.
 | File | What it does |
 |------|--------------|
 | `018_settle_customer_balances.sql` | 🛑 **DO NOT APPLY — superseded, and now actively destructive.** See the warning below |
+| `029_atomic_payroll_reversal.sql` | Findings 2 and 3 of `docs/audit-2026-09-17.md`. `delete_expense` makes the payroll REVERSE path one transaction — `028` made the write atomic and left this untouched, so deleting a payroll expense was N+2 unjoined round trips with no FK behind them. And `record_casual_payout` is rewritten to evaluate the pay ONCE off the LOCKED run ids; it read the run set three times at three snapshots, so a run logged mid-transaction could be paid for and never flagged. **Apply BEFORE the client** — `handleDeleteExpense` calls `delete_expense` and has no fallback. No figure moves; check 4 proves the arithmetic is unchanged against live data |
 
-`018` is the only file in this table, and it is not outstanding work — it is a
-file that must never run. There is nothing here waiting to be applied.
+`018` is not outstanding work — it is a file that must never run. `029` is the
+only thing here actually waiting to be applied.
+
+**`029` must be applied before its client merges**, like `024`/`025` and unlike
+`017`. Its finding-3 half needs no client at all and takes effect on apply; its
+finding-2 half is inert until `handleDeleteExpense` calls `delete_expense`, and
+deploying that client first breaks expense deletion outright with "function does
+not exist". Run block 0d before applying — it looks for orphans the old
+non-atomic path may already have left, which is a money question before it is a
+technical one. The file does not clean up anything it finds; it only stops more
+being created.
 
 > **Corrected 2026-09-15.** This table listed `024`–`027` as pending for two
 > weeks after all four went live — finding 2 of `docs/audit-2026-09-08.md`. They
