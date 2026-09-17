@@ -325,3 +325,59 @@ select c.id                          as customer_id,
  where s.date between '2026-06-01' and '2026-06-30'
    and c.location ilike 'loglogo%'
  order by s.date, c.name;
+
+
+-- -----------------------------------------------------------------------------
+-- BLOCK F2 — the same check, matched by NAME instead of customer id
+--
+-- The book has names, not ids, and the app never shows an id. This is block F
+-- without the lookup step: type the name as it appears in the customer list and
+-- the book's figure beside it.
+--
+-- Sign convention is unchanged: NEGATIVE means the customer owes us. Someone
+-- owing 2,220 is -2220.
+--
+-- Matching is case-insensitive and ignores surrounding spaces, but is otherwise
+-- exact. That is deliberate — a fuzzy match on a customer balance is a way to
+-- correct the wrong account. The second query below is the safety net: it lists
+-- any name that matched nothing, or matched more than one customer, so a typo
+-- or a duplicated name cannot silently drop an account from the check.
+--
+-- RUN BOTH. The second one returning no rows is what makes the first trustworthy.
+-- -----------------------------------------------------------------------------
+with book(name, book_balance) as (
+  values
+    -- ('NAME AS IT APPEARS IN THE APP', book_balance)
+      ('NICONDEMUS GITONGA', -2220.00),
+      ('JANE KOROLLE',       -3840.00)
+    -- , ('AHATHO EYSIMKELE',  -420.00)
+)
+select c.id,
+       c.name,
+       c.location,
+       c.balance                  as system_balance,
+       b.book_balance             as book_balance,
+       b.book_balance - c.balance as to_move,
+       case when b.book_balance = c.balance then 'AGREES' else 'STILL OUT' end as status
+  from book b
+  join customers c
+    on lower(trim(c.name)) = lower(trim(b.name))
+ order by abs(b.book_balance - c.balance) desc, c.name;
+
+-- Safety net: every book name that did not match exactly one customer.
+-- Expect ZERO rows. Anything here was NOT checked by the query above.
+with book(name, book_balance) as (
+  values
+      ('NICONDEMUS GITONGA', -2220.00),
+      ('JANE KOROLLE',       -3840.00)
+    -- , ('AHATHO EYSIMKELE',  -420.00)
+)
+select b.name                          as book_name,
+       count(c.id)                     as customers_matched,
+       case when count(c.id) = 0 then 'NO MATCH — check the spelling'
+            else 'AMBIGUOUS — more than one customer has this name' end as problem
+  from book b
+  left join customers c
+    on lower(trim(c.name)) = lower(trim(b.name))
+ group by b.name
+having count(c.id) <> 1;
