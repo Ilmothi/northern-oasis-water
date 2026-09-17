@@ -3014,6 +3014,14 @@ export default function NorthernWaterSystemApp() {
   // reprint of the same delivery would disagree.
   const downloadDeliveryNoteAsPDF = (sale) => {
     if (!sale) return;
+    // Consignment reconciliation posts a credit note as a sale with a negative
+    // total and negative item quantities (handleConsignReconcile). A delivery
+    // note for one would read "0.5L Carton  -12" above a goods-received
+    // declaration and two signature blocks, for goods that were never
+    // delivered. Same total < 0 test the ledger uses to label these
+    // "Credit note". Guarded here as well as at the buttons: this function is
+    // the thing that must not produce the document.
+    if ((sale.total || 0) < 0) return;
     const customer = state.customers.find(c => c.id === sale.customerId);
     const dispatcher = dispatchedByName(sale);
 
@@ -6536,12 +6544,16 @@ export default function NorthernWaterSystemApp() {
                           >
                             <Download className="w-3 h-3" /> Invoice PDF
                           </button>
-                          <button
-                            onClick={() => downloadDeliveryNoteAsPDF(sale)}
-                            className="flex items-center gap-1 text-xs text-slate-600 hover:text-slate-800 hover:bg-slate-100 px-2 py-1 rounded transition"
-                          >
-                            <Download className="w-3 h-3" /> Delivery Note
-                          </button>
+                          {/* No delivery note for a credit note — negative
+                              quantities under a goods-received declaration. */}
+                          {(sale.total || 0) >= 0 && (
+                            <button
+                              onClick={() => downloadDeliveryNoteAsPDF(sale)}
+                              className="flex items-center gap-1 text-xs text-slate-600 hover:text-slate-800 hover:bg-slate-100 px-2 py-1 rounded transition"
+                            >
+                              <Download className="w-3 h-3" /> Delivery Note
+                            </button>
+                          )}
                           {/* RLS only permits admin to delete sales — showing the
                               button to managers produced silent failures. */}
                           {role === 'admin' && (
@@ -7597,12 +7609,16 @@ export default function NorthernWaterSystemApp() {
                     <p className="text-slate-400 text-xs">{invoiceDetail.date}</p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => downloadDeliveryNoteAsPDF(invoiceDetail)}
-                      className="flex items-center gap-1.5 border border-slate-200 hover:bg-slate-50 text-slate-600 font-medium px-3 py-1.5 rounded-lg transition text-xs"
-                    >
-                      <Download className="w-3.5 h-3.5" /> Delivery Note
-                    </button>
+                    {/* No delivery note for a credit note — negative
+                        quantities under a goods-received declaration. */}
+                    {(invoiceDetail.total || 0) >= 0 && (
+                      <button
+                        onClick={() => downloadDeliveryNoteAsPDF(invoiceDetail)}
+                        className="flex items-center gap-1.5 border border-slate-200 hover:bg-slate-50 text-slate-600 font-medium px-3 py-1.5 rounded-lg transition text-xs"
+                      >
+                        <Download className="w-3.5 h-3.5" /> Delivery Note
+                      </button>
+                    )}
                     <button
                       onClick={() => downloadInvoiceAsPDF(invoiceDetail)}
                       className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-600 text-white font-medium px-3 py-1.5 rounded-lg transition text-xs"
