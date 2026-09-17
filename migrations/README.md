@@ -138,19 +138,40 @@ baseline by default.
 | File | What it does |
 |------|--------------|
 | `018_settle_customer_balances.sql` | 🛑 **DO NOT APPLY — superseded, and now actively destructive.** See the warning below |
-| `029_atomic_payroll_reversal.sql` | Findings 2 and 3 of `docs/audit-2026-09-17.md`. `delete_expense` makes the payroll REVERSE path one transaction — `028` made the write atomic and left this untouched, so deleting a payroll expense was N+2 unjoined round trips with no FK behind them. And `record_casual_payout` is rewritten to evaluate the pay ONCE off the LOCKED run ids; it read the run set three times at three snapshots, so a run logged mid-transaction could be paid for and never flagged. **Apply BEFORE the client** — `handleDeleteExpense` calls `delete_expense` and has no fallback. No figure moves; check 4 proves the arithmetic is unchanged against live data |
+| `029_atomic_payroll_reversal.sql` | Findings 2 and 3 of `docs/audit-2026-09-17.md`. `delete_expense` makes the payroll REVERSE path one transaction — `028` made the write atomic and left this untouched, so deleting a payroll expense was N+2 unjoined round trips with no FK behind them. And `record_casual_payout` is rewritten to evaluate the pay ONCE off the LOCKED run ids; it read the run set three times at three snapshots, so a run logged mid-transaction could be paid for and never flagged. 🔴 **OUTSTANDING — apply now.** Its client merged FIRST (PR #58), so expense deletion is broken in production until this is applied; see the note below. No figure moves; check 4 proves the arithmetic is unchanged against live data |
 
 `018` is not outstanding work — it is a file that must never run. `029` is the
 only thing here actually waiting to be applied.
 
-**`029` must be applied before its client merges**, like `024`/`025` and unlike
-`017`. Its finding-3 half needs no client at all and takes effect on apply; its
-finding-2 half is inert until `handleDeleteExpense` calls `delete_expense`, and
-deploying that client first breaks expense deletion outright with "function does
-not exist". Run block 0d before applying — it looks for orphans the old
-non-atomic path may already have left, which is a money question before it is a
-technical one. The file does not clean up anything it finds; it only stops more
-being created.
+🔴 **`029` IS OUTSTANDING AND ITS CLIENT IS ALREADY LIVE. Apply it now.**
+
+It was written to be applied before its client, like `024`/`025` and unlike
+`017`. **That is not what happened.** PR #58 merged on 2026-09-17 and `main`
+auto-deploys, so `handleDeleteExpense` has been calling `delete_expense` in
+production since — and the function does not exist until this file is applied.
+**Every expense delete is failing** with `function public.delete_expense(bigint)
+does not exist`.
+
+Nothing is corrupted by the gap: a delete that cannot start cannot
+half-complete, and the old non-atomic path is gone from the client, so there is
+no partial unwind to clean up. It is an outage on one path, not a data problem.
+The finding-3 half — `record_casual_payout` evaluating the pay off the locked
+run ids — also only takes effect on apply.
+
+Run block 0d before applying: it looks for orphans the old non-atomic path may
+already have left, which is a money question before it is a technical one. The
+file does not clean up anything it finds; it only stops more being created.
+
+**Checks 5 and 6 need an admin impersonation** (`set local role authenticated`
+plus `request.jwt.claims`) — they call `delete_expense`, and from a plain SQL
+Editor session `auth.uid()` is NULL so the admin gate correctly refuses. The
+file carries the exact incantation. Check 6c is the opposite case and expects
+that refusal; run it on its own, because it ends in a deliberate error.
+
+This row is the lesson `017` already taught and this file already records:
+**an ordering constraint stated only in a migration header is not a
+constraint.** It belongs here, where the merge decision is made — which is why
+it is now stated here in red rather than in prose three sections down.
 
 > **Corrected 2026-09-15.** This table listed `024`–`027` as pending for two
 > weeks after all four went live — finding 2 of `docs/audit-2026-09-08.md`. They
