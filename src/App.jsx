@@ -8031,7 +8031,23 @@ export default function NorthernWaterSystemApp() {
           const fmt = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
           // Cost figures are for admin and manager only. A sales user logs
           // production but has no business seeing what a run is worth or what a
-          // casual earns — the same line Cost Settings already draws.
+          // casual earns.
+          //
+          // THIS IS A DISPLAY CONVENIENCE, NOT A BOUNDARY, and the distinction
+          // matters because the comment here used to claim it was "the same line
+          // Cost Settings already draws." It is not. `cost_settings_select` is
+          // `using (auth.uid() is not null)` (001 section 12) — every
+          // authenticated user may read it, deliberately — and the client loads
+          // it at login for every role, so a sales user's browser already holds
+          // the carton costs and the casual rate whatever this flag does. What
+          // this hides is the rendering, from someone reading the screen over a
+          // shoulder; it hides nothing from anyone willing to open dev tools.
+          //
+          // Left as a display gate on purpose: the exposure is our own cost
+          // figures to our own staff, and RLS is the boundary wherever one is
+          // actually needed. Recorded rather than fixed so the next reader does
+          // not mistake it for enforcement. Finding 8 of
+          // docs/audit-2026-09-17.md.
           const showCosts = role === 'admin' || role === 'manager';
 
           const itemRows = Object.entries(log.items || {}).filter(([, q]) => q);
@@ -8047,7 +8063,54 @@ export default function NorthernWaterSystemApp() {
 
           const casualIds = log.casuals || [];
           const sharePerCasual = casualIds.length ? totalCartons / casualIds.length : 0;
-          const payPerCasual = sharePerCasual * (Number(casualRate) || 0);
+
+          // For a SETTLED run, recover the rate that was actually applied rather
+          // than pricing it at whatever Cost Settings says today. The card puts
+          // this figure under a badge reading "Casual pay settled — included in
+          // a recorded payout", which is the one context where a recomputed
+          // number reads as a record of what was paid. The rate is editable, so
+          // the moment it changes every historical run starts lying.
+          //
+          // Nothing stores the rate at payout time, but it is recoverable: the
+          // payout's payroll rows hold what each casual was PAID, and the runs
+          // carrying that same `casual_expense_id` hold what they were paid FOR.
+          // Total paid ÷ total cartons credited is the rate that was used — the
+          // exact inverse of how `casual_pay_for_range` computed it.
+          //
+          // Only the employees who actually appear in the payroll rows count
+          // toward the cartons, because a payout pays `category = 'casual'` only
+          // (migration 028 section 4); counting a stand-in permanent employee's
+          // share would understate the recovered rate.
+          //
+          // Finding 7 of docs/audit-2026-09-17.md.
+          const settledPayout = (() => {
+            if (!log.casual_paid || !log.casual_expense_id) return null;
+            const rows = payrollPayments.filter(
+              p => p.type === 'casual' && p.expense_id === log.casual_expense_id
+            );
+            if (rows.length === 0) return null;
+            const paidIds = new Set(rows.map(r => r.employee_id));
+            let cartonsCredited = 0;
+            state.productionLogs.forEach(l => {
+              if (l.casual_expense_id !== log.casual_expense_id) return;
+              const ids = l.casuals || [];
+              if (ids.length === 0) return;
+              const runCartons = Object.values(l.items || {}).reduce((s, q) => s + (q || 0), 0);
+              if (runCartons === 0) return;
+              const share = runCartons / ids.length;
+              ids.forEach(id => { if (paidIds.has(id)) cartonsCredited += share; });
+            });
+            if (cartonsCredited <= 0) return null;
+            const paid = rows.reduce((s, r) => s + (r.amount || 0), 0);
+            return { rate: paid / cartonsCredited, period: rows[0].period_label };
+          })();
+
+          // `payrollPayments` is loaded for admin only (tier 3 of the login
+          // fetch), so a MANAGER can never recover the payout rate and falls
+          // back here. That is why the figure is labelled with its basis below
+          // instead of being hidden: a manager keeps the number they had, and is
+          // told it is today's rate rather than what was paid.
+          const payPerCasual = sharePerCasual * (settledPayout ? settledPayout.rate : (Number(casualRate) || 0));
 
           return (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setProductionDetail(null)}>
@@ -8126,10 +8189,17 @@ export default function NorthernWaterSystemApp() {
                           <Badge color={log.casual_paid ? 'emerald' : 'amber'} dot>
                             {log.casual_paid ? 'Casual pay settled' : 'Casual pay outstanding'}
                           </Badge>
+                          {/* Say where the money figure came from. A settled run
+                              priced at today's rate is not a record of what was
+                              paid, and must not read as one. */}
                           <span className="text-slate-400 text-xs">
-                            {log.casual_paid
-                              ? 'Included in a recorded payout.'
-                              : 'Will be included in the next payout for a range covering this date.'}
+                            {!log.casual_paid
+                              ? 'Will be included in the next payout for a range covering this date.'
+                              : settledPayout
+                                ? `Paid in the payout for ${settledPayout.period}${showCosts ? ', priced at the rate applied then' : ''}.`
+                                : showCosts
+                                  ? "Included in a recorded payout. The amount above is today's rate, not necessarily the rate paid — see HR for what was paid."
+                                  : 'Included in a recorded payout.'}
                           </span>
                         </div>
                       </>
