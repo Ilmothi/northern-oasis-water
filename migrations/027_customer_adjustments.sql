@@ -136,12 +136,19 @@
 --     directory with comments and blank lines stripped gives exactly five
 --     changed lines, and every one is the adjustment term.
 --
---     What the 2026-09-02 `prosrc` read actually showed is therefore UNKNOWN,
---     and it is an OPEN QUESTION, not a settled one. Either the comparison was
---     made against something other than `025`, or the live body differs from
---     `025` in some way still unidentified — which would be a difference
---     sitting in the balance function. Run the query above and diff it against
---     `025:247`-`025:299` before trusting either answer.
+--     SETTLED 2026-09-16. The query above was run against production and the
+--     result diffed against this directory. Two results:
+--
+--       * The live body is BYTE-IDENTICAL to section 2 of this file. What was
+--         applied is what is written here.
+--       * Against `025`, the live body differs by the adjustment term and by
+--         NOTHING ELSE — `v_adjust`'s declaration, this comment, its select,
+--         and its term in the final UPDATE. The row lock, the not-found guard
+--         and the flattened role are present and identical in both.
+--
+--     So there was never a divergence. The 2026-09-02 comparison was made
+--     against something other than `025` as committed. Nothing is outstanding
+--     in the balance function.
 --
 --     Building section 2 on the live body was still the right instinct, and
 --     the lesson below stands on its own merits. What was wrong was the
@@ -261,8 +268,9 @@ create unique index if not exists customer_adjustments_client_key_uniq
 -- CORRECTED 2026-09-16. This paragraph recorded that "the repo's `025` and
 -- production disagree" and that this file would otherwise have silently removed
 -- the row lock. Neither claim survives checking: the lock is in `025:271`, so
--- drafting against `025` would have preserved it. Whether the live body
--- diverges from `025` in some other way is an open question — see check 0b.
+-- drafting against `025` would have preserved it. SETTLED the same day against
+-- production — the live body is byte-identical to section 2, and differs from
+-- `025` by the adjustment term alone. There was no divergence. See check 0b.
 --
 -- What does survive, and is the reason the check stays: NEVER write
 -- `create or replace` against a function you have not just read out of
