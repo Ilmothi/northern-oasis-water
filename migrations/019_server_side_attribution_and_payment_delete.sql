@@ -406,6 +406,22 @@ commit;
 --    `pg_get_functiondef` returns comments as well as code, so any verification
 --    query here has to match something a comment would not say.
 --
+--    RE-VERIFIED 2026-09-17 against the CURRENT definition, which is no longer
+--    this file's. `025` section 8 redefined `delete_payment` to guard credit
+--    applications, so anyone running this check today is checking `025`'s body,
+--    not `019`'s. Both outcomes still hold, and for the same reason:
+--
+--      * `025`'s body carries the same `-- No FOR UPDATE: payments has no
+--        UPDATE policy …` comment, so the ORIGINAL check would still return
+--        `t` on a correct database. The false alarm is live, not historical.
+--      * `025`'s body contains no `for update` statement at all, so the
+--        CORRECTED check returns `f`, which is the right answer.
+--
+--    That `019`'s check survives its own function being replaced is luck rather
+--    than design. The general point is the one worth copying: a verification
+--    query against `pg_get_functiondef` is matching prose as well as code, and
+--    it outlives the migration that wrote it.
+--
 -- 3. The policy is back:
 --
 --      select with_check from pg_policies
