@@ -122,10 +122,10 @@
 --   * It does not touch the cross-check tolerance. Finding 1 of the same audit
 --     — the tolerance being a flat cent while the rounding error scales with
 --     the number of payees — is fixed CLIENT-side on branch
---     `fix-casual-payout-rounding`, by rounding per employee the way
---     `casual_pay_for_runs` does. Widening the tolerance here would paper over
---     that instead of fixing it. The two changes are independent and can land
---     in either order.
+--     `fix-casual-payout-rounding` (MERGED 2026-09-17), by rounding per
+--     employee the way `casual_pay_for_runs` does. Widening the tolerance here
+--     would paper over that instead of fixing it. The two changes are
+--     independent and landed separately.
 --
 -- =============================================================================
 -- NO FIGURE MOVES
@@ -155,6 +155,22 @@
 -- Apply this file, run the verification below, then merge the client. The
 -- reverse order breaks expense deletion outright with "function does not
 -- exist", because the new client has no fallback path.
+--
+-- ⚠️ THIS IS NOT WHAT HAPPENED. The client merged FIRST, as PR #58 on
+-- 2026-09-17, and `main` auto-deploys — so from that merge until this file is
+-- applied, EVERY expense delete in production fails with
+-- `function public.delete_expense(bigint) does not exist`. The ordering
+-- constraint stated three paragraphs above was inverted in practice.
+--
+-- Nothing is corrupted by the gap, and that is worth stating plainly rather
+-- than hoping: a delete that cannot start cannot half-complete. The old
+-- non-atomic path is gone from the client, so there is no partial unwind to
+-- clean up. It is an outage on one path, not a data problem. Applying this file
+-- ends it.
+--
+-- The lesson is the one `017` already taught this directory and `README.md`
+-- already records: an ordering constraint stated only in a file header is not
+-- much of a constraint. It belongs where the merge decision is made.
 -- =============================================================================
 
 
@@ -643,6 +659,12 @@ commit;
 -- block of comments all report it. Each check below has an expected result, and
 -- checks 1 and 4 carry a control so an empty answer is distinguishable from a
 -- wrong connection.
+--
+-- CHECKS 5 AND 6 REQUIRE IMPERSONATING AN ADMIN (`set local role` +
+-- `request.jwt.claims`). They call `delete_expense`, and from a plain SQL Editor
+-- session `auth.uid()` is NULL, so the admin gate correctly refuses. See the
+-- note above check 5. Checks 1, 2, 3, 4, 6b and 6c are plain reads and need no
+-- impersonation.
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
@@ -704,7 +726,7 @@ select pg_get_functiondef(p.oid) ilike '%any(v_run_ids) for update%' as locks_ru
 -- — a refusal from here proves the gate fires, not that it fires on the right
 -- people. That is the `010` lesson: from the SQL Editor, a correct gate and a
 -- broken one are told apart by reading the text, not by the response.
--- Role behaviour is checked from the app, in check 7.
+-- The REFUSAL half is check 6c; who it lets through is check 7, from the app.
 -- -----------------------------------------------------------------------------
 select pg_get_functiondef(p.oid) ilike '%v_role is distinct from ''admin''%' as fails_closed,
        p.prosecdef as is_definer
@@ -753,35 +775,81 @@ select (select count(*) from by_range)                       as total_rows,
 
 
 -- -----------------------------------------------------------------------------
+-- YOU MUST IMPERSONATE AN ADMIN FOR CHECKS 5 AND 6.
+--
+-- CORRECTED 2026-09-17, before this file was ever applied. Both checks below
+-- originally called `delete_expense(...)` straight from the SQL Editor, and
+-- BOTH WOULD HAVE FAILED — for the reason check 3 states two checks earlier and
+-- these two then ignored. `auth.uid()` is NULL in the SQL Editor, so
+-- `get_my_role()` (`001:26`, `select role from profiles where id = auth.uid()`)
+-- returns NULL, so `NULL is distinct from 'admin'` is TRUE and the gate refuses.
+-- The result would have been `only an admin may delete an expense` — a CORRECT
+-- gate doing its job, presenting as a broken migration.
+--
+-- The fix is to become an admin for the length of the transaction, which also
+-- makes these checks stronger: they now exercise the gate for real instead of
+-- routing around it.
+--
+-- Get the uuid first — `profiles.id` IS the auth uid:
+--
+--     select id, email, role from profiles where role = 'admin';
+--
+-- Substitute it for <ADMIN_UUID> below. `set local` is transaction-scoped, so
+-- the rollback undoes the impersonation along with everything else.
+-- -----------------------------------------------------------------------------
 -- CHECK 5: delete_expense is ATOMIC — the whole point of section 4.
 --
--- ROLLS BACK. It writes nothing. Run it as written, including the rollback.
+-- ROLLS BACK. It writes nothing.
 --
 -- Pick a payroll expense id that HAS linked payroll rows and linked runs
--- (block 0c lists candidates) and substitute it below. The three counts must
--- all go to zero together inside the transaction, and the rollback must put
--- every one of them back.
+-- (block 0c lists candidates). The three counts must all go to zero TOGETHER
+-- inside the transaction, and the rollback must put every one of them back.
 --
--- EXPECT: before > 0 for all three, after = 0 for all three, restored = before.
+-- RUN IT IN THREE STEPS, A then B then C.
+--
+-- CORRECTED 2026-09-18, in use. This was written as six separate `select
+-- count(*)` statements inside one transaction, which does not work in the
+-- Supabase SQL Editor: **it shows only the LAST statement's result set.** The
+-- operator running it saw a bare `count: 0` — the production_logs count after
+-- the delete — and none of the five numbers that give it meaning. Worse, that 0
+-- is trivially true for an expense with no linked runs, so on its own it proves
+-- nothing at all while looking like a pass.
+--
+-- Each step below therefore returns ONE ROW with everything in it. The shape is
+-- the fix; the checks are the same ones.
 -- -----------------------------------------------------------------------------
--- begin;
+
+-- STEP A — before. Run on its own, OUTSIDE any transaction.
+--   EXPECT exp_before = 1, pay_before > 0, runs_before > 0.
+--   If exp_before is 0 you have the wrong expense id — stop and pick another.
 --
---   select count(*) from expenses          where id = <EXPENSE_ID>;                 -- expect 1
---   select count(*) from payroll_payments  where expense_id = <EXPENSE_ID>;         -- expect > 0
---   select count(*) from production_logs   where casual_expense_id = <EXPENSE_ID>;  -- note this number
+--   select (select count(*) from expenses         where id = <EXPENSE_ID>)                as exp_before,
+--          (select count(*) from payroll_payments where expense_id = <EXPENSE_ID>)        as pay_before,
+--          (select count(*) from production_logs  where casual_expense_id = <EXPENSE_ID>) as runs_before;
+
+-- STEP B — the delete, ending in one result row.
+--   EXPECT acting_as = <ADMIN_UUID>, role = admin, and all three _after = 0.
+--   If role comes back NULL the impersonation did not take and the rest of the
+--   row is measuring the wrong thing.
+--
+-- begin;
+--   set local role authenticated;
+--   set local request.jwt.claims = '{"sub":"<ADMIN_UUID>","role":"authenticated"}';
 --
 --   select delete_expense(<EXPENSE_ID>);
 --
---   select count(*) from expenses          where id = <EXPENSE_ID>;                 -- expect 0
---   select count(*) from payroll_payments  where expense_id = <EXPENSE_ID>;         -- expect 0
---   select count(*) from production_logs   where casual_expense_id = <EXPENSE_ID>;  -- expect 0
---
+--   select auth.uid()    as acting_as,
+--          get_my_role() as role,
+--          (select count(*) from expenses         where id = <EXPENSE_ID>)                as exp_after,
+--          (select count(*) from payroll_payments where expense_id = <EXPENSE_ID>)        as pay_after,
+--          (select count(*) from production_logs  where casual_expense_id = <EXPENSE_ID>) as runs_after;
 -- rollback;
---
---   -- and then, OUTSIDE the transaction, that everything came back:
---   select count(*) from expenses          where id = <EXPENSE_ID>;                 -- expect 1
---   select count(*) from payroll_payments  where expense_id = <EXPENSE_ID>;         -- expect the earlier number
---   select count(*) from production_logs   where casual_expense_id = <EXPENSE_ID>;  -- expect the earlier number
+
+-- STEP C — re-run STEP A verbatim.
+--   EXPECT every number identical to the first time. That is the rollback
+--   proving nothing was actually destroyed, and it is not optional: without it
+--   step B has deleted three sets of rows and you have only its word that they
+--   came back.
 
 
 -- -----------------------------------------------------------------------------
@@ -792,12 +860,42 @@ select (select count(*) from by_range)                       as total_rows,
 -- with `alreadyGone: true`, NOT as an error, and must not have touched anything
 -- on the way.
 --
+-- Also rolls back, and also needs the impersonation: without it this returns
+-- the gate's refusal, which looks identical to the failure it is meant to
+-- detect.
+--
 -- EXPECT: {"expenseId": -1, "payrollIds": [], "runIds": [], "alreadyGone": true}
 --
--- If this RAISES, the advice `deleteFailureMessage` gives on every delete in the
--- app has become false and section 4 is wrong.
+-- If it RAISES *while genuinely acting as an admin* — check the `acting_as`
+-- line says so — then the advice `deleteFailureMessage` gives on every delete
+-- in the app has become false and section 4 is wrong.
 -- -----------------------------------------------------------------------------
-select delete_expense(-1);
+-- begin;
+--   set local role authenticated;
+--   set local request.jwt.claims = '{"sub":"<ADMIN_UUID>","role":"authenticated"}';
+--   select auth.uid() as acting_as, get_my_role() as role;   -- expect <ADMIN_UUID>, admin
+--   select delete_expense(-1);
+-- rollback;
+
+
+-- -----------------------------------------------------------------------------
+-- CHECK 6c: the gate refuses a NULL role. Run this WITHOUT impersonation.
+--
+-- The other half of checks 5 and 6, and free now that the trap above is
+-- understood: from a plain SQL Editor session `get_my_role()` is NULL, and a
+-- fail-CLOSED gate must refuse. This is the `010` failure mode — a gate written
+-- with `<>` instead of `is distinct from` would fall straight through and
+-- DELETE THE ROW here.
+--
+-- EXPECT: ERROR "delete_expense: only an admin may delete an expense".
+-- A successful result, or a row actually deleted, means the gate fails open.
+--
+-- RUN THIS ONE ON ITS OWN. It ends in a deliberate ERROR, and the SQL Editor
+-- aborts everything pasted after an error — so running the verification block
+-- in one paste would silently skip check 6b below.
+-- -----------------------------------------------------------------------------
+select get_my_role() as should_be_null;
+select delete_expense(-1);   -- expect: ERROR, only an admin may delete an expense
 
 
 -- -----------------------------------------------------------------------------
