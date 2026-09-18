@@ -799,40 +799,57 @@ select (select count(*) from by_range)                       as total_rows,
 -- -----------------------------------------------------------------------------
 -- CHECK 5: delete_expense is ATOMIC — the whole point of section 4.
 --
--- ROLLS BACK. It writes nothing. Run it as written, including the rollback.
+-- ROLLS BACK. It writes nothing.
 --
 -- Pick a payroll expense id that HAS linked payroll rows and linked runs
--- (block 0c lists candidates) and substitute it below. The three counts must
--- all go to zero together inside the transaction, and the rollback must put
--- every one of them back.
+-- (block 0c lists candidates). The three counts must all go to zero TOGETHER
+-- inside the transaction, and the rollback must put every one of them back.
 --
--- EXPECT: before > 0 for all three, after = 0 for all three, restored = before.
+-- RUN IT IN THREE STEPS, A then B then C.
+--
+-- CORRECTED 2026-09-18, in use. This was written as six separate `select
+-- count(*)` statements inside one transaction, which does not work in the
+-- Supabase SQL Editor: **it shows only the LAST statement's result set.** The
+-- operator running it saw a bare `count: 0` — the production_logs count after
+-- the delete — and none of the five numbers that give it meaning. Worse, that 0
+-- is trivially true for an expense with no linked runs, so on its own it proves
+-- nothing at all while looking like a pass.
+--
+-- Each step below therefore returns ONE ROW with everything in it. The shape is
+-- the fix; the checks are the same ones.
 -- -----------------------------------------------------------------------------
--- begin;
+
+-- STEP A — before. Run on its own, OUTSIDE any transaction.
+--   EXPECT exp_before = 1, pay_before > 0, runs_before > 0.
+--   If exp_before is 0 you have the wrong expense id — stop and pick another.
 --
+--   select (select count(*) from expenses         where id = <EXPENSE_ID>)                as exp_before,
+--          (select count(*) from payroll_payments where expense_id = <EXPENSE_ID>)        as pay_before,
+--          (select count(*) from production_logs  where casual_expense_id = <EXPENSE_ID>) as runs_before;
+
+-- STEP B — the delete, ending in one result row.
+--   EXPECT acting_as = <ADMIN_UUID>, role = admin, and all three _after = 0.
+--   If role comes back NULL the impersonation did not take and the rest of the
+--   row is measuring the wrong thing.
+--
+-- begin;
 --   set local role authenticated;
 --   set local request.jwt.claims = '{"sub":"<ADMIN_UUID>","role":"authenticated"}';
 --
---   -- Prove the impersonation took BEFORE relying on it. If this does not say
---   -- admin, everything below is measuring the wrong thing.
---   select auth.uid() as acting_as, get_my_role() as role;   -- expect <ADMIN_UUID>, admin
---
---   select count(*) from expenses          where id = <EXPENSE_ID>;                 -- expect 1
---   select count(*) from payroll_payments  where expense_id = <EXPENSE_ID>;         -- expect > 0
---   select count(*) from production_logs   where casual_expense_id = <EXPENSE_ID>;  -- note this number
---
 --   select delete_expense(<EXPENSE_ID>);
 --
---   select count(*) from expenses          where id = <EXPENSE_ID>;                 -- expect 0
---   select count(*) from payroll_payments  where expense_id = <EXPENSE_ID>;         -- expect 0
---   select count(*) from production_logs   where casual_expense_id = <EXPENSE_ID>;  -- expect 0
---
+--   select auth.uid()    as acting_as,
+--          get_my_role() as role,
+--          (select count(*) from expenses         where id = <EXPENSE_ID>)                as exp_after,
+--          (select count(*) from payroll_payments where expense_id = <EXPENSE_ID>)        as pay_after,
+--          (select count(*) from production_logs  where casual_expense_id = <EXPENSE_ID>) as runs_after;
 -- rollback;
---
---   -- and then, OUTSIDE the transaction, that everything came back:
---   select count(*) from expenses          where id = <EXPENSE_ID>;                 -- expect 1
---   select count(*) from payroll_payments  where expense_id = <EXPENSE_ID>;         -- expect the earlier number
---   select count(*) from production_logs   where casual_expense_id = <EXPENSE_ID>;  -- expect the earlier number
+
+-- STEP C — re-run STEP A verbatim.
+--   EXPECT every number identical to the first time. That is the rollback
+--   proving nothing was actually destroyed, and it is not optional: without it
+--   step B has deleted three sets of rows and you have only its word that they
+--   came back.
 
 
 -- -----------------------------------------------------------------------------

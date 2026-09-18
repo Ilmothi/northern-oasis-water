@@ -262,39 +262,55 @@ the `010` failure mode, and it would mean the gate was written with `<>`.
 ### Check 5 — `delete_expense` is atomic
 
 Substitute `<ADMIN_UUID>` and `<EXPENSE_ID>`. **This rolls back and writes
-nothing.** Run it as one block including the `rollback;`.
+nothing.** Three steps — **A, then B, then C.**
+
+> ⚠️ **Do not collapse these into one block.** The Supabase SQL Editor shows
+> only the **last** statement's result set. Written as a run of `select
+> count(*)` statements, this check returns a single bare `count: 0` and hides
+> the five numbers that give it meaning — and that 0 is *trivially* true for an
+> expense with no linked runs, so it looks like a pass while proving nothing.
+> Each step below returns one row with everything in it.
+
+**Step A — before.** Run on its own, outside any transaction.
+
+```sql
+select (select count(*) from expenses         where id = <EXPENSE_ID>)                as exp_before,
+       (select count(*) from payroll_payments where expense_id = <EXPENSE_ID>)        as pay_before,
+       (select count(*) from production_logs  where casual_expense_id = <EXPENSE_ID>) as runs_before;
+```
+
+**Expect `exp_before = 1`, `pay_before > 0`, `runs_before > 0`.** If
+`exp_before` is 0 you have the wrong expense id — stop and pick another, or the
+whole check is meaningless.
+
+**Step B — the delete**, ending in one result row.
 
 ```sql
 begin;
-
   set local role authenticated;
   set local request.jwt.claims = '{"sub":"<ADMIN_UUID>","role":"authenticated"}';
 
-  -- Prove the impersonation took BEFORE relying on it.
-  select auth.uid() as acting_as, get_my_role() as role;   -- expect <ADMIN_UUID>, admin
-
-  select count(*) from expenses         where id = <EXPENSE_ID>;                -- 1
-  select count(*) from payroll_payments where expense_id = <EXPENSE_ID>;        -- > 0
-  select count(*) from production_logs  where casual_expense_id = <EXPENSE_ID>; -- note it
-
   select delete_expense(<EXPENSE_ID>);
 
-  select count(*) from expenses         where id = <EXPENSE_ID>;                -- 0
-  select count(*) from payroll_payments where expense_id = <EXPENSE_ID>;        -- 0
-  select count(*) from production_logs  where casual_expense_id = <EXPENSE_ID>; -- 0
-
+  select auth.uid()    as acting_as,
+         get_my_role() as role,
+         (select count(*) from expenses         where id = <EXPENSE_ID>)                as exp_after,
+         (select count(*) from payroll_payments where expense_id = <EXPENSE_ID>)        as pay_after,
+         (select count(*) from production_logs  where casual_expense_id = <EXPENSE_ID>) as runs_after;
 rollback;
 ```
 
-Then, **outside** the transaction, confirm everything came back:
+**Expect** `acting_as` = your uuid, `role` = `admin`, and all three `_after`
+counts **0**. If `role` comes back NULL the impersonation did not take and the
+rest of the row is measuring the wrong thing.
 
-```sql
-select count(*) from expenses         where id = <EXPENSE_ID>;                -- 1
-select count(*) from payroll_payments where expense_id = <EXPENSE_ID>;        -- the earlier number
-select count(*) from production_logs  where casual_expense_id = <EXPENSE_ID>; -- the earlier number
-```
+**Step C — re-run Step A verbatim.** Every number must be identical to the first
+time. That is the rollback proving nothing was actually destroyed, and it is not
+optional: without it, step B has deleted three sets of rows and you have only
+its word that they came back.
 
-The three counts going to zero **together** is the point of the whole file.
+The three counts going from non-zero to zero **together**, and then all coming
+back, is the point of the whole file.
 
 ### Check 6 — deleting something already gone succeeds
 
