@@ -3611,13 +3611,19 @@ export default function NorthernWaterSystemApp() {
   };
 
   // Add Sale
+  //
+  // The date opens EMPTY, like production, purchases and expenses. Most sales
+  // ARE same-day, which is exactly why a default was dangerous here: it is right
+  // often enough that nobody checks it, so the one entered the next morning goes
+  // in silently wrong. A sale's date is load-bearing — it sets the invoice date,
+  // which period the revenue falls in, and where the debt sits in Aging.
   const handleAddSale = () => {
     setModalType('sale');
     setSaleCustomerSearch('');
     setFormData({
       customerId: '',
       items: [{ size: '0.5L', quantity: 0, price: 0 }],
-      date: localDateString(),
+      date: '',
       // null = "paid in full": the Amount Paid input tracks the running total
       // until the cashier types an amount themselves (partial/credit sale).
       amountPaid: null,
@@ -3628,6 +3634,13 @@ export default function NorthernWaterSystemApp() {
   };
 
   const handleSaveSale = async () => {
+    // Checked first. A sale's date sets the invoice date, the period its revenue
+    // falls in, and how old the debt looks in Aging — so a blank one must stop
+    // the save rather than quietly become today.
+    if (!formData.date) {
+      alert('Please pick the date of this sale.\n\nIt is deliberately not filled in for you — a sale entered the next morning belongs to the day the goods went out, not today.');
+      return;
+    }
     if (!formData.customerId || formData.items.filter(i => i.quantity > 0).length === 0) {
       alert('Please select customer and add items');
       return;
@@ -8712,13 +8725,21 @@ export default function NorthernWaterSystemApp() {
                     )}
                   </div>
 
+                  {/* Empty on a new sale — see handleAddSale. Amber until
+                      filled: this date sets the invoice date, the revenue
+                      period, and the age of the debt in Aging. */}
                   <div>
-                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Date</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">
+                      Date <span className="text-rose-500">*</span>
+                    </label>
                     <input
                       type="date"
+                      required
                       value={formData.date || ''}
                       onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className={`w-full rounded-lg px-3 md:px-4 py-2 text-sm text-slate-900 border ${
+                        formData.date ? 'bg-slate-50 border-slate-300' : 'bg-amber-50 border-amber-300'
+                      }`}
                     />
                   </div>
 
