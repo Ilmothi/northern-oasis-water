@@ -4623,13 +4623,30 @@ export default function NorthernWaterSystemApp() {
   };
 
   // Production
+  //
+  // The date opens EMPTY, deliberately. It used to default to today, and that
+  // default was wrong more often than it was right: a run is very often entered
+  // the MORNING AFTER it happened, and a pre-filled "today" is the kind of
+  // wrong answer nobody reads — it looks like a considered value rather than a
+  // guess. The result was runs silently dated a day late, which moves cartons
+  // into the wrong month in the Production Report and, worse, can move a run
+  // into the wrong casual payout range and pay the wrong week's work.
+  //
+  // An empty field cannot be wrong by accident. It can only be forgotten, and
+  // `handleSaveProduction` refuses that.
   const handleAddProduction = () => {
     setModalType('production');
-    setFormData({ items: {}, date: localDateString(), notes: '', unit: 'cartons', casuals: [], clientKey: newClientKey() });
+    setFormData({ items: {}, date: '', notes: '', unit: 'cartons', casuals: [], clientKey: newClientKey() });
     setShowModal(true);
   };
 
   const handleSaveProduction = async () => {
+    // Checked FIRST, and before items, because it is the field most likely to
+    // be skipped now that it no longer fills itself in.
+    if (!formData.date) {
+      alert('Please pick the date this production run happened.\n\nIt is deliberately not filled in for you — a run entered the next morning belongs to the day it was produced, not today.');
+      return;
+    }
     if (Object.keys(formData.items).length === 0) {
       alert('Please add items');
       return;
@@ -9111,14 +9128,29 @@ export default function NorthernWaterSystemApp() {
               {/* Production Modal */}
               {modalType === 'production' && (
                 <>
+                  {/* Opens empty on purpose — see handleAddProduction. The field
+                      stays amber until it is filled, so a missing date reads as
+                      "not answered yet" rather than as a blank nobody noticed. */}
                   <div>
-                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Date</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">
+                      Date produced <span className="text-rose-500">*</span>
+                    </label>
                     <input
                       type="date"
+                      required
                       value={formData.date || ''}
                       onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className={`w-full rounded-lg px-3 md:px-4 py-2 text-sm text-slate-900 border ${
+                        formData.date
+                          ? 'bg-slate-50 border-slate-300'
+                          : 'bg-amber-50 border-amber-300'
+                      }`}
                     />
+                    <p className="text-slate-400 text-xs mt-1">
+                      {formData.date
+                        ? 'The day the run happened — not the day it is being entered.'
+                        : 'Pick the day the run actually happened. Entering yesterday’s production? Choose yesterday.'}
+                    </p>
                   </div>
 
                   <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 md:p-4">
