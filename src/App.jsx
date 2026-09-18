@@ -1227,11 +1227,16 @@ export default function NorthernWaterSystemApp() {
   };
 
   // Purchase Management
+  // The date opens EMPTY on a NEW purchase, for the reason set out on
+  // handleAddProduction: a delivery entered the next morning was silently
+  // getting today's date, and a pre-filled wrong answer is one nobody re-reads.
+  // Editing is untouched — that path calls setFormData(purchase), so it carries
+  // the record's own date.
   const handleAddPurchase = () => {
     setEditingPurchase(null);
     setModalType('purchase');
     setFormData({
-      date: localDateString(),
+      date: '',
       supplier: '',
       items: [{ material: '', description: '', quantity: 0, unitPrice: 0, total: 0 }]
     });
@@ -1674,8 +1679,17 @@ export default function NorthernWaterSystemApp() {
   };
 
   const handleSavePurchase = async () => {
-    if (!formData.supplier || !formData.date || formData.items.filter(i => i.material && i.quantity > 0).length === 0) {
-      alert('Please fill supplier, date, and add items');
+    // The date is checked on its own, and first. It was already part of the
+    // combined check below, but "Please fill supplier, date, and add items"
+    // does not tell someone who filled in everything else which field is
+    // missing — and now that the date no longer fills itself in, it is the one
+    // most likely to be it.
+    if (!formData.date) {
+      alert('Please pick the date of this purchase.\n\nIt is deliberately not filled in for you — a delivery entered the next morning belongs to the day it arrived, not today.');
+      return;
+    }
+    if (!formData.supplier || formData.items.filter(i => i.material && i.quantity > 0).length === 0) {
+      alert('Please fill supplier and add items');
       return;
     }
 
@@ -3345,11 +3359,13 @@ export default function NorthernWaterSystemApp() {
   };
 
   // Expense Management
+  // Date opens EMPTY on a NEW expense — see handleAddProduction. Editing keeps
+  // the record's own date: that path spreads the expense into formData.
   const handleAddExpense = () => {
     setEditingExpense(null);
     setModalType('expense');
-    setFormData({ 
-      date: localDateString(),
+    setFormData({
+      date: '',
       category: 'Raw Materials',
       subcategory: '',
       description: '',
@@ -3359,6 +3375,14 @@ export default function NorthernWaterSystemApp() {
   };
 
   const handleSaveExpense = async () => {
+    // The date was never validated here at all — it simply arrived pre-filled
+    // with today and nobody could leave it blank. Now that it starts empty it
+    // has to be checked, and checked first: an expense with the wrong date
+    // lands in the wrong month's P&L.
+    if (!formData.date) {
+      alert('Please pick the date of this expense.\n\nIt is deliberately not filled in for you — an expense entered the next morning belongs to the day it was incurred, not today.');
+      return;
+    }
     if (!formData.category || !formData.subcategory || formData.amount <= 0) {
       alert('Please fill all fields');
       return;
@@ -8536,13 +8560,20 @@ export default function NorthernWaterSystemApp() {
                     />
                   </div>
 
+                  {/* Empty on a new purchase — see handleAddPurchase. Amber
+                      until filled, so the blank reads as unanswered. */}
                   <div>
-                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Purchase Date</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">
+                      Purchase Date <span className="text-rose-500">*</span>
+                    </label>
                     <input
                       type="date"
+                      required
                       value={formData.date || ''}
                       onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className={`w-full rounded-lg px-3 md:px-4 py-2 text-sm text-slate-900 border ${
+                        formData.date ? 'bg-slate-50 border-slate-300' : 'bg-amber-50 border-amber-300'
+                      }`}
                     />
                   </div>
 
@@ -9235,13 +9266,20 @@ export default function NorthernWaterSystemApp() {
               {/* Expense Modal */}
               {modalType === 'expense' && (
                 <>
+                  {/* Empty on a new expense — see handleAddExpense. Amber until
+                      filled: a wrong date here lands in the wrong month's P&L. */}
                   <div>
-                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">Date</label>
+                    <label className="block text-slate-500 text-xs md:text-sm font-medium mb-2">
+                      Date <span className="text-rose-500">*</span>
+                    </label>
                     <input
                       type="date"
+                      required
                       value={formData.date || ''}
                       onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                      className="w-full bg-slate-50 border border-slate-300 text-slate-900 rounded-lg px-3 md:px-4 py-2 text-sm"
+                      className={`w-full rounded-lg px-3 md:px-4 py-2 text-sm text-slate-900 border ${
+                        formData.date ? 'bg-slate-50 border-slate-300' : 'bg-amber-50 border-amber-300'
+                      }`}
                     />
                   </div>
 
