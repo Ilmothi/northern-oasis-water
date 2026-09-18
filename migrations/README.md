@@ -63,6 +63,7 @@ Last run 2026-09-16: returned id 97 only, as expected.
 | `026_production_requires_materials.sql` | Refuses a production run that would drive any raw material below zero, by wiring `020`'s `assert_stock_not_negative` into `record_production` — the last decreasing write path without it. Closes the gap `020` deliberately deferred. No figure moved; it only refuses future writes. **Applied 2026-08-31**, PR #39 (`beb0ae9`) |
 | `027_customer_adjustments.sql` | New `customer_adjustments` table (RLS + policies defined in the same file) and **a third term in the balance formula**: `-sum(unpaid invoices) + credit held + adjustments`. Adds admin-only `record_customer_adjustment` / `delete_customer_adjustment`, both failing CLOSED on a null role. Inert on apply — the term is zero until an adjustment is posted. Moved Debtors and Aging only; never Cash Collected, the P&L or stock. **Applied 2026-09-02**, PR #43 (`f77c7c2`); the Loglogo corrections were entered the same day |
 | `028_atomic_payroll.sql` | Closes the payroll gap — finding 1 of `docs/audit-2026-09-08.md`, open since 2026-08-08. Unique index on `payroll_payments (type, employee_id, period_label)`, `expenses.client_key` for idempotency, and atomic `record_salary_payment` / `record_casual_payout`, so a Salary expense can no longer be left standing without its payroll row. Both gates fail CLOSED on a null role. Net pay, casual pay and the runs a payout covers are DERIVED server-side; the client sends its own figure only as a cross-check. No figure moves — it only refuses future duplicates. **Applied 2026-09-15**, ahead of its client (branch `guard-payroll`), which is the safe order and the one the file requires |
+| `029_atomic_payroll_reversal.sql` | Findings 2 and 3 of `docs/audit-2026-09-17.md`. `delete_expense` makes the payroll REVERSE path one transaction — `028` made the write atomic and left this untouched, so deleting a payroll expense was N+2 unjoined round trips with no FK behind them; it is idempotent on purpose, so "delete it again, asking twice is safe" stays true. And `record_casual_payout` now evaluates the pay ONCE off the LOCKED run ids — it read the run set THREE times at three snapshots, so a run logged mid-transaction could be paid for and never flagged, and the expense could differ from the payroll rows it is the sum of. No figure moved. **Applied 2026-09-18.** Verified: check 4 (the arithmetic is unchanged — `differing_rows = 0` over `total_rows = 14` of live data, both directions) and check 2 (`locks_runs t, fails_closed t, reads_locked_ids t, reads_range_again f` — the last is finding 3 itself). The admin gate was seen failing CLOSED from a null-role session. **Checks 5, 6 and 6b were NOT run** — atomicity is structural (one plpgsql function, one transaction) but is not empirically proved. Its client merged FIRST, breaking expense deletion for a day; see below |
 
 Apply dates were not recorded before this file existed. Known: `007` on
 2026-07-02; `008` and `009` on 2026-07-22; `010`, `011` and `012` on 2026-07-28;
@@ -138,40 +139,45 @@ baseline by default.
 | File | What it does |
 |------|--------------|
 | `018_settle_customer_balances.sql` | 🛑 **DO NOT APPLY — superseded, and now actively destructive.** See the warning below |
-| `029_atomic_payroll_reversal.sql` | Findings 2 and 3 of `docs/audit-2026-09-17.md`. `delete_expense` makes the payroll REVERSE path one transaction — `028` made the write atomic and left this untouched, so deleting a payroll expense was N+2 unjoined round trips with no FK behind them. And `record_casual_payout` is rewritten to evaluate the pay ONCE off the LOCKED run ids; it read the run set three times at three snapshots, so a run logged mid-transaction could be paid for and never flagged. 🔴 **OUTSTANDING — apply now.** Its client merged FIRST (PR #58), so expense deletion is broken in production until this is applied; see the note below. No figure moves; check 4 proves the arithmetic is unchanged against live data |
 
-`018` is not outstanding work — it is a file that must never run. `029` is the
-only thing here actually waiting to be applied.
+`018` is the only file in this table, and it is not outstanding work — it is a
+file that must never run. There is nothing here waiting to be applied.
 
-🔴 **`029` IS OUTSTANDING AND ITS CLIENT IS ALREADY LIVE. Apply it now.**
+### What the `029` apply cost, and why the ordering rule is in this file
 
-It was written to be applied before its client, like `024`/`025` and unlike
-`017`. **That is not what happened.** PR #58 merged on 2026-09-17 and `main`
-auto-deploys, so `handleDeleteExpense` has been calling `delete_expense` in
-production since — and the function does not exist until this file is applied.
-**Every expense delete is failing** with `function public.delete_expense(bigint)
-does not exist`.
+`029` was applied on 2026-09-18 and has moved to the table above. It is recorded
+here because the apply went wrong in a way worth not repeating.
 
-Nothing is corrupted by the gap: a delete that cannot start cannot
-half-complete, and the old non-atomic path is gone from the client, so there is
-no partial unwind to clean up. It is an outage on one path, not a data problem.
-The finding-3 half — `record_casual_payout` evaluating the pay off the locked
-run ids — also only takes effect on apply.
+**Its client merged first.** PR #58 landed on 2026-09-17, `main` auto-deploys,
+and `handleDeleteExpense` calls `delete_expense` — which did not exist yet. **Every
+expense delete in production failed for about a day** with `function
+public.delete_expense(bigint) does not exist`. Nothing was corrupted: a delete
+that cannot start cannot half-complete, and the old non-atomic path was already
+gone from the client, so there was no partial unwind to clean up. It was an
+outage on one path, not a data problem, and applying the file ended it.
 
-Run block 0d before applying: it looks for orphans the old non-atomic path may
-already have left, which is a money question before it is a technical one. The
-file does not clean up anything it finds; it only stops more being created.
+This is the lesson `017` taught and this file already recorded: **an ordering
+constraint stated only in a migration header is not a constraint.** `029`'s
+header said "migration first, not optional" and it was read after the merge, not
+before. Which is why the constraint now goes in the pending row above, where the
+merge decision actually gets made.
 
-**Checks 5 and 6 need an admin impersonation** (`set local role authenticated`
-plus `request.jwt.claims`) — they call `delete_expense`, and from a plain SQL
-Editor session `auth.uid()` is NULL so the admin gate correctly refuses. The
-file carries the exact incantation. Check 6c is the opposite case and expects
-that refusal; run it on its own, because it ends in a deliberate error.
+**Two defects were found in `029`'s own verification block, both by running it
+rather than reading it**, and both were invisible on the page:
 
-This row is the lesson `017` already taught and this file already records:
-**an ordering constraint stated only in a migration header is not a
-constraint.** It belongs here, where the merge decision is made — which is why
-it is now stated here in red rather than in prose three sections down.
+- Checks 5 and 6 called `delete_expense` from a plain SQL Editor session, where
+  `auth.uid()` is NULL, so `get_my_role()` is NULL and the admin gate **correctly
+  refuses**. A correct gate presenting as a broken migration. They now impersonate
+  (`set local role authenticated` + `request.jwt.claims`) and print
+  `auth.uid()`/`get_my_role()` first to prove the impersonation took.
+- Check 5 was six separate `select count(*)` statements in one transaction. The
+  Supabase SQL Editor **shows only the last result set**, so it returned a bare
+  `count: 0` and hid the five numbers that gave it meaning — and that 0 is
+  trivially true for an expense with no linked runs, so it read as a pass while
+  proving nothing. It is now three steps, each returning one row.
+
+**A verification block is code.** Reading it proves nothing; only running it
+finds this class of defect. Write the next one expecting to be wrong.
 
 > **Corrected 2026-09-15.** This table listed `024`–`027` as pending for two
 > weeks after all four went live — finding 2 of `docs/audit-2026-09-08.md`. They
