@@ -79,11 +79,19 @@
 -- rather than on the highest surviving number is what makes the backfill safe
 -- against past deletions; section 3 explains why at length.
 --
--- If no sale was ever deleted the result is gapless. If sales WERE deleted, new
--- invoices resume above the gap rather than filling it. That is the intended
+-- New invoices resume above the gap rather than filling it. That is the intended
 -- trade: a gap in invoice numbering is ordinary and harmless, whereas reissuing
 -- a number that a deleted invoice once carried would put one number on two
 -- different documents, which is the thing an audit cannot tolerate.
+--
+-- THERE IS A GAP, AND IT IS LARGER THAN IT LOOKS. Measured 2026-10-24: 1,134
+-- sales in the table, `sales_invoice_seq` at 1288. 154 numbers had already been
+-- spent on sales that no longer exist, because `nextval` is non-transactional —
+-- every REFUSED sale (negative-stock guard, raw-material floor, overpayment
+-- guard, RLS refusal, timeout) kept its number, as did every deleted one. So
+-- this numbering has always had holes; the overflow just made them visible.
+-- After this file runs, the repaired block ends around INV-1134 and the next
+-- real sale gets about INV-1289. Expect that jump. It is not a fault.
 --
 -- IDEMPOTENT
 -- ----------
@@ -267,26 +275,46 @@ commit;
 --
 -- Check 3 — the mapping was recorded, and its size matches what was repaired.
 --
---   EXPECTED FOR THIS APPLY, from the production figures confirmed 2026-10-24
---   (1,134 sales, Max rows 1000, surviving maximum invoice number 999):
+--   DO NOT USE A CONSTANT HERE. An earlier draft of this check said "expect
+--   135" on the reasoning 1134 sales - 999 valid numbers. That is WRONG, and
+--   the live sequence proved it: on 2026-10-24 the sales table held 1,134 rows
+--   while `sales_invoice_seq` stood at 1288. 154 numbers had been consumed by
+--   sales that no longer exist.
 --
---       logged         = 135          (1134 - 999)
---       from_overflow  = 135          (all of them were 'INV-###')
---       first new      = INV-1000
---       last new       = INV-1134
+--   `nextval` is NON-TRANSACTIONAL. A rolled-back insert does not give its
+--   number back, so every sale this database ever REFUSED burned one — the
+--   negative-stock guard (020), the raw-material floor (026), the overpayment
+--   guard, an RLS refusal, a timeout — on top of every sale an admin deleted.
+--   Invoice numbering has therefore always had gaps, long before the overflow.
 --
---   `logged` HIGHER than 135 means sales numbered at or below 999 were deleted
---   at some point — read the "GAPS ARE PREFERRED TO REUSE" note, then check
---   that `first new` is still INV-1000 and not lower. LOWER than 135 means the
---   table moved between the count and the apply, which is expected if sales
---   were recorded in between; confirm against a fresh count rather than this
---   number.
+--   So the count of repaired rows is 135 PLUS however many of those burns fell
+--   below 1000, which cannot be recovered from the table. 135 is a FLOOR, not
+--   an expectation.
+--
+--   Check the IDENTITIES instead. They hold whatever the burn count was:
+--
+--       still_broken      = 0                 (check 1)
+--       logged            = numbered_1000_up  (every repaired row is logged,
+--                                              and nothing else got a 1000+
+--                                              number, because every number
+--                                              that survived was <= 999)
+--       from_overflow     = logged            (all of them read 'INV-###')
+--       first_new         = 1000              (the overflow boundary exactly —
+--                                              lower means the anchor failed)
+--       last_new          = 999 + logged      (contiguous, no holes)
+--       seq_at            > last_new          (no reissue possible)
 --
 --   select (select count(*) from public.invoice_renumber_log where migration = '030') as logged,
 --          (select count(*) from public.invoice_renumber_log
 --            where migration = '030' and old_number = 'INV-###')                      as from_overflow,
---          (select min(new_number) from public.invoice_renumber_log where migration = '030') as first_new_text,
---          (select max(new_number) from public.invoice_renumber_log where migration = '030') as last_new_text;
+--          (select count(*) from public.sales
+--            where "invoiceNumber" ~ '^INV-[0-9]+$'
+--              and (regexp_replace("invoiceNumber", '\D', '', 'g'))::int >= 1000)      as numbered_1000_up,
+--          (select min((regexp_replace(new_number, '\D', '', 'g'))::int)
+--             from public.invoice_renumber_log where migration = '030')                as first_new,
+--          (select max((regexp_replace(new_number, '\D', '', 'g'))::int)
+--             from public.invoice_renumber_log where migration = '030')                as last_new,
+--          (select last_value from public.sales_invoice_seq)                           as seq_at;
 --
 --   -- min()/max() above are TEXT comparisons, so 'INV-1000' sorts below
 --   -- 'INV-999'. This orders numerically, which is what you want to eyeball:
@@ -297,13 +325,22 @@ commit;
 --    limit 20;
 --
 -- Check 4 — the next number the database will issue is above every number in
---   the table. `next_issue` MUST be greater than `highest_in_table`.
---   NOTE: this CONSUMES a sequence value, so the first real sale after you run
---   it skips one number. That is harmless (see "GAPS ARE PREFERRED TO REUSE").
+--   the table. `seq_at` MUST be >= `highest_in_table`; the next sale then gets
+--   seq_at + 1, which is clear of everything.
+--
+--   Reads `last_value` rather than calling `nextval`, deliberately: `nextval`
+--   would CONSUME a number to tell you what it is, burning one more invoice
+--   number to run a read-only check.
 --
 --   select (select max((regexp_replace("invoiceNumber", '\D', '', 'g'))::int)
---             from public.sales)                                as highest_in_table,
---          (select nextval('public.sales_invoice_seq'))          as next_issue;
+--             from public.sales
+--            where "invoiceNumber" ~ '^INV-[0-9]+$')             as highest_in_table,
+--          (select last_value from public.sales_invoice_seq)     as seq_at;
+--
+--   As at 2026-10-24 the sequence stood at 1288 against a highest-in-table of
+--   999 + the repaired count, so the next sale lands around INV-1289 and there
+--   is a visible gap between the repaired block and it. That gap is the burned
+--   numbers, it is correct, and it is not a new fault.
 --
 -- Check 5 — the default itself is fixed. The returned text MUST contain `lpad`
 --   and MUST NOT contain `to_char`. Reported as a single row with a verdict so

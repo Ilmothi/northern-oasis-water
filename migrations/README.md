@@ -65,6 +65,8 @@ Last run 2026-09-16: returned id 97 only, as expected.
 | `028_atomic_payroll.sql` | Closes the payroll gap — finding 1 of `docs/audit-2026-09-08.md`, open since 2026-08-08. Unique index on `payroll_payments (type, employee_id, period_label)`, `expenses.client_key` for idempotency, and atomic `record_salary_payment` / `record_casual_payout`, so a Salary expense can no longer be left standing without its payroll row. Both gates fail CLOSED on a null role. Net pay, casual pay and the runs a payout covers are DERIVED server-side; the client sends its own figure only as a cross-check. No figure moves — it only refuses future duplicates. **Applied 2026-09-15**, ahead of its client (branch `guard-payroll`), which is the safe order and the one the file requires |
 | `029_atomic_payroll_reversal.sql` | Findings 2 and 3 of `docs/audit-2026-09-17.md`. `delete_expense` makes the payroll REVERSE path one transaction — `028` made the write atomic and left this untouched, so deleting a payroll expense was N+2 unjoined round trips with no FK behind them; it is idempotent on purpose, so "delete it again, asking twice is safe" stays true. And `record_casual_payout` now evaluates the pay ONCE off the LOCKED run ids — it read the run set THREE times at three snapshots, so a run logged mid-transaction could be paid for and never flagged, and the expense could differ from the payroll rows it is the sum of. No figure moved. **Applied 2026-09-18.** Verified: check 4 (the arithmetic is unchanged — `differing_rows = 0` over `total_rows = 14` of live data, both directions) and check 2 (`locks_runs t, fails_closed t, reads_locked_ids t, reads_range_again f` — the last is finding 3 itself). The admin gate was seen failing CLOSED from a null-role session. **Checks 5, 6 and 6b were NOT run** — atomicity is structural (one plpgsql function, one transaction) but is not empirically proved. Its client merged FIRST, breaking expense deletion for a day; see below |
 
+| `030_invoice_number_overflow.sql` | Fixes the `sales."invoiceNumber"` default, which `003` wrote as `to_char(nextval(...), 'FM000')` — a FIXED-WIDTH template, so from the 1,000th sale on it returned the overflow marker `###` and every invoice since 2026-10-06 was stamped `INV-###`. Rewritten with `lpad`, which pads to 3 and then grows. Renumbers the overflowed rows in `id` order from the overflow boundary 1000 upwards (not from the surviving maximum, which past deletions could have dragged below a number already printed), and logs the old → new mapping in a new admin-read-only table `invoice_renumber_log`. **Edits `sales`, which `CLAUDE.md` forbids by default** — authorised by the owner on 2026-10-24 on the grounds that `###` was an overflow marker and never a valid number. No amount, balance, date, status, stock figure, policy or function is touched, and allocation/reversal key on `sales.id`. **Applied 2026-10-24**, the day the fault was reported. ⚠️ **Verified only by the `setval` result (1288)** — that return value proves the file ran to its final statement, nothing more. Checks 1, 2, 3, 5, 6, 7 and 8 were NOT run at apply time; its check 3 was itself wrong when applied (see below). Its **client half is not deployed**: see the `030` section below |
+
 Apply dates were not recorded before this file existed. Known: `007` on
 2026-07-02; `008` and `009` on 2026-07-22; `010`, `011` and `012` on 2026-07-28;
 `013` on 2026-07-28 or shortly after (confirmed live by the 2026-07-30 audit);
@@ -139,25 +141,60 @@ baseline by default.
 | File | What it does |
 |------|--------------|
 | `018_settle_customer_balances.sql` | 🛑 **DO NOT APPLY — superseded, and now actively destructive.** See the warning below |
-| `030_invoice_number_overflow.sql` | Fixes the `sales."invoiceNumber"` default, which `003` wrote as `to_char(nextval(...), 'FM000')` — a FIXED-WIDTH template, so from the 1,000th sale on it returned the overflow marker `###` and every invoice since 2026-10-06 was stamped `INV-###`. Rewritten with `lpad`, which pads to 3 and then grows. Renumbers the overflowed rows in `id` order from the overflow boundary 1000 upwards, and logs the old → new mapping in a new admin-read-only table `invoice_renumber_log`. **Expect 135 rows renumbered to `INV-1000`–`INV-1134`** (production confirmed 2026-10-24: 1,134 sales, surviving maximum 999); check 3 carries the expected figures. **No ordering constraint against its client** — see below. **Edits `sales`, which `CLAUDE.md` forbids by default**; authorised by the owner on 2026-10-24 on the grounds that `###` was never a valid number. No amount, balance, date, status, stock figure, policy or function is touched |
 
-`018` must never run. `030` is the only file here that is actual outstanding
-work.
+`018` is the only file in this table, and it is not outstanding work — it is a
+file that must never run. There is nothing here waiting to be applied.
 
-**`030` has no ordering constraint against its client half**, which is the
-pagination fix in `src/App.jsx` (same branch). This is unlike `029`: the client
-calls no new function and reads `"invoiceNumber"` as an opaque string, so either
-half works alone and neither can break the other.
+### `030` — applied 2026-10-24, client half NOT yet deployed
 
-* Migration first → printed invoice numbers become correct and unique, while
-  sales past row 1,000 stay invisible until the client deploys.
+`030_invoice_number_overflow.sql` was applied by the operator on 2026-10-24, the
+same day the fault was reported. See the row in the table above for what it
+does.
+
+**Its client half is still outstanding.** The pagination fix in `src/App.jsx`
+(branch `fix-invoice-overflow-and-row-cap`) is committed but not merged, so
+production is still subject to the row cap and still only sees the first 1,000
+sales until that deploys or Max rows is raised.
+
+That split is safe here, unlike `029`: the client calls no new function and
+reads `"invoiceNumber"` as an opaque string, so either half works alone and
+neither can break the other.
+
+* Migration first (what happened) → printed invoice numbers are correct and
+  unique, while sales past row 1,000 stay invisible until the client deploys.
 * Client first → every sale reappears and the reports reconcile again, while the
-  recent invoices still read `INV-###` until the migration runs.
+  recent invoices still read `INV-###`.
 
-The one real scheduling note: **apply `030` outside trading hours.** Data is
-loaded once per login, so a clerk already signed in holds the old `INV-###`
-values in memory and could print one after the renumber has landed. A fresh
-login clears it.
+**Scheduling note for the record, since it was not observed:** data loads once
+per login, so a clerk already signed in held the old `INV-###` values in memory
+across the renumber and could have printed one afterwards. Any invoice printed
+on 2026-10-24 is worth re-checking against `invoice_renumber_log`.
+
+⚠️ **`030`'s own check 3 was WRONG when it was applied** and has since been
+corrected. It said "expect 135 rows renumbered", reasoning 1,134 sales minus 999
+valid numbers. The live sequence disproved it: it stood at **1288** against 1,134
+rows, so 154 numbers had already been spent on sales that no longer exist.
+`nextval` is non-transactional — every sale this database ever REFUSED kept its
+number (negative-stock guard, raw-material floor, overpayment guard, RLS
+refusal, timeout), as did every deleted one. The repaired count is therefore 135
+plus whatever share of those burns fell below 1000, which is not recoverable
+from the table. **135 was a floor, not an expectation.** Check 3 now tests
+identities (`logged = numbered_1000_up`, `first_new = 1000`,
+`last_new = 999 + logged`) that hold whatever the burn count was.
+
+Two consequences worth knowing:
+
+* **Invoice numbering has always had gaps**, well before the overflow. This is
+  not something `030` introduced.
+* **There is a visible jump after the repaired block.** It ends around
+  `INV-1134`; the next real sale gets about `INV-1289`. That is the burned
+  numbers, it is correct, and it is not a new fault.
+
+This is the third time this file has had to record the same lesson. `010` taught
+it, `016` and `024`–`027` repeated it, and now `030`: **a figure derived by
+arithmetic from two other figures is not a verification.** Check 3's constant was
+reasoned, plausible and wrong, and only reading the live sequence showed it.
+Prefer an identity that the data must satisfy over a number you worked out.
 
 Remember that the stopgap for the client half is a dashboard setting
 (**Settings → API → Max rows**), not a migration. Raising it makes the missing
