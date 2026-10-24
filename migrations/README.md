@@ -67,6 +67,8 @@ Last run 2026-09-16: returned id 97 only, as expected.
 
 | `030_invoice_number_overflow.sql` | Fixes the `sales."invoiceNumber"` default, which `003` wrote as `to_char(nextval(...), 'FM000')` — a FIXED-WIDTH template, so from the 1,000th sale on it returned the overflow marker `###` and every invoice since 2026-10-06 was stamped `INV-###`. 🛑 **ITS FIX WAS ALSO BROKEN AND IT IS SUPERSEDED BY `031`. DO NOT RE-APPLY, DO NOT COPY FROM IT.** It rewrote the default as `lpad(n::text, 3, '0')` in the belief that `lpad` pads to 3 and then grows — `lpad` is fixed width too and **TRUNCATES** above 999, so the same class of bug one line later. **Applied 2026-10-24** before the defect was found, where it gave 271 sales just 28 distinct numbers (1000..1270 each cut to three characters) and left a default still mangling every new sale. The diagnosis of `003` in its header is correct and worth keeping; nothing else in it is. ⚠️ **Verified at apply time only by the `setval` result (1288)**, which proves the file reached its final statement and nothing more — had check 2 or a nine-width test of the formatter been run, this would have been caught on the day. See the `lpad` section below and `031` for the repair |
 
+| `031_invoice_number_lpad_truncation.sql` | Repairs `030`. Splits invoice formatting into a PURE `format_invoice_number(bigint)` — pads to 3, never truncates, explicit `case` rather than a formatting function's edge behaviour — and a `next_invoice_number()` wrapper calling `nextval` exactly once, which becomes the column default. Renumbers the 271 rows `030` mis-numbered plus every sale recorded since under its broken default, from 1289 upwards, leaving the 24 legitimate early sales holding `INV-100`–`INV-127` untouched. Idempotent by construction: it only selects rows numbered at or below 999 and everything it repairs lands above that. No amount, balance, date, status, stock figure, policy or other function touched. **Applied 2026-10-24** and **reported by the operator as passing every check** — check 1 (the formatter at nine widths, including 1000, 1270 and 12345), check 2 (no duplicate invoice number anywhere in `sales`, unscoped), check 3 (nothing left holding `###` or null), check 4 (the legitimate early sales untouched), check 5 (`distinct_new = repaired = span`, the triple that would have caught `030` on the day), check 6 (the default is the function), check 7 (the sequence is clear of the table) and check 8 (a real sale recorded through the app) |
+
 Apply dates were not recorded before this file existed. Known: `007` on
 2026-07-02; `008` and `009` on 2026-07-22; `010`, `011` and `012` on 2026-07-28;
 `013` on 2026-07-28 or shortly after (confirmed live by the 2026-07-30 audit);
@@ -141,13 +143,14 @@ baseline by default.
 | File | What it does |
 |------|--------------|
 | `018_settle_customer_balances.sql` | 🛑 **DO NOT APPLY — superseded, and now actively destructive.** See the warning below |
-| `031_invoice_number_lpad_truncation.sql` | 🛑 **APPLY AS SOON AS REVIEWED.** Repairs `030`, whose `lpad(n::text, 3, '0')` truncates above 999 and so gave 271 sales just 28 invoice numbers — and whose default is **still live and still truncating every new sale**. Moves formatting into a PURE `format_invoice_number(bigint)` that can be tested at every width, wraps it in `next_invoice_number()` which calls `nextval` exactly once, makes that the column default, then renumbers the 271 logged rows plus every sale recorded since, from 1289 upwards. Leaves the 24 legitimate early sales holding `INV-100`–`INV-127` untouched. Idempotent by construction. No amount, balance, date, status, stock figure, policy or other function touched |
 
-`018` must never run. `031` is genuine outstanding work **and it is urgent**:
-until it is applied, every sale recorded is being stamped with a truncated
-invoice number that up to ten other sales already carry. Trading does not need
-to stop — the amounts, allocations and stock are all correct and only the label
-is wrong — but the repair set grows with every sale.
+`018` is the only file in this table, and it is not outstanding work — it is a
+file that must never run. There is nothing here waiting to be applied.
+
+The one piece of this episode still outstanding is **not** a migration: it is the
+client-side paging fix in `src/App.jsx` (branch
+`fix-invoice-overflow-and-row-cap`), without which production still reads only
+the first 1,000 of 1,134 sales.
 
 ### `030` — applied 2026-10-24, client half NOT yet deployed
 
@@ -200,7 +203,17 @@ arithmetic from two other figures is not a verification.** Check 3's constant wa
 reasoned, plausible and wrong, and only reading the live sequence showed it.
 Prefer an identity that the data must satisfy over a number you worked out.
 
-### 🛑 RESOLVED, cause was `030` itself: `lpad` truncates. Repair is `031`
+### ✅ CLOSED 2026-10-24 by `031`. Cause was `030` itself: `lpad` truncates
+
+`031` was applied the same day and the operator reported every check passing,
+including check 5's `distinct_new = repaired = span` triple — the one that fails
+loudly on exactly this bug (`030` would have shown `repaired = 271,
+distinct_new = 28`) — and check 2 unscoped across the whole table, so there is no
+duplicate invoice number left anywhere in `sales`.
+
+What follows is the record of the fault, kept because the episode cost three
+migrations and the reasoning is the part worth not repeating.
+
 
 **Cause confirmed 2026-10-24 from `invoice_renumber_log`:** `logged = 271`,
 `first_new = 100`, `last_new = 127`. 271 rows, 28 distinct numbers. `030` did it.

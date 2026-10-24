@@ -5,11 +5,16 @@
 -- Repairs migration `030`, which replaced one fixed-width formatting bug with
 -- another and assigned 28 invoice numbers to 271 sales.
 --
--- 🛑 APPLY THIS AS SOON AS IT IS REVIEWED. `030`'s default is LIVE and every
--- sale recorded since it was applied is being given a truncated, colliding
--- invoice number. Trading does not need to stop — the amounts, allocations and
--- stock are all correct and only the label is wrong — but the longer this waits
--- the more rows it has to repair.
+-- ✅ APPLIED 2026-10-24, the same day as `030`, with every check below reported
+-- passing by the operator — including check 1 (the formatter at nine widths) and
+-- check 5's `distinct_new = repaired = span` triple, which is the test that
+-- fails loudly on precisely the bug this file repairs.
+--
+-- (The urgency this was written under, kept for the record: `030`'s default was
+-- live and stamping a truncated, colliding number on every new sale, so the
+-- repair set grew with every sale recorded. Trading did not need to stop — the
+-- amounts, allocations and stock were correct throughout and only the label was
+-- wrong.)
 --
 -- WHAT `030` GOT WRONG
 -- --------------------
