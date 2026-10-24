@@ -65,7 +65,7 @@ Last run 2026-09-16: returned id 97 only, as expected.
 | `028_atomic_payroll.sql` | Closes the payroll gap — finding 1 of `docs/audit-2026-09-08.md`, open since 2026-08-08. Unique index on `payroll_payments (type, employee_id, period_label)`, `expenses.client_key` for idempotency, and atomic `record_salary_payment` / `record_casual_payout`, so a Salary expense can no longer be left standing without its payroll row. Both gates fail CLOSED on a null role. Net pay, casual pay and the runs a payout covers are DERIVED server-side; the client sends its own figure only as a cross-check. No figure moves — it only refuses future duplicates. **Applied 2026-09-15**, ahead of its client (branch `guard-payroll`), which is the safe order and the one the file requires |
 | `029_atomic_payroll_reversal.sql` | Findings 2 and 3 of `docs/audit-2026-09-17.md`. `delete_expense` makes the payroll REVERSE path one transaction — `028` made the write atomic and left this untouched, so deleting a payroll expense was N+2 unjoined round trips with no FK behind them; it is idempotent on purpose, so "delete it again, asking twice is safe" stays true. And `record_casual_payout` now evaluates the pay ONCE off the LOCKED run ids — it read the run set THREE times at three snapshots, so a run logged mid-transaction could be paid for and never flagged, and the expense could differ from the payroll rows it is the sum of. No figure moved. **Applied 2026-09-18.** Verified: check 4 (the arithmetic is unchanged — `differing_rows = 0` over `total_rows = 14` of live data, both directions) and check 2 (`locks_runs t, fails_closed t, reads_locked_ids t, reads_range_again f` — the last is finding 3 itself). The admin gate was seen failing CLOSED from a null-role session. **Checks 5, 6 and 6b were NOT run** — atomicity is structural (one plpgsql function, one transaction) but is not empirically proved. Its client merged FIRST, breaking expense deletion for a day; see below |
 
-| `030_invoice_number_overflow.sql` | Fixes the `sales."invoiceNumber"` default, which `003` wrote as `to_char(nextval(...), 'FM000')` — a FIXED-WIDTH template, so from the 1,000th sale on it returned the overflow marker `###` and every invoice since 2026-10-06 was stamped `INV-###`. Rewritten with `lpad`, which pads to 3 and then grows. Renumbers the overflowed rows in `id` order from the overflow boundary 1000 upwards (not from the surviving maximum, which past deletions could have dragged below a number already printed), and logs the old → new mapping in a new admin-read-only table `invoice_renumber_log`. **Edits `sales`, which `CLAUDE.md` forbids by default** — authorised by the owner on 2026-10-24 on the grounds that `###` was an overflow marker and never a valid number. No amount, balance, date, status, stock figure, policy or function is touched, and allocation/reversal key on `sales.id`. **Applied 2026-10-24**, the day the fault was reported. ⚠️ **Verified only by the `setval` result (1288)** — that return value proves the file ran to its final statement, nothing more. Checks 1, 2, 3, 5, 6, 7 and 8 were NOT run at apply time; its check 3 was itself wrong when applied (see below). Its **client half is not deployed**: see the `030` section below |
+| `030_invoice_number_overflow.sql` | Fixes the `sales."invoiceNumber"` default, which `003` wrote as `to_char(nextval(...), 'FM000')` — a FIXED-WIDTH template, so from the 1,000th sale on it returned the overflow marker `###` and every invoice since 2026-10-06 was stamped `INV-###`. 🛑 **ITS FIX WAS ALSO BROKEN AND IT IS SUPERSEDED BY `031`. DO NOT RE-APPLY, DO NOT COPY FROM IT.** It rewrote the default as `lpad(n::text, 3, '0')` in the belief that `lpad` pads to 3 and then grows — `lpad` is fixed width too and **TRUNCATES** above 999, so the same class of bug one line later. **Applied 2026-10-24** before the defect was found, where it gave 271 sales just 28 distinct numbers (1000..1270 each cut to three characters) and left a default still mangling every new sale. The diagnosis of `003` in its header is correct and worth keeping; nothing else in it is. ⚠️ **Verified at apply time only by the `setval` result (1288)**, which proves the file reached its final statement and nothing more — had check 2 or a nine-width test of the formatter been run, this would have been caught on the day. See the `lpad` section below and `031` for the repair |
 
 Apply dates were not recorded before this file existed. Known: `007` on
 2026-07-02; `008` and `009` on 2026-07-22; `010`, `011` and `012` on 2026-07-28;
@@ -141,9 +141,13 @@ baseline by default.
 | File | What it does |
 |------|--------------|
 | `018_settle_customer_balances.sql` | 🛑 **DO NOT APPLY — superseded, and now actively destructive.** See the warning below |
+| `031_invoice_number_lpad_truncation.sql` | 🛑 **APPLY AS SOON AS REVIEWED.** Repairs `030`, whose `lpad(n::text, 3, '0')` truncates above 999 and so gave 271 sales just 28 invoice numbers — and whose default is **still live and still truncating every new sale**. Moves formatting into a PURE `format_invoice_number(bigint)` that can be tested at every width, wraps it in `next_invoice_number()` which calls `nextval` exactly once, makes that the column default, then renumbers the 271 logged rows plus every sale recorded since, from 1289 upwards. Leaves the 24 legitimate early sales holding `INV-100`–`INV-127` untouched. Idempotent by construction. No amount, balance, date, status, stock figure, policy or other function touched |
 
-`018` is the only file in this table, and it is not outstanding work — it is a
-file that must never run. There is nothing here waiting to be applied.
+`018` must never run. `031` is genuine outstanding work **and it is urgent**:
+until it is applied, every sale recorded is being stamped with a truncated
+invoice number that up to ten other sales already carry. Trading does not need
+to stop — the amounts, allocations and stock are all correct and only the label
+is wrong — but the repair set grows with every sale.
 
 ### `030` — applied 2026-10-24, client half NOT yet deployed
 
@@ -196,7 +200,53 @@ arithmetic from two other figures is not a verification.** Check 3's constant wa
 reasoned, plausible and wrong, and only reading the live sequence showed it.
 Prefer an identity that the data must satisfy over a number you worked out.
 
-### 🛑 UNRESOLVED (2026-10-24): 295 sales share 28 invoice numbers, `INV-100`–`INV-127`
+### 🛑 RESOLVED, cause was `030` itself: `lpad` truncates. Repair is `031`
+
+**Cause confirmed 2026-10-24 from `invoice_renumber_log`:** `logged = 271`,
+`first_new = 100`, `last_new = 127`. 271 rows, 28 distinct numbers. `030` did it.
+
+`030` replaced `to_char(n, 'FM000')` — fixed width, returns `###` above 999 —
+with `lpad(n::text, 3, '0')`, which is **also fixed width and truncates on the
+right** above 999:
+
+```sql
+select lpad('999',  3, '0');   -- '999'   correct
+select lpad('1000', 3, '0');   -- '100'   TRUNCATED
+select lpad('1270', 3, '0');   -- '127'   TRUNCATED
+```
+
+`030`'s anchor (999) and its `row_number()` were both correct: it generated the
+intended 1000..1270 and then truncated every value to three characters. 1000–1009
+all became `INV-100`, 1010–1019 `INV-101`, through to 1270 → `INV-127`. That is
+27 numbers holding 10 rows each plus one holding 1 = **271 rows over 28 numbers**.
+The 24 legitimate early sales already holding `INV-100`–`INV-127` produce the
+observed counts exactly: 23 numbers with 11, 4 with 10, `INV-127` with 2, 295 in
+all.
+
+**The withdrawn pre-`003` explanation was wrong, and the October date was the
+clue that it was.** Those October rows were not survivors of an old fault; they
+were sales `030` had just renumbered.
+
+**`030`'s default was left broken and live.** Every sale recorded between the
+apply and `031` is given a truncated number from
+`lpad(nextval(...)::text, 3, '0')` — `nextval` 1289 produced `INV-128`. `031`
+repairs those rows too, by the id test described in its section 3.
+
+**Nothing was destroyed and no valid number was overwritten.** `030` only matched
+rows failing `^INV-[0-9]+$`, and all 271 of them held the identical string
+`INV-###` beforehand — there was no distinct identity to lose. Money was never
+involved at any point: allocation, deletion and reversal all key on `sales.id`,
+and no amount, balance, payment, stock figure or report total moved.
+
+Reprints have now been invalidated twice — `INV-###` first, then a truncated
+`INV-1xx` shared with up to ten other sales. `invoice_renumber_log` holds both
+hops (`migration = '030'` then `'031'`, joinable on `sale_id`), so any printed
+document can still be traced to its sale.
+
+<details>
+<summary>The original UNRESOLVED note, kept because the reasoning in it is the
+part worth learning from</summary>
+
 
 Found by running `030`'s check 2 against the whole `sales` table immediately
 after applying `030`. It returned 28 numbers, **`INV-100` through `INV-127`,
@@ -301,6 +351,8 @@ select case
          where "invoiceNumber" ~ '^INV-[0-9]+$') t
  group by band order by band;
 ```
+
+</details>
 
 Remember that the stopgap for the client half is a dashboard setting
 (**Settings → API → Max rows**), not a migration. Raising it makes the missing
@@ -556,7 +608,53 @@ closed. Any new `SECURITY DEFINER` function needs the null-safe form, and its
 gate cannot be tested from the SQL Editor: from there, a correct gate refuses
 everything.
 
-## `to_char` numeric templates are fixed width, and overflow to `###`
+## Fixed-width formatters: `to_char` gives `###`, `lpad` TRUNCATES
+
+A trap this database fell into **twice in four months, the second time while
+fixing the first**. Recorded at length because reading about it plainly did not
+prevent it.
+
+### The second one first, because it is the more embarrassing
+
+`030` was written to fix `003`. Its header diagnosed `to_char` correctly, and
+then it shipped:
+
+```sql
+'INV-' || lpad(nextval('public.sales_invoice_seq')::text, 3, '0')
+```
+
+PostgreSQL's `lpad` is documented as: *"If the string is already longer than
+length then it is truncated (on the right)."*
+
+```sql
+select lpad('999',  3, '0');   -- '999'    correct
+select lpad('1000', 3, '0');   -- '100'    TRUNCATED
+```
+
+So the fix for a fixed-width formatter that mangles values above 999 was a
+different fixed-width formatter that mangles values above 999. Applied, it gave
+271 sales 28 invoice numbers and left the default still breaking every new
+sale. `031` is the repair.
+
+**Neither file ever ran its formatter at a width above the one it was designed
+for.** That costs one `select` and touches no data. It is the entire defence, and
+it was skipped twice.
+
+This is why `031` splits formatting into a PURE function,
+`format_invoice_number(bigint)`, separate from the sequence call. A column
+default cannot be tested without inserting a row and burning a sequence value, so
+in practice it never gets tested. A pure function can be tested against a VALUES
+list for nothing, and `031`'s check 1 does exactly that across nine widths — the
+check that would have caught both bugs.
+
+**Write neither `to_char(n, '000')` nor `lpad(n::text, 3, '0')` for an
+identifier that grows.** Use an explicit branch that cannot truncate:
+
+```sql
+'INV-' || case when n < 1000 then lpad(n::text, 3, '0') else n::text end
+```
+
+### And the original
 
 A trap this database already fell into, recorded so it is not repeated.
 

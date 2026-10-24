@@ -6,6 +6,26 @@
 -- 'INV-###' onto every sale since the 1,000th one, and renumbers the sales that
 -- already carry it.
 --
+-- 🛑 THIS FILE IS BROKEN AND IS SUPERSEDED BY `031`. IT WAS APPLIED ANYWAY, ON
+-- 2026-10-24, BEFORE THE DEFECT WAS FOUND. DO NOT RE-APPLY IT; DO NOT COPY ITS
+-- SECTION 1 OR SECTION 3 INTO ANYTHING.
+--
+-- Its diagnosis of `to_char` below is correct and worth keeping. Its FIX is not:
+-- it replaced `to_char(n, 'FM000')`, which returns '###' above 999, with
+-- `lpad(n::text, 3, '0')`, which TRUNCATES above 999 — `lpad('1000', 3, '0')` is
+-- '100'. The same class of bug, one line later. Applied, it gave 271 sales just
+-- 28 distinct invoice numbers (1000..1270 each cut to three characters) and left
+-- a default that was still mangling every new sale.
+--
+-- `031_invoice_number_lpad_truncation.sql` repairs both the data and the
+-- default, and moves the formatting into a PURE function that can be tested at
+-- every width without touching a table. Read that file, not this one.
+--
+-- The lesson is in migrations/README.md under the fixed-width formatting note.
+-- It is not "lpad is surprising". It is that neither `003` nor this file ever
+-- ran its formatter at a width above the one it was designed for, although
+-- doing so costs one `select` and no data.
+--
 -- WHY THIS EXISTS
 -- ---------------
 -- `003_db_generated_ids.sql` moved invoice numbering into the database:
