@@ -196,6 +196,61 @@ arithmetic from two other figures is not a verification.** Check 3's constant wa
 reasoned, plausible and wrong, and only reading the live sequence showed it.
 Prefer an identity that the data must satisfy over a number you worked out.
 
+### 🔎 Open finding: ~295 pre-`003` sales share 28 invoice numbers
+
+Found on 2026-10-24 by running `030`'s check 2 against the whole `sales` table
+immediately after applying it. It returned 28 numbers, **`INV-100` through
+`INV-127`, carrying about 295 rows between them — roughly 11 rows per number**,
+with `INV-127` down to 2.
+
+**This is not `030`'s doing, and `030` cannot produce it.** That file assigns
+from 1000 upwards and `row_number()` makes every value it issues distinct, so a
+renumbered row can appear at most once. Everything in the duplicate set sits
+below 128.
+
+It is pre-`003` history. Until `003` was applied on 2026-06-18 the **client**
+generated invoice numbers, and each client only ever saw an RLS-filtered subset
+of `sales` — so a user at Loglogo and a user at Marsabit would independently
+produce the same `INV-1xx`. `003`'s header names exactly this hazard as its
+reason for existing. It closed the hole going forward and **never repaired the
+rows already written**, and nothing since has. `003`'s `setval` then took
+`max = 127`, which is why database-issued numbering starts at 128.
+
+**Money is not affected.** Payment allocation, deletion and reversal all key on
+`sales.id`; the invoice number is a label. Balances, the P&L and every stock
+figure are untouched by this. What is affected is document identity: ~295 early
+invoices do not uniquely name the sale behind them.
+
+Not yet decided, and deliberately NOT bundled into `030`:
+
+* These are **June 2026 invoices that were printed and issued four months ago**,
+  in the same period as the known Loglogo data-entry problems and the `027`
+  opening-balance corrections. Renumbering them now changes documents that are
+  long settled, which is a different proposition from repairing a `###` label
+  that was never valid.
+* If they are repaired, it should be its own migration (`031`), anchored above
+  the sequence rather than at 128, and logged through the existing
+  `invoice_renumber_log` (which is why that table takes a `migration` column
+  rather than hard-coding `'030'`).
+* Doing nothing is defensible too, provided it is a decision on the record
+  rather than an oversight. **This note is that record.**
+
+Verify before acting on any of it:
+
+```sql
+-- the renumbered block must be clean
+select "invoiceNumber", count(*) from public.sales
+ where "invoiceNumber" ~ '^INV-[0-9]+$'
+   and (regexp_replace("invoiceNumber", '\D', '', 'g'))::int >= 1000
+ group by "invoiceNumber" having count(*) > 1;
+
+-- the era and the exposure
+select min(date), max(date), count(*), count(distinct "invoiceNumber"), sum(total)
+  from public.sales
+ where "invoiceNumber" in (select "invoiceNumber" from public.sales
+   group by "invoiceNumber" having count(*) > 1);
+```
+
 Remember that the stopgap for the client half is a dashboard setting
 (**Settings → API → Max rows**), not a migration. Raising it makes the missing
 sales reappear without a deploy, but it does not fix anything — it moves the

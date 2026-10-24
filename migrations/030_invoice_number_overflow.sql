@@ -263,15 +263,45 @@ commit;
 --    where "invoiceNumber" is null
 --       or "invoiceNumber" !~ '^INV-[0-9]+$';
 --
--- Check 2 — every invoice number is now unique. MUST return no rows.
---   (It will NOT return rows for pre-1000 history either; if it does, that is a
---   separate pre-existing duplicate and worth knowing about.)
+-- Check 2 — the numbers THIS FILE assigned are unique. MUST return no rows.
+--
+--   🛑 RUN IT IN THIS FORM, NOT THE WHOLE TABLE. An earlier draft asked for
+--   every duplicate in `sales` and claimed "it will NOT return rows for
+--   pre-1000 history either". That claim was WRONG. Run against the whole table
+--   on 2026-10-24, immediately after this file was applied, it returned 28
+--   numbers — INV-100 through INV-127 — carrying 295 rows between them, around
+--   11 rows per number.
+--
+--   Those are NOT from this file and this file cannot produce them: it assigns
+--   from 1000 up (see section 3) and `row_number()` makes every value it hands
+--   out distinct, so a renumbered row can appear at most once.
+--
+--   They are pre-`003` history. Before `003` (2026-06-18) the CLIENT generated
+--   invoice numbers, and every client saw only an RLS-filtered subset of sales,
+--   so several of them independently generated the same low numbers. `003`'s
+--   own header names this hazard as its reason for existing — it moved
+--   numbering into the database and closed it going forward, but it never
+--   repaired the rows already written, and nothing since has. `003`'s setval
+--   then took max = 127 and started the sequence at 128, which is why DB-issued
+--   numbering begins there.
+--
+--   Scoping the check to >= 1000 is what makes it a check on THIS file rather
+--   than a rediscovery of a four-month-old one.
 --
 --   select "invoiceNumber", count(*)
 --     from public.sales
+--    where "invoiceNumber" ~ '^INV-[0-9]+$'
+--      and (regexp_replace("invoiceNumber", '\D', '', 'g'))::int >= 1000
 --    group by "invoiceNumber"
 --   having count(*) > 1
 --    order by 2 desc;
+--
+--   The `~ '^INV-[0-9]+$'` guard is not optional. Without it the ::int cast
+--   meets any remaining '###' row and raises, turning a failed check 1 into an
+--   unrelated-looking error here.
+--
+--   For the pre-003 duplicates themselves, see the note in migrations/README.md.
+--   They are a separate open finding, NOT part of this migration.
 --
 -- Check 3 — the mapping was recorded, and its size matches what was repaired.
 --
