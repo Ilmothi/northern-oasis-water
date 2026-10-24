@@ -9,6 +9,27 @@ later, by whoever gets to it, without re-reading the whole migration first.
 
 ---
 
+## ✅ DONE — applied 2026-09-18
+
+**This runbook has been used. Keep it for the pattern, not as a to-do.**
+
+| Check | Result |
+|---|---|
+| 2 — section 3 landed, lock and gate kept | ✅ `t, t, t, f` — `reads_range_again = f` is finding 3 closed |
+| 4 — no figure moved | ✅ `differing_rows = 0`, `total_rows = 14` (non-empty, so it means something) |
+| gate fails closed | ✅ observed — a null-role session was refused |
+| 1, 5, 6, 6b, 7 | ⬜ **not run** |
+
+Expense deletion works again in production. **Check 5 — the atomicity proof —
+was never run**, so that claim rests on structure (one plpgsql function, one
+transaction) rather than evidence. If it matters later, steps A/B/C below are
+still the way to get it.
+
+The sections below are left in the present tense as written. Everything from
+"Why this is outstanding" onward describes the state on 2026-09-17.
+
+---
+
 ## Why this is outstanding, and what is broken while it is
 
 🔴 **Expense deletion is failing in production right now.**

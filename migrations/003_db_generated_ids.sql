@@ -65,6 +65,22 @@ select setval(
 -- 3. sales."invoiceNumber" -> database default from a dedicated sequence.
 --    Format preserved: INV-001, INV-002, ... (to_char FM000 = min 3 digits,
 --    grows beyond 3 without truncating — matches the old padStart(3,'0')).
+--
+--    ⚠️ THE PARENTHESISED CLAIM ABOVE IS WRONG. It is left in place because it
+--    is what this file actually did for four months, and because the mistake is
+--    the point. A `to_char` numeric template is FIXED WIDTH: `to_char(1000,
+--    'FM000')` returns '###', not '1000'. From the 1,000th sale onwards this
+--    default stamped the literal text 'INV-###' onto every invoice, and did so
+--    silently from 2026-10-06 until it was reported on 2026-10-24.
+--
+--    FIXED BY `031_invoice_number_lpad_truncation.sql`. Note 031, NOT 030:
+--    `030` attempted this fix with `lpad(n::text, 3, '0')` and reintroduced the
+--    identical bug, because `lpad` is fixed width too and truncates above 999.
+--    `031` moves the formatting into a pure, testable function. The SQL below is
+--    deliberately unchanged so that applying this directory in order still
+--    reproduces the real history; 030 then 031 correct it a few files later. If
+--    you are rebuilding a database you need BOTH, and 030 alone leaves you worse
+--    off than this file does.
 -- ---------------------------------------------------------------------------
 create sequence if not exists public.sales_invoice_seq;
 

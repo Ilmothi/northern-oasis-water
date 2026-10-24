@@ -63,6 +63,11 @@ Last run 2026-09-16: returned id 97 only, as expected.
 | `026_production_requires_materials.sql` | Refuses a production run that would drive any raw material below zero, by wiring `020`'s `assert_stock_not_negative` into `record_production` — the last decreasing write path without it. Closes the gap `020` deliberately deferred. No figure moved; it only refuses future writes. **Applied 2026-08-31**, PR #39 (`beb0ae9`) |
 | `027_customer_adjustments.sql` | New `customer_adjustments` table (RLS + policies defined in the same file) and **a third term in the balance formula**: `-sum(unpaid invoices) + credit held + adjustments`. Adds admin-only `record_customer_adjustment` / `delete_customer_adjustment`, both failing CLOSED on a null role. Inert on apply — the term is zero until an adjustment is posted. Moved Debtors and Aging only; never Cash Collected, the P&L or stock. **Applied 2026-09-02**, PR #43 (`f77c7c2`); the Loglogo corrections were entered the same day |
 | `028_atomic_payroll.sql` | Closes the payroll gap — finding 1 of `docs/audit-2026-09-08.md`, open since 2026-08-08. Unique index on `payroll_payments (type, employee_id, period_label)`, `expenses.client_key` for idempotency, and atomic `record_salary_payment` / `record_casual_payout`, so a Salary expense can no longer be left standing without its payroll row. Both gates fail CLOSED on a null role. Net pay, casual pay and the runs a payout covers are DERIVED server-side; the client sends its own figure only as a cross-check. No figure moves — it only refuses future duplicates. **Applied 2026-09-15**, ahead of its client (branch `guard-payroll`), which is the safe order and the one the file requires |
+| `029_atomic_payroll_reversal.sql` | Findings 2 and 3 of `docs/audit-2026-09-17.md`. `delete_expense` makes the payroll REVERSE path one transaction — `028` made the write atomic and left this untouched, so deleting a payroll expense was N+2 unjoined round trips with no FK behind them; it is idempotent on purpose, so "delete it again, asking twice is safe" stays true. And `record_casual_payout` now evaluates the pay ONCE off the LOCKED run ids — it read the run set THREE times at three snapshots, so a run logged mid-transaction could be paid for and never flagged, and the expense could differ from the payroll rows it is the sum of. No figure moved. **Applied 2026-09-18.** Verified: check 4 (the arithmetic is unchanged — `differing_rows = 0` over `total_rows = 14` of live data, both directions) and check 2 (`locks_runs t, fails_closed t, reads_locked_ids t, reads_range_again f` — the last is finding 3 itself). The admin gate was seen failing CLOSED from a null-role session. **Checks 5, 6 and 6b were NOT run** — atomicity is structural (one plpgsql function, one transaction) but is not empirically proved. Its client merged FIRST, breaking expense deletion for a day; see below |
+
+| `030_invoice_number_overflow.sql` | Fixes the `sales."invoiceNumber"` default, which `003` wrote as `to_char(nextval(...), 'FM000')` — a FIXED-WIDTH template, so from the 1,000th sale on it returned the overflow marker `###` and every invoice since 2026-10-06 was stamped `INV-###`. 🛑 **ITS FIX WAS ALSO BROKEN AND IT IS SUPERSEDED BY `031`. DO NOT RE-APPLY, DO NOT COPY FROM IT.** It rewrote the default as `lpad(n::text, 3, '0')` in the belief that `lpad` pads to 3 and then grows — `lpad` is fixed width too and **TRUNCATES** above 999, so the same class of bug one line later. **Applied 2026-10-24** before the defect was found, where it gave 271 sales just 28 distinct numbers (1000..1270 each cut to three characters) and left a default still mangling every new sale. The diagnosis of `003` in its header is correct and worth keeping; nothing else in it is. ⚠️ **Verified at apply time only by the `setval` result (1288)**, which proves the file reached its final statement and nothing more — had check 2 or a nine-width test of the formatter been run, this would have been caught on the day. See the `lpad` section below and `031` for the repair |
+
+| `031_invoice_number_lpad_truncation.sql` | Repairs `030`. Splits invoice formatting into a PURE `format_invoice_number(bigint)` — pads to 3, never truncates, explicit `case` rather than a formatting function's edge behaviour — and a `next_invoice_number()` wrapper calling `nextval` exactly once, which becomes the column default. Renumbers the 271 rows `030` mis-numbered plus every sale recorded since under its broken default, from 1289 upwards, leaving the 24 legitimate early sales holding `INV-100`–`INV-127` untouched. Idempotent by construction: it only selects rows numbered at or below 999 and everything it repairs lands above that. No amount, balance, date, status, stock figure, policy or other function touched. **Applied 2026-10-24** and **reported by the operator as passing every check** — check 1 (the formatter at nine widths, including 1000, 1270 and 12345), check 2 (no duplicate invoice number anywhere in `sales`, unscoped), check 3 (nothing left holding `###` or null), check 4 (the legitimate early sales untouched), check 5 (`distinct_new = repaired = span`, the triple that would have caught `030` on the day), check 6 (the default is the function), check 7 (the sequence is clear of the table) and check 8 (a real sale recorded through the app) |
 
 Apply dates were not recorded before this file existed. Known: `007` on
 2026-07-02; `008` and `009` on 2026-07-22; `010`, `011` and `012` on 2026-07-28;
@@ -138,40 +143,282 @@ baseline by default.
 | File | What it does |
 |------|--------------|
 | `018_settle_customer_balances.sql` | 🛑 **DO NOT APPLY — superseded, and now actively destructive.** See the warning below |
-| `029_atomic_payroll_reversal.sql` | Findings 2 and 3 of `docs/audit-2026-09-17.md`. `delete_expense` makes the payroll REVERSE path one transaction — `028` made the write atomic and left this untouched, so deleting a payroll expense was N+2 unjoined round trips with no FK behind them. And `record_casual_payout` is rewritten to evaluate the pay ONCE off the LOCKED run ids; it read the run set three times at three snapshots, so a run logged mid-transaction could be paid for and never flagged. 🔴 **OUTSTANDING — apply now.** Its client merged FIRST (PR #58), so expense deletion is broken in production until this is applied; see the note below. No figure moves; check 4 proves the arithmetic is unchanged against live data |
 
-`018` is not outstanding work — it is a file that must never run. `029` is the
-only thing here actually waiting to be applied.
+`018` is the only file in this table, and it is not outstanding work — it is a
+file that must never run. There is nothing here waiting to be applied.
 
-🔴 **`029` IS OUTSTANDING AND ITS CLIENT IS ALREADY LIVE. Apply it now.**
+The one piece of this episode still outstanding is **not** a migration: it is the
+client-side paging fix in `src/App.jsx` (branch
+`fix-invoice-overflow-and-row-cap`), without which production still reads only
+the first 1,000 of 1,134 sales.
 
-It was written to be applied before its client, like `024`/`025` and unlike
-`017`. **That is not what happened.** PR #58 merged on 2026-09-17 and `main`
-auto-deploys, so `handleDeleteExpense` has been calling `delete_expense` in
-production since — and the function does not exist until this file is applied.
-**Every expense delete is failing** with `function public.delete_expense(bigint)
-does not exist`.
+### `030` — applied 2026-10-24, client half NOT yet deployed
 
-Nothing is corrupted by the gap: a delete that cannot start cannot
-half-complete, and the old non-atomic path is gone from the client, so there is
-no partial unwind to clean up. It is an outage on one path, not a data problem.
-The finding-3 half — `record_casual_payout` evaluating the pay off the locked
-run ids — also only takes effect on apply.
+`030_invoice_number_overflow.sql` was applied by the operator on 2026-10-24, the
+same day the fault was reported. See the row in the table above for what it
+does.
 
-Run block 0d before applying: it looks for orphans the old non-atomic path may
-already have left, which is a money question before it is a technical one. The
-file does not clean up anything it finds; it only stops more being created.
+**Its client half is still outstanding.** The pagination fix in `src/App.jsx`
+(branch `fix-invoice-overflow-and-row-cap`) is committed but not merged, so
+production is still subject to the row cap and still only sees the first 1,000
+sales until that deploys or Max rows is raised.
 
-**Checks 5 and 6 need an admin impersonation** (`set local role authenticated`
-plus `request.jwt.claims`) — they call `delete_expense`, and from a plain SQL
-Editor session `auth.uid()` is NULL so the admin gate correctly refuses. The
-file carries the exact incantation. Check 6c is the opposite case and expects
-that refusal; run it on its own, because it ends in a deliberate error.
+That split is safe here, unlike `029`: the client calls no new function and
+reads `"invoiceNumber"` as an opaque string, so either half works alone and
+neither can break the other.
 
-This row is the lesson `017` already taught and this file already records:
-**an ordering constraint stated only in a migration header is not a
-constraint.** It belongs here, where the merge decision is made — which is why
-it is now stated here in red rather than in prose three sections down.
+* Migration first (what happened) → printed invoice numbers are correct and
+  unique, while sales past row 1,000 stay invisible until the client deploys.
+* Client first → every sale reappears and the reports reconcile again, while the
+  recent invoices still read `INV-###`.
+
+**Scheduling note for the record, since it was not observed:** data loads once
+per login, so a clerk already signed in held the old `INV-###` values in memory
+across the renumber and could have printed one afterwards. Any invoice printed
+on 2026-10-24 is worth re-checking against `invoice_renumber_log`.
+
+⚠️ **`030`'s own check 3 was WRONG when it was applied** and has since been
+corrected. It said "expect 135 rows renumbered", reasoning 1,134 sales minus 999
+valid numbers. The live sequence disproved it: it stood at **1288** against 1,134
+rows, so 154 numbers had already been spent on sales that no longer exist.
+`nextval` is non-transactional — every sale this database ever REFUSED kept its
+number (negative-stock guard, raw-material floor, overpayment guard, RLS
+refusal, timeout), as did every deleted one. The repaired count is therefore 135
+plus whatever share of those burns fell below 1000, which is not recoverable
+from the table. **135 was a floor, not an expectation.** Check 3 now tests
+identities (`logged = numbered_1000_up`, `first_new = 1000`,
+`last_new = 999 + logged`) that hold whatever the burn count was.
+
+Two consequences worth knowing:
+
+* **Invoice numbering has always had gaps**, well before the overflow. This is
+  not something `030` introduced.
+* **There is a visible jump after the repaired block.** It ends around
+  `INV-1134`; the next real sale gets about `INV-1289`. That is the burned
+  numbers, it is correct, and it is not a new fault.
+
+This is the third time this file has had to record the same lesson. `010` taught
+it, `016` and `024`–`027` repeated it, and now `030`: **a figure derived by
+arithmetic from two other figures is not a verification.** Check 3's constant was
+reasoned, plausible and wrong, and only reading the live sequence showed it.
+Prefer an identity that the data must satisfy over a number you worked out.
+
+### ✅ CLOSED 2026-10-24 by `031`. Cause was `030` itself: `lpad` truncates
+
+`031` was applied the same day and the operator reported every check passing,
+including check 5's `distinct_new = repaired = span` triple — the one that fails
+loudly on exactly this bug (`030` would have shown `repaired = 271,
+distinct_new = 28`) — and check 2 unscoped across the whole table, so there is no
+duplicate invoice number left anywhere in `sales`.
+
+What follows is the record of the fault, kept because the episode cost three
+migrations and the reasoning is the part worth not repeating.
+
+
+**Cause confirmed 2026-10-24 from `invoice_renumber_log`:** `logged = 271`,
+`first_new = 100`, `last_new = 127`. 271 rows, 28 distinct numbers. `030` did it.
+
+`030` replaced `to_char(n, 'FM000')` — fixed width, returns `###` above 999 —
+with `lpad(n::text, 3, '0')`, which is **also fixed width and truncates on the
+right** above 999:
+
+```sql
+select lpad('999',  3, '0');   -- '999'   correct
+select lpad('1000', 3, '0');   -- '100'   TRUNCATED
+select lpad('1270', 3, '0');   -- '127'   TRUNCATED
+```
+
+`030`'s anchor (999) and its `row_number()` were both correct: it generated the
+intended 1000..1270 and then truncated every value to three characters. 1000–1009
+all became `INV-100`, 1010–1019 `INV-101`, through to 1270 → `INV-127`. That is
+27 numbers holding 10 rows each plus one holding 1 = **271 rows over 28 numbers**.
+The 24 legitimate early sales already holding `INV-100`–`INV-127` produce the
+observed counts exactly: 23 numbers with 11, 4 with 10, `INV-127` with 2, 295 in
+all.
+
+**The withdrawn pre-`003` explanation was wrong, and the October date was the
+clue that it was.** Those October rows were not survivors of an old fault; they
+were sales `030` had just renumbered.
+
+**`030`'s default was left broken and live.** Every sale recorded between the
+apply and `031` is given a truncated number from
+`lpad(nextval(...)::text, 3, '0')` — `nextval` 1289 produced `INV-128`. `031`
+repairs those rows too, by the id test described in its section 3.
+
+**Nothing was destroyed and no valid number was overwritten.** `030` only matched
+rows failing `^INV-[0-9]+$`, and all 271 of them held the identical string
+`INV-###` beforehand — there was no distinct identity to lose. Money was never
+involved at any point: allocation, deletion and reversal all key on `sales.id`,
+and no amount, balance, payment, stock figure or report total moved.
+
+Reprints have now been invalidated twice — `INV-###` first, then a truncated
+`INV-1xx` shared with up to ten other sales. `invoice_renumber_log` holds both
+hops (`migration = '030'` then `'031'`, joinable on `sale_id`), so any printed
+document can still be traced to its sale.
+
+<details>
+<summary>The original UNRESOLVED note, kept because the reasoning in it is the
+part worth learning from</summary>
+
+
+Found by running `030`'s check 2 against the whole `sales` table immediately
+after applying `030`. It returned 28 numbers, **`INV-100` through `INV-127`,
+carrying 295 rows between them** — 23 numbers with 11 rows each, 4 with 10, and
+`INV-127` with 2.
+
+**This is not understood yet. Do not act on it until it is.** What is known:
+
+```
+rows 295 · distinct numbers 28 · earliest 2026-06-01 · latest 2026-10-21
+total KES 205,620
+```
+
+**A first explanation was written here and is now WITHDRAWN.** It said these
+were pre-`003` rows from when the client generated invoice numbers against an
+RLS-filtered subset of `sales` — which is a real hazard, named in `003`'s own
+header as its reason for existing. The **`latest` date of 2026-10-21 refutes
+it**: `003` was applied on 2026-06-18, so a row it left behind cannot carry an
+October date. The pre-`003` story may still explain part of the set, but it
+cannot explain the recent end of it.
+
+What has been ruled out by reading the code rather than reasoning about it:
+
+* **No client-side invoice numbering exists.** `grep` for `INV-`, `padStart(3`
+  in `src/App.jsx`: nothing. The client never sends `"invoiceNumber"`.
+* **No RPC sets it explicitly.** No `insert` in any migration names the column;
+  `024`/`025` only read it for error messages. The column default is the only
+  writer.
+
+Which leaves the question open: with the sequence at 1288 and the default the
+only source of values, **how does any row carry a number in the 100–127 range
+with an October date?** Candidate lines of enquiry, none confirmed:
+
+1. **`030`'s own renumber did it** — possible only if its anchor evaluated to 99.
+   That requires no surviving row to have had a valid number above 99 at apply
+   time, which is hard to square with 1,134 rows and a sequence at 1288. The
+   version applied may not have carried the `greatest(999, ...)` guard added in
+   `8160d66`. **Check `invoice_renumber_log` first — it records exactly what
+   `030` assigned, which settles this one way or the other.**
+2. **The sequence was reset at some point**, re-issuing a low block more than
+   once. Repeated re-issue of 100–127 would produce roughly this shape.
+3. **Rows were inserted by a path that bypasses the default** — a restore, a
+   manual backfill, or a direct SQL insert naming the column.
+
+The discriminating queries are at the end of this note. **`invoice_renumber_log`
+is the first thing to read**: it exists precisely so the renumber's own output
+can be audited, and it makes enquiry 1 a matter of fact rather than inference.
+
+**Money is not affected either way.** Payment allocation, deletion and reversal
+all key on `sales.id`; the invoice number is a label. Balances, the P&L, Cash
+Collected and every stock figure are untouched. What is at stake is document
+identity — 295 sales carrying KES 205,620 do not uniquely name themselves — and,
+if enquiry 1 turns out to be the answer, the correctness of `030` itself.
+
+Nothing is being repaired until the cause is known. A repair aimed at the wrong
+cause would be a second renumber on top of a misunderstood first one.
+
+```sql
+-- 1. WHAT 030 ACTUALLY ASSIGNED. Read this before anything else.
+select count(*) as logged,
+       min((regexp_replace(new_number, '\D', '', 'g'))::int) as first_new,
+       max((regexp_replace(new_number, '\D', '', 'g'))::int) as last_new
+  from public.invoice_renumber_log
+ where migration = '030';
+
+-- 2. Per duplicate number: how many of its rows did 030 touch?
+--    renumbered_by_030 = 0 everywhere  -> 030 is not involved, enquiry 2 or 3
+--    renumbered_by_030 = 1 everywhere  -> 030 assigned into an occupied range
+select s."invoiceNumber",
+       count(*)            as rows,
+       count(l.sale_id)    as renumbered_by_030,
+       min(s.date)         as earliest,
+       max(s.date)         as latest,
+       min(s.id)           as min_id,
+       max(s.id)           as max_id
+  from public.sales s
+  left join public.invoice_renumber_log l
+         on l.sale_id = s.id and l.migration = '030'
+ where s."invoiceNumber" in (
+   select "invoiceNumber" from public.sales
+    group by "invoiceNumber" having count(*) > 1)
+ group by s."invoiceNumber"
+ order by (regexp_replace(s."invoiceNumber", '\D', '', 'g'))::int;
+
+-- 3. Is the block 030 assigned internally clean?
+select "invoiceNumber", count(*) from public.sales
+ where "invoiceNumber" ~ '^INV-[0-9]+$'
+   and (regexp_replace("invoiceNumber", '\D', '', 'g'))::int >= 1000
+ group by "invoiceNumber" having count(*) > 1;
+
+-- 4. The shape of the whole numbering space, by era.
+select case
+         when n < 100  then '001-099'
+         when n < 128  then '100-127  (the duplicated block)'
+         when n < 1000 then '128-999'
+         else '1000+'
+       end as band,
+       count(*) as rows, count(distinct n) as distinct_numbers,
+       min(date) as earliest, max(date) as latest
+  from (select (regexp_replace("invoiceNumber", '\D', '', 'g'))::int as n, date
+          from public.sales
+         where "invoiceNumber" ~ '^INV-[0-9]+$') t
+ group by band order by band;
+```
+
+</details>
+
+Remember that the stopgap for the client half is a dashboard setting
+(**Settings → API → Max rows**), not a migration. Raising it makes the missing
+sales reappear without a deploy, but it does not fix anything — it moves the
+threshold. The paging in `fetchAllRows` is what actually removes the cap from the
+picture, and it should stay in place whatever the setting says.
+
+**Confirmed against production on 2026-10-24: 1,134 sales, Max rows 1000.** So
+134 sales — about 12% of the book — were invisible to the app, and every
+browser-computed report was short by whatever those rows contained.
+
+One thing not to assume when reconciling that period: **the hidden rows were not
+necessarily the newest 134.** Without an ORDER BY, PostgREST returns heap order,
+and an UPDATE moves a row's heap position — every payment recorded against a
+sale updates its `paid` and `status`. An older sale that was recently part-paid
+could therefore have been hidden while a newer one was visible. The cut-off only
+*looks* like 2026-10-06 because that is where the bulk of it falls.
+
+### What the `029` apply cost, and why the ordering rule is in this file
+
+`029` was applied on 2026-09-18 and has moved to the table above. It is recorded
+here because the apply went wrong in a way worth not repeating.
+
+**Its client merged first.** PR #58 landed on 2026-09-17, `main` auto-deploys,
+and `handleDeleteExpense` calls `delete_expense` — which did not exist yet. **Every
+expense delete in production failed for about a day** with `function
+public.delete_expense(bigint) does not exist`. Nothing was corrupted: a delete
+that cannot start cannot half-complete, and the old non-atomic path was already
+gone from the client, so there was no partial unwind to clean up. It was an
+outage on one path, not a data problem, and applying the file ended it.
+
+This is the lesson `017` taught and this file already recorded: **an ordering
+constraint stated only in a migration header is not a constraint.** `029`'s
+header said "migration first, not optional" and it was read after the merge, not
+before. Which is why the constraint now goes in the pending row above, where the
+merge decision actually gets made.
+
+**Two defects were found in `029`'s own verification block, both by running it
+rather than reading it**, and both were invisible on the page:
+
+- Checks 5 and 6 called `delete_expense` from a plain SQL Editor session, where
+  `auth.uid()` is NULL, so `get_my_role()` is NULL and the admin gate **correctly
+  refuses**. A correct gate presenting as a broken migration. They now impersonate
+  (`set local role authenticated` + `request.jwt.claims`) and print
+  `auth.uid()`/`get_my_role()` first to prove the impersonation took.
+- Check 5 was six separate `select count(*)` statements in one transaction. The
+  Supabase SQL Editor **shows only the last result set**, so it returned a bare
+  `count: 0` and hid the five numbers that gave it meaning — and that 0 is
+  trivially true for an expense with no linked runs, so it read as a pass while
+  proving nothing. It is now three steps, each returning one row.
+
+**A verification block is code.** Reading it proves nothing; only running it
+finds this class of defect. Write the next one expecting to be wrong.
 
 > **Corrected 2026-09-15.** This table listed `024`–`027` as pending for two
 > weeks after all four went live — finding 2 of `docs/audit-2026-09-08.md`. They
@@ -373,6 +620,92 @@ is safe — a NULL there denies the row, so the policies in `001` genuinely do f
 closed. Any new `SECURITY DEFINER` function needs the null-safe form, and its
 gate cannot be tested from the SQL Editor: from there, a correct gate refuses
 everything.
+
+## Fixed-width formatters: `to_char` gives `###`, `lpad` TRUNCATES
+
+A trap this database fell into **twice in four months, the second time while
+fixing the first**. Recorded at length because reading about it plainly did not
+prevent it.
+
+### The second one first, because it is the more embarrassing
+
+`030` was written to fix `003`. Its header diagnosed `to_char` correctly, and
+then it shipped:
+
+```sql
+'INV-' || lpad(nextval('public.sales_invoice_seq')::text, 3, '0')
+```
+
+PostgreSQL's `lpad` is documented as: *"If the string is already longer than
+length then it is truncated (on the right)."*
+
+```sql
+select lpad('999',  3, '0');   -- '999'    correct
+select lpad('1000', 3, '0');   -- '100'    TRUNCATED
+```
+
+So the fix for a fixed-width formatter that mangles values above 999 was a
+different fixed-width formatter that mangles values above 999. Applied, it gave
+271 sales 28 invoice numbers and left the default still breaking every new
+sale. `031` is the repair.
+
+**Neither file ever ran its formatter at a width above the one it was designed
+for.** That costs one `select` and touches no data. It is the entire defence, and
+it was skipped twice.
+
+This is why `031` splits formatting into a PURE function,
+`format_invoice_number(bigint)`, separate from the sequence call. A column
+default cannot be tested without inserting a row and burning a sequence value, so
+in practice it never gets tested. A pure function can be tested against a VALUES
+list for nothing, and `031`'s check 1 does exactly that across nine widths — the
+check that would have caught both bugs.
+
+**Write neither `to_char(n, '000')` nor `lpad(n::text, 3, '0')` for an
+identifier that grows.** Use an explicit branch that cannot truncate:
+
+```sql
+'INV-' || case when n < 1000 then lpad(n::text, 3, '0') else n::text end
+```
+
+### And the original
+
+A trap this database already fell into, recorded so it is not repeated.
+
+`003` generated invoice numbers with:
+
+```sql
+'INV-' || to_char(nextval('public.sales_invoice_seq'), 'FM000')
+```
+
+and its own comment stated the intent: *"FM000 = min 3 digits, grows beyond 3
+without truncating"*. That is not what `to_char` does. A numeric template is a
+**fixed width**, and a value that does not fit is not widened — PostgreSQL
+returns a row of `#` characters, which is its documented overflow signal:
+
+```sql
+select to_char(999,  'FM000');   -- '999'
+select to_char(1000, 'FM000');   -- '###'
+```
+
+`FM` suppresses padding; it does not add capacity. So on the 1,000th sale every
+invoice number silently became the literal text `INV-###`, and stayed that way
+for eighteen days until someone noticed on the printed invoices. `030` fixes it
+with `lpad(n::text, 3, '0')`, which pads to 3 and returns anything longer
+unchanged.
+
+**For a zero-padded identifier that must keep growing, use `lpad`, never
+`to_char`.** Reserve `to_char` for formatting where a known bound exists
+(dates, money to 2 dp).
+
+Two things made this expensive out of proportion to the typo:
+
+* **It fails at a threshold, not on the first run.** Every test at three digits
+  passes. There is no error, no log line and no failed write — the column just
+  starts holding a different string. Any generated identifier with a width needs
+  a test at the width *above* the one it was designed for.
+* **The comment asserted the behaviour instead of checking it.** One line in
+  `psql` would have shown `###`. A comment stating what a built-in does is worth
+  nothing unless someone ran it.
 
 ## The 004 / 005 tangle
 
