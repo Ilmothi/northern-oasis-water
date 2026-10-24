@@ -65,6 +65,19 @@ select setval(
 -- 3. sales."invoiceNumber" -> database default from a dedicated sequence.
 --    Format preserved: INV-001, INV-002, ... (to_char FM000 = min 3 digits,
 --    grows beyond 3 without truncating — matches the old padStart(3,'0')).
+--
+--    ⚠️ THE PARENTHESISED CLAIM ABOVE IS WRONG. It is left in place because it
+--    is what this file actually did for four months, and because the mistake is
+--    the point. A `to_char` numeric template is FIXED WIDTH: `to_char(1000,
+--    'FM000')` returns '###', not '1000'. From the 1,000th sale onwards this
+--    default stamped the literal text 'INV-###' onto every invoice, and did so
+--    silently from 2026-10-06 until it was reported on 2026-10-24.
+--
+--    FIXED BY `030_invoice_number_overflow.sql`, which redefines this default
+--    using `lpad` and renumbers the affected rows. The SQL below is deliberately
+--    unchanged so that applying this directory in order still reproduces the
+--    real history; 030 corrects it a few files later. If you are reading this
+--    while rebuilding a database, you need 030 too.
 -- ---------------------------------------------------------------------------
 create sequence if not exists public.sales_invoice_seq;
 

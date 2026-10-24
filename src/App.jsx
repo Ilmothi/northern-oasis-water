@@ -23,6 +23,83 @@ const localDateString = (d = new Date()) =>
 // Current month in LOCAL time as YYYY-MM, for month-to-date filters.
 const localMonthPrefix = () => localDateString().slice(0, 7);
 
+// Fetch an ENTIRE table, paging until the rows run out.
+//
+// WHY THIS EXISTS. PostgREST caps every response at the project's "Max rows"
+// setting, and a capped response is indistinguishable from a complete one — no
+// error, no flag, no warning. Every table load used to be a bare `.select('*')`,
+// so when `sales` passed 1,000 rows on 2026-10-06 the app simply stopped seeing
+// the newest sales. They were in the database the whole time; the client never
+// asked for them. Staff recorded a sale, saw it appear (the RPC returns the row
+// and we merge it into state), then found it gone after the next login. Reports,
+// which are all computed in the browser from these arrays, under-reported for
+// eighteen days.
+//
+// Raising "Max rows" in the dashboard hides this but does not fix it — the next
+// threshold is just further away. Paging explicitly removes the cap from the
+// picture whatever it is set to.
+//
+// Lives at MODULE scope deliberately. It closes over nothing but the imported
+// client, and declaring it inside the component would make every function that
+// calls it non-static to react-hooks/exhaustive-deps — which would demand
+// loadDataFromSupabase in the load-once effect's dependency array and turn a
+// once-per-login fetch into a refetch loop.
+//
+// THREE THINGS HERE ARE LOAD-BEARING:
+//
+// 1. `order(orderBy)`. Without an ORDER BY, PostgREST returns rows in whatever
+//    order the planner produces, and offset paging over an unstable order can
+//    hand back a row twice or skip it entirely.
+//
+// 2. The next offset is `rows.length`, NOT `page * PAGE_SIZE`. If the server cap
+//    is lower than PAGE_SIZE, a request for 0-999 returns fewer rows than asked
+//    for; advancing by PAGE_SIZE would then step straight over the rows in
+//    between. Advancing by what actually arrived cannot skip anything.
+//
+// 3. Termination is driven by the exact row count, not by "this page was short".
+//    A short page is exactly what a server-side cap looks like, so stopping on
+//    one would reintroduce the bug. `count` is RLS-filtered the same way the
+//    rows are, so the two always agree. The short-page test is kept only as the
+//    fallback for a server that returns no count.
+//
+// Returns an array on success (possibly empty) or null on failure, so callers
+// keep the "null means keep previous state" contract they already rely on.
+const fetchAllRows = async (table, { orderBy = 'id', columns = '*' } = {}) => {
+  const PAGE_SIZE = 1000;
+  const MAX_PAGES = 500;          // runaway guard (500k rows), not a row limit
+  let rows = [];
+  let total = null;
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const from = rows.length;
+    const { data, error, count } = await supabase
+      .from(table)
+      .select(columns, { count: 'exact' })
+      .order(orderBy, { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) {
+      console.error(`❌ Error loading ${table}:`, error);
+      return null;
+    }
+    if (count !== null && count !== undefined) total = count;
+    rows = rows.concat(data || []);
+
+    if (!data || data.length === 0) break;                   // nothing follows
+    if (total !== null ? rows.length >= total : data.length < PAGE_SIZE) break;
+  }
+
+  // Loud, because the silence is what let the original fault run for eighteen
+  // days. If this ever fires, the arrays behind every report are incomplete and
+  // the totals on screen are too low.
+  if (total !== null && rows.length !== total) {
+    console.error(
+      `❌ ${table}: loaded ${rows.length} of ${total} rows — data on screen is INCOMPLETE.`
+    );
+  }
+  return rows;
+};
+
 // Escape user-entered text (names, descriptions, references) before it is
 // interpolated into the printable-HTML documents opened via document.write —
 // otherwise a value containing markup would render (or run) in that window.
@@ -986,13 +1063,13 @@ export default function NorthernWaterSystemApp() {
     try {
       // Tier 1: all roles — core transactional data, fetched in parallel
       const [
-        { data: customersData },
-        { data: salesData },
-        { data: paymentsData },
+        customersData,
+        salesData,
+        paymentsData,
       ] = await Promise.all([
-        supabase.from('customers').select('*'),
-        supabase.from('sales').select('*'),
-        supabase.from('payments').select('*'),
+        fetchAllRows('customers'),
+        fetchAllRows('sales'),
+        fetchAllRows('payments'),
       ]);
 
       // Balance adjustments are tier 1 deliberately, for every role. RLS scopes
@@ -1000,7 +1077,7 @@ export default function NorthernWaterSystemApp() {
       // both reconcile their running total against customers.balance, so a
       // hidden adjustment would make the ledger disagree with the balance
       // printed at the bottom of it.
-      const { data: adjustmentsData } = await supabase.from('customer_adjustments').select('*');
+      const adjustmentsData = await fetchAllRows('customer_adjustments');
 
       // Replace state whenever the fetch SUCCEEDED (data is an array, possibly
       // empty) — keying off length left stale/default records showing when a
@@ -1016,13 +1093,13 @@ export default function NorthernWaterSystemApp() {
       // Tier 2: admin + manager — operational records, fetched in parallel
       if (isAdminOrManager) {
         const [
-          { data: expensesData },
-          { data: purchasesData },
-          { data: consignmentData },
+          expensesData,
+          purchasesData,
+          consignmentData,
         ] = await Promise.all([
-          supabase.from('expenses').select('*'),
-          supabase.from('purchases').select('*'),
-          supabase.from('consignment_movements').select('*'),
+          fetchAllRows('expenses'),
+          fetchAllRows('purchases'),
+          fetchAllRows('consignment_movements'),
         ]);
 
         setState(prev => ({
@@ -1036,19 +1113,19 @@ export default function NorthernWaterSystemApp() {
       // Production logs — all roles. RLS returns every run for admin/manager and
       // only the user's own runs for sales, so a rep's production history and the
       // inventory effects they recorded are visible to them after a reload.
-      const { data: prodData } = await supabase.from('production_logs').select('*');
+      const prodData = await fetchAllRows('production_logs');
       setState(prev => ({
         ...prev,
         ...(prodData && { productionLogs: prodData }),
       }));
 
       // Employees — all roles (RLS filters sales to casual employees only; needed for production log)
-      const { data: empData } = await supabase.from('employees').select('*');
+      const empData = await fetchAllRows('employees');
       if (empData) setEmployees(empData);
 
       // Tier 3: admin only — payroll records
       if (isAdmin) {
-        const { data: payData } = await supabase.from('payroll_payments').select('*');
+        const payData = await fetchAllRows('payroll_payments');
         if (payData) setPayrollPayments(payData);
       }
 
@@ -1058,7 +1135,7 @@ export default function NorthernWaterSystemApp() {
       // security boundary is profiles_select_admin, which is what actually
       // stops a manager reading colleagues' identities.
       if (isAdmin) {
-        const { data: staffData } = await supabase.from('profiles').select('*');
+        const staffData = await fetchAllRows('profiles');
         if (staffData) {
           setStaffById(Object.fromEntries(staffData.map(p => [p.id, p])));
         }
@@ -1079,7 +1156,10 @@ export default function NorthernWaterSystemApp() {
         console.log('No cost settings yet');
       }
 
-      // Inventory state — all roles
+      // Inventory state — all roles. Not paged through fetchAllRows, and does
+      // not need to be: the table is exactly two rows ('rawMaterials' and
+      // 'finishedGoods'), so no row cap can reach it. Same for cost_settings
+      // above, which is a single row fetched by id.
       try {
         const { data: invData } = await supabase.from('inventory_state').select('*');
         if (invData?.length > 0) {

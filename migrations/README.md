@@ -139,9 +139,31 @@ baseline by default.
 | File | What it does |
 |------|--------------|
 | `018_settle_customer_balances.sql` | 🛑 **DO NOT APPLY — superseded, and now actively destructive.** See the warning below |
+| `030_invoice_number_overflow.sql` | Fixes the `sales."invoiceNumber"` default, which `003` wrote as `to_char(nextval(...), 'FM000')` — a FIXED-WIDTH template, so from the 1,000th sale on it returned the overflow marker `###` and every invoice since 2026-10-06 was stamped `INV-###`. Rewritten with `lpad`, which pads to 3 and then grows. Renumbers the overflowed rows in `id` order and logs the old → new mapping in a new admin-read-only table `invoice_renumber_log`. **No ordering constraint against its client** — see below. **Edits `sales`, which `CLAUDE.md` forbids by default**; authorised by the owner on 2026-10-24 on the grounds that `###` was never a valid number. No amount, balance, date, status, stock figure, policy or function is touched |
 
-`018` is the only file in this table, and it is not outstanding work — it is a
-file that must never run. There is nothing here waiting to be applied.
+`018` must never run. `030` is the only file here that is actual outstanding
+work.
+
+**`030` has no ordering constraint against its client half**, which is the
+pagination fix in `src/App.jsx` (same branch). This is unlike `029`: the client
+calls no new function and reads `"invoiceNumber"` as an opaque string, so either
+half works alone and neither can break the other.
+
+* Migration first → printed invoice numbers become correct and unique, while
+  sales past row 1,000 stay invisible until the client deploys.
+* Client first → every sale reappears and the reports reconcile again, while the
+  recent invoices still read `INV-###` until the migration runs.
+
+The one real scheduling note: **apply `030` outside trading hours.** Data is
+loaded once per login, so a clerk already signed in holds the old `INV-###`
+values in memory and could print one after the renumber has landed. A fresh
+login clears it.
+
+Remember that the stopgap for the client half is a dashboard setting
+(**Settings → API → Max rows**, default 1000), not a migration. Raising it makes
+the missing sales reappear without a deploy, but it does not fix anything — it
+moves the threshold. The paging in `fetchAllRows` is what actually removes the
+cap from the picture, and it should stay in place whatever the setting says.
 
 ### What the `029` apply cost, and why the ordering rule is in this file
 
@@ -379,6 +401,46 @@ is safe — a NULL there denies the row, so the policies in `001` genuinely do f
 closed. Any new `SECURITY DEFINER` function needs the null-safe form, and its
 gate cannot be tested from the SQL Editor: from there, a correct gate refuses
 everything.
+
+## `to_char` numeric templates are fixed width, and overflow to `###`
+
+A trap this database already fell into, recorded so it is not repeated.
+
+`003` generated invoice numbers with:
+
+```sql
+'INV-' || to_char(nextval('public.sales_invoice_seq'), 'FM000')
+```
+
+and its own comment stated the intent: *"FM000 = min 3 digits, grows beyond 3
+without truncating"*. That is not what `to_char` does. A numeric template is a
+**fixed width**, and a value that does not fit is not widened — PostgreSQL
+returns a row of `#` characters, which is its documented overflow signal:
+
+```sql
+select to_char(999,  'FM000');   -- '999'
+select to_char(1000, 'FM000');   -- '###'
+```
+
+`FM` suppresses padding; it does not add capacity. So on the 1,000th sale every
+invoice number silently became the literal text `INV-###`, and stayed that way
+for eighteen days until someone noticed on the printed invoices. `030` fixes it
+with `lpad(n::text, 3, '0')`, which pads to 3 and returns anything longer
+unchanged.
+
+**For a zero-padded identifier that must keep growing, use `lpad`, never
+`to_char`.** Reserve `to_char` for formatting where a known bound exists
+(dates, money to 2 dp).
+
+Two things made this expensive out of proportion to the typo:
+
+* **It fails at a threshold, not on the first run.** Every test at three digits
+  passes. There is no error, no log line and no failed write — the column just
+  starts holding a different string. Any generated identifier with a width needs
+  a test at the width *above* the one it was designed for.
+* **The comment asserted the behaviour instead of checking it.** One line in
+  `psql` would have shown `###`. A comment stating what a built-in does is worth
+  nothing unless someone ran it.
 
 ## The 004 / 005 tangle
 
