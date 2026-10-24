@@ -196,59 +196,110 @@ arithmetic from two other figures is not a verification.** Check 3's constant wa
 reasoned, plausible and wrong, and only reading the live sequence showed it.
 Prefer an identity that the data must satisfy over a number you worked out.
 
-### 🔎 Open finding: ~295 pre-`003` sales share 28 invoice numbers
+### 🛑 UNRESOLVED (2026-10-24): 295 sales share 28 invoice numbers, `INV-100`–`INV-127`
 
-Found on 2026-10-24 by running `030`'s check 2 against the whole `sales` table
-immediately after applying it. It returned 28 numbers, **`INV-100` through
-`INV-127`, carrying about 295 rows between them — roughly 11 rows per number**,
-with `INV-127` down to 2.
+Found by running `030`'s check 2 against the whole `sales` table immediately
+after applying `030`. It returned 28 numbers, **`INV-100` through `INV-127`,
+carrying 295 rows between them** — 23 numbers with 11 rows each, 4 with 10, and
+`INV-127` with 2.
 
-**This is not `030`'s doing, and `030` cannot produce it.** That file assigns
-from 1000 upwards and `row_number()` makes every value it issues distinct, so a
-renumbered row can appear at most once. Everything in the duplicate set sits
-below 128.
+**This is not understood yet. Do not act on it until it is.** What is known:
 
-It is pre-`003` history. Until `003` was applied on 2026-06-18 the **client**
-generated invoice numbers, and each client only ever saw an RLS-filtered subset
-of `sales` — so a user at Loglogo and a user at Marsabit would independently
-produce the same `INV-1xx`. `003`'s header names exactly this hazard as its
-reason for existing. It closed the hole going forward and **never repaired the
-rows already written**, and nothing since has. `003`'s `setval` then took
-`max = 127`, which is why database-issued numbering starts at 128.
+```
+rows 295 · distinct numbers 28 · earliest 2026-06-01 · latest 2026-10-21
+total KES 205,620
+```
 
-**Money is not affected.** Payment allocation, deletion and reversal all key on
-`sales.id`; the invoice number is a label. Balances, the P&L and every stock
-figure are untouched by this. What is affected is document identity: ~295 early
-invoices do not uniquely name the sale behind them.
+**A first explanation was written here and is now WITHDRAWN.** It said these
+were pre-`003` rows from when the client generated invoice numbers against an
+RLS-filtered subset of `sales` — which is a real hazard, named in `003`'s own
+header as its reason for existing. The **`latest` date of 2026-10-21 refutes
+it**: `003` was applied on 2026-06-18, so a row it left behind cannot carry an
+October date. The pre-`003` story may still explain part of the set, but it
+cannot explain the recent end of it.
 
-Not yet decided, and deliberately NOT bundled into `030`:
+What has been ruled out by reading the code rather than reasoning about it:
 
-* These are **June 2026 invoices that were printed and issued four months ago**,
-  in the same period as the known Loglogo data-entry problems and the `027`
-  opening-balance corrections. Renumbering them now changes documents that are
-  long settled, which is a different proposition from repairing a `###` label
-  that was never valid.
-* If they are repaired, it should be its own migration (`031`), anchored above
-  the sequence rather than at 128, and logged through the existing
-  `invoice_renumber_log` (which is why that table takes a `migration` column
-  rather than hard-coding `'030'`).
-* Doing nothing is defensible too, provided it is a decision on the record
-  rather than an oversight. **This note is that record.**
+* **No client-side invoice numbering exists.** `grep` for `INV-`, `padStart(3`
+  in `src/App.jsx`: nothing. The client never sends `"invoiceNumber"`.
+* **No RPC sets it explicitly.** No `insert` in any migration names the column;
+  `024`/`025` only read it for error messages. The column default is the only
+  writer.
 
-Verify before acting on any of it:
+Which leaves the question open: with the sequence at 1288 and the default the
+only source of values, **how does any row carry a number in the 100–127 range
+with an October date?** Candidate lines of enquiry, none confirmed:
+
+1. **`030`'s own renumber did it** — possible only if its anchor evaluated to 99.
+   That requires no surviving row to have had a valid number above 99 at apply
+   time, which is hard to square with 1,134 rows and a sequence at 1288. The
+   version applied may not have carried the `greatest(999, ...)` guard added in
+   `8160d66`. **Check `invoice_renumber_log` first — it records exactly what
+   `030` assigned, which settles this one way or the other.**
+2. **The sequence was reset at some point**, re-issuing a low block more than
+   once. Repeated re-issue of 100–127 would produce roughly this shape.
+3. **Rows were inserted by a path that bypasses the default** — a restore, a
+   manual backfill, or a direct SQL insert naming the column.
+
+The discriminating queries are at the end of this note. **`invoice_renumber_log`
+is the first thing to read**: it exists precisely so the renumber's own output
+can be audited, and it makes enquiry 1 a matter of fact rather than inference.
+
+**Money is not affected either way.** Payment allocation, deletion and reversal
+all key on `sales.id`; the invoice number is a label. Balances, the P&L, Cash
+Collected and every stock figure are untouched. What is at stake is document
+identity — 295 sales carrying KES 205,620 do not uniquely name themselves — and,
+if enquiry 1 turns out to be the answer, the correctness of `030` itself.
+
+Nothing is being repaired until the cause is known. A repair aimed at the wrong
+cause would be a second renumber on top of a misunderstood first one.
 
 ```sql
--- the renumbered block must be clean
+-- 1. WHAT 030 ACTUALLY ASSIGNED. Read this before anything else.
+select count(*) as logged,
+       min((regexp_replace(new_number, '\D', '', 'g'))::int) as first_new,
+       max((regexp_replace(new_number, '\D', '', 'g'))::int) as last_new
+  from public.invoice_renumber_log
+ where migration = '030';
+
+-- 2. Per duplicate number: how many of its rows did 030 touch?
+--    renumbered_by_030 = 0 everywhere  -> 030 is not involved, enquiry 2 or 3
+--    renumbered_by_030 = 1 everywhere  -> 030 assigned into an occupied range
+select s."invoiceNumber",
+       count(*)            as rows,
+       count(l.sale_id)    as renumbered_by_030,
+       min(s.date)         as earliest,
+       max(s.date)         as latest,
+       min(s.id)           as min_id,
+       max(s.id)           as max_id
+  from public.sales s
+  left join public.invoice_renumber_log l
+         on l.sale_id = s.id and l.migration = '030'
+ where s."invoiceNumber" in (
+   select "invoiceNumber" from public.sales
+    group by "invoiceNumber" having count(*) > 1)
+ group by s."invoiceNumber"
+ order by (regexp_replace(s."invoiceNumber", '\D', '', 'g'))::int;
+
+-- 3. Is the block 030 assigned internally clean?
 select "invoiceNumber", count(*) from public.sales
  where "invoiceNumber" ~ '^INV-[0-9]+$'
    and (regexp_replace("invoiceNumber", '\D', '', 'g'))::int >= 1000
  group by "invoiceNumber" having count(*) > 1;
 
--- the era and the exposure
-select min(date), max(date), count(*), count(distinct "invoiceNumber"), sum(total)
-  from public.sales
- where "invoiceNumber" in (select "invoiceNumber" from public.sales
-   group by "invoiceNumber" having count(*) > 1);
+-- 4. The shape of the whole numbering space, by era.
+select case
+         when n < 100  then '001-099'
+         when n < 128  then '100-127  (the duplicated block)'
+         when n < 1000 then '128-999'
+         else '1000+'
+       end as band,
+       count(*) as rows, count(distinct n) as distinct_numbers,
+       min(date) as earliest, max(date) as latest
+  from (select (regexp_replace("invoiceNumber", '\D', '', 'g'))::int as n, date
+          from public.sales
+         where "invoiceNumber" ~ '^INV-[0-9]+$') t
+ group by band order by band;
 ```
 
 Remember that the stopgap for the client half is a dashboard setting

@@ -272,21 +272,22 @@ commit;
 --   numbers — INV-100 through INV-127 — carrying 295 rows between them, around
 --   11 rows per number.
 --
---   Those are NOT from this file and this file cannot produce them: it assigns
---   from 1000 up (see section 3) and `row_number()` makes every value it hands
---   out distinct, so a renumbered row can appear at most once.
+--   ⚠️ THE CAUSE IS NOT YET KNOWN, and an explanation written here on the day
+--   has been WITHDRAWN. It said those rows were pre-`003` history, from when the
+--   client generated invoice numbers against an RLS-filtered subset of sales.
+--   The duplicated set's dates run 2026-06-01 to **2026-10-21**, and `003` was
+--   applied on 2026-06-18, so that cannot be the whole story.
 --
---   They are pre-`003` history. Before `003` (2026-06-18) the CLIENT generated
---   invoice numbers, and every client saw only an RLS-filtered subset of sales,
---   so several of them independently generated the same low numbers. `003`'s
---   own header names this hazard as its reason for existing — it moved
---   numbering into the database and closed it going forward, but it never
---   repaired the rows already written, and nothing since has. `003`'s setval
---   then took max = 127 and started the sequence at 128, which is why DB-issued
---   numbering begins there.
+--   This file assigns from `anchor.high + 1` upwards and `row_number()` makes
+--   every value it issues distinct, so it can contribute AT MOST ONE row to any
+--   number — it cannot produce 11 rows sharing one. Whether it contributed that
+--   one row, by anchoring lower than intended, is a question of fact answerable
+--   from `invoice_renumber_log`: see migrations/README.md, which carries the
+--   open finding and the discriminating queries.
 --
---   Scoping the check to >= 1000 is what makes it a check on THIS file rather
---   than a rediscovery of a four-month-old one.
+--   Scoping this check to >= 1000 keeps it a check on THIS file rather than a
+--   rediscovery of the open one. If the log shows this file assigned BELOW 1000,
+--   change the bound to match what it actually assigned before trusting it.
 --
 --   select "invoiceNumber", count(*)
 --     from public.sales
