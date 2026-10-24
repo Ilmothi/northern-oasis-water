@@ -72,9 +72,12 @@
 -- --------------------------------------
 -- Every overflowed sale still consumed a real `nextval`, and so did any sale
 -- that was later deleted. Those consumed numbers cannot be recovered from the
--- table. Section 3 therefore renumbers from the highest surviving valid number
--- (999) upwards in `id` order, and section 4 leaves the sequence wherever it has
--- already reached if that is higher.
+-- table. Section 3 therefore renumbers from the OVERFLOW BOUNDARY — 1000, the
+-- first value that did not fit 'FM000' and so has never appeared on a document
+-- as a real number — upwards in `id` order, and section 4 leaves the sequence
+-- wherever it has already reached if that is higher. Anchoring on the boundary
+-- rather than on the highest surviving number is what makes the backfill safe
+-- against past deletions; section 3 explains why at length.
 --
 -- If no sale was ever deleted the result is gapless. If sales WERE deleted, new
 -- invoices resume above the gap rather than filling it. That is the intended
@@ -156,15 +159,39 @@ create policy invoice_renumber_log_select_admin
 -- were ISSUED, and a sale's date is picked by the clerk and can be backdated.
 -- `id` is the order the rows were actually written.
 --
--- `base` reads the high-water mark from the rows whose numbers are still VALID
+-- `anchor` reads the high-water mark from the rows whose numbers are still VALID
 -- only. That matters: regexp_replace('INV-###', '\D', '', 'g') is the empty
 -- string, and ''::int raises, so the broken rows must never reach the cast.
 --
--- One statement, so `base` is computed against the same snapshot the UPDATE
+-- WHY `greatest(999, ...)` AND NOT JUST THE SURVIVING MAXIMUM.
+-- 999 is the OVERFLOW BOUNDARY — the last value that fits 'FM000'. Every number
+-- from 1000 up has only ever been rendered as '###', so no document anywhere
+-- carries 1000 or above as a real invoice number. Anchoring there makes a
+-- collision impossible by construction.
+--
+-- Anchoring on the surviving maximum alone does NOT. Deletes are admin-only but
+-- they happen, and a deleted sale takes its number out of the table while the
+-- document that was printed from it survives. If the highest-numbered sales in
+-- the 1..999 block were among those deleted, the surviving maximum sits BELOW
+-- the highest number ever printed, and renumbering from it would reissue a
+-- number a real invoice already carries. Section 4 guards the sequence against
+-- going backwards; without this `greatest` nothing guarded the backfill.
+--
+-- With production as at 2026-10-24 (1,134 sales, surviving maximum 999) both
+-- forms give the same answer. The `greatest` is here so that stays true if this
+-- file is ever re-run, or run against a database where it would not.
+--
+-- `coalesce(..., 0)` then only matters for a database with no valid numbers at
+-- all; 999 dominates it in every real case.
+--
+-- One statement, so `anchor` is computed against the same snapshot the UPDATE
 -- writes, and the log cannot end up disagreeing with the table.
 -- ---------------------------------------------------------------------------
-with base as (
-  select coalesce(max((regexp_replace("invoiceNumber", '\D', '', 'g'))::int), 0) as high
+with anchor as (
+  select greatest(
+           999,
+           coalesce(max((regexp_replace("invoiceNumber", '\D', '', 'g'))::int), 0)
+         ) as high
     from public.sales
    where "invoiceNumber" ~ '^INV-[0-9]+$'
 ),
@@ -172,10 +199,10 @@ renumbered as (
   select s.id,
          s.date::text                        as sale_date,
          s."invoiceNumber"                   as old_number,
-         'INV-' || lpad((base.high + row_number() over (order by s.id))::text, 3, '0')
+         'INV-' || lpad((anchor.high + row_number() over (order by s.id))::text, 3, '0')
                                              as new_number
     from public.sales s
-   cross join base
+   cross join anchor
    where s."invoiceNumber" is null
       or s."invoiceNumber" !~ '^INV-[0-9]+$'
 ),
@@ -239,17 +266,34 @@ commit;
 --    order by 2 desc;
 --
 -- Check 3 — the mapping was recorded, and its size matches what was repaired.
---   The two numbers MUST be equal, and the count MUST match how many sales were
---   recorded from 2026-10-06 onwards.
+--
+--   EXPECTED FOR THIS APPLY, from the production figures confirmed 2026-10-24
+--   (1,134 sales, Max rows 1000, surviving maximum invoice number 999):
+--
+--       logged         = 135          (1134 - 999)
+--       from_overflow  = 135          (all of them were 'INV-###')
+--       first new      = INV-1000
+--       last new       = INV-1134
+--
+--   `logged` HIGHER than 135 means sales numbered at or below 999 were deleted
+--   at some point — read the "GAPS ARE PREFERRED TO REUSE" note, then check
+--   that `first new` is still INV-1000 and not lower. LOWER than 135 means the
+--   table moved between the count and the apply, which is expected if sales
+--   were recorded in between; confirm against a fresh count rather than this
+--   number.
 --
 --   select (select count(*) from public.invoice_renumber_log where migration = '030') as logged,
 --          (select count(*) from public.invoice_renumber_log
---            where migration = '030' and old_number = 'INV-###')                      as from_overflow;
+--            where migration = '030' and old_number = 'INV-###')                      as from_overflow,
+--          (select min(new_number) from public.invoice_renumber_log where migration = '030') as first_new_text,
+--          (select max(new_number) from public.invoice_renumber_log where migration = '030') as last_new_text;
 --
+--   -- min()/max() above are TEXT comparisons, so 'INV-1000' sorts below
+--   -- 'INV-999'. This orders numerically, which is what you want to eyeball:
 --   select sale_id, sale_date, old_number, new_number
 --     from public.invoice_renumber_log
 --    where migration = '030'
---    order by sale_id
+--    order by (regexp_replace(new_number, '\D', '', 'g'))::int
 --    limit 20;
 --
 -- Check 4 — the next number the database will issue is above every number in
@@ -288,4 +332,31 @@ commit;
 --     await supabase.from('invoice_renumber_log')
 --       .insert([{ sale_id: 1, new_number: 'X', migration: 'hack' }])
 --   Expect an RLS error. A success means a write policy was added by mistake.
+--
+-- Check 8 — THE OTHER HALF. This file does nothing about the 1,000-row cap that
+--   hid 134 of the 1,134 sales; that is the `fetchAllRows` paging in
+--   `src/App.jsx`. Once that client is deployed, log in as ADMIN and compare
+--   what the app holds against the table:
+--
+--     -- SQL Editor:
+--     select count(*) from public.sales;
+--
+--     -- then, in the app's browser console, as the same admin:
+--     //   (the app keeps sales in React state; easiest cross-check is the
+--     //    network-independent one — ask the API for the count directly)
+--     const { count } = await supabase
+--       .from('sales').select('id', { count: 'exact', head: true });
+--     count
+--
+--   Both MUST be 1,134 (or whatever the current total is), and the Sales list
+--   MUST show sales dated after 2026-10-06. If the console count matches but
+--   the list does not, the paging did not deploy; if the console count is
+--   exactly the Max rows setting, it did not take effect.
+--
+--   NOTE: the hidden rows are NOT guaranteed to be precisely the newest 134.
+--   PostgREST without an ORDER BY returns heap order, and an UPDATE rewrites a
+--   row's heap position — every payment against a sale updates its `paid` and
+--   `status`. So a much older sale that was recently part-paid could have been
+--   among the hidden ones, and a newer one visible. Do not reconcile the
+--   affected period by assuming a clean cut-off at 2026-10-06.
 -- =============================================================================

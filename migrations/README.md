@@ -139,7 +139,7 @@ baseline by default.
 | File | What it does |
 |------|--------------|
 | `018_settle_customer_balances.sql` | 🛑 **DO NOT APPLY — superseded, and now actively destructive.** See the warning below |
-| `030_invoice_number_overflow.sql` | Fixes the `sales."invoiceNumber"` default, which `003` wrote as `to_char(nextval(...), 'FM000')` — a FIXED-WIDTH template, so from the 1,000th sale on it returned the overflow marker `###` and every invoice since 2026-10-06 was stamped `INV-###`. Rewritten with `lpad`, which pads to 3 and then grows. Renumbers the overflowed rows in `id` order and logs the old → new mapping in a new admin-read-only table `invoice_renumber_log`. **No ordering constraint against its client** — see below. **Edits `sales`, which `CLAUDE.md` forbids by default**; authorised by the owner on 2026-10-24 on the grounds that `###` was never a valid number. No amount, balance, date, status, stock figure, policy or function is touched |
+| `030_invoice_number_overflow.sql` | Fixes the `sales."invoiceNumber"` default, which `003` wrote as `to_char(nextval(...), 'FM000')` — a FIXED-WIDTH template, so from the 1,000th sale on it returned the overflow marker `###` and every invoice since 2026-10-06 was stamped `INV-###`. Rewritten with `lpad`, which pads to 3 and then grows. Renumbers the overflowed rows in `id` order from the overflow boundary 1000 upwards, and logs the old → new mapping in a new admin-read-only table `invoice_renumber_log`. **Expect 135 rows renumbered to `INV-1000`–`INV-1134`** (production confirmed 2026-10-24: 1,134 sales, surviving maximum 999); check 3 carries the expected figures. **No ordering constraint against its client** — see below. **Edits `sales`, which `CLAUDE.md` forbids by default**; authorised by the owner on 2026-10-24 on the grounds that `###` was never a valid number. No amount, balance, date, status, stock figure, policy or function is touched |
 
 `018` must never run. `030` is the only file here that is actual outstanding
 work.
@@ -160,10 +160,21 @@ values in memory and could print one after the renumber has landed. A fresh
 login clears it.
 
 Remember that the stopgap for the client half is a dashboard setting
-(**Settings → API → Max rows**, default 1000), not a migration. Raising it makes
-the missing sales reappear without a deploy, but it does not fix anything — it
-moves the threshold. The paging in `fetchAllRows` is what actually removes the
-cap from the picture, and it should stay in place whatever the setting says.
+(**Settings → API → Max rows**), not a migration. Raising it makes the missing
+sales reappear without a deploy, but it does not fix anything — it moves the
+threshold. The paging in `fetchAllRows` is what actually removes the cap from the
+picture, and it should stay in place whatever the setting says.
+
+**Confirmed against production on 2026-10-24: 1,134 sales, Max rows 1000.** So
+134 sales — about 12% of the book — were invisible to the app, and every
+browser-computed report was short by whatever those rows contained.
+
+One thing not to assume when reconciling that period: **the hidden rows were not
+necessarily the newest 134.** Without an ORDER BY, PostgREST returns heap order,
+and an UPDATE moves a row's heap position — every payment recorded against a
+sale updates its `paid` and `status`. An older sale that was recently part-paid
+could therefore have been hidden while a newer one was visible. The cut-off only
+*looks* like 2026-10-06 because that is where the bulk of it falls.
 
 ### What the `029` apply cost, and why the ordering rule is in this file
 
