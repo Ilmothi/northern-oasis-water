@@ -475,6 +475,195 @@ function applyPurchaseItemsToRawMaterials(rawMaterials, items, sign) {
   });
 }
 
+// ===== BOTTLE BATCHES (FIFO) =====
+// Follows each empty-bottle purchase through production and sale. READ-ONLY:
+// nothing here writes anything, and no other report reads it.
+//
+// The records do not say which purchase a production run or a sale drew from —
+// bottles are one pool per size — so this ASSUMES first-in, first-out: a run
+// fills the oldest empties first, and a sale takes the oldest filled bottles
+// first. It is an allocation, not a physical trace.
+//
+// Flows, per size, in bottles:
+//   purchase line `emptyBottles_<size>`     → new batch, + empty
+//   production run                          → empty → filled (1 empty per bottle, as migration 015's BOM)
+//   sale line, quantity > 0                 → filled → sold (consignment shop sales are ordinary sale rows)
+//   sale line, quantity < 0 (credit note,
+//     incl. consignment cutover reconcile)  → + filled, in a "Returned to stock" batch
+//   stock adjustment `emptyBottles <size>`  → down: written off oldest empties; up: "Count correction" batch
+//   stock adjustment `Finished Goods <size>`→ same, on filled bottles
+//   consignment deliver / return            → nothing: shop stock is still "ready", just not at the plant
+//
+// Stock that existed before the first recorded purchase is back-solved so the
+// batches end at today's real stock: opening = actual now − net recorded flow.
+// If at some point the records need more bottles than any batch holds (stock
+// once ran negative), the gap is drawn from an "Unaccounted" batch rather than
+// hidden. If opening comes out negative — the records say more stock should
+// exist than does — the batches will not reach today's figure and the
+// difference is reported as a reconciliation gap.
+//
+// 18.9L refill bottles are left out: they come back and are refilled, so
+// "sold" does not mean the bottle has left us.
+const BATCH_SIZES = ['0.5L', '1.5L', '5L', '18.9L_disposable'];
+
+function computeBottleBatches({ purchases, productionLogs, sales, customers, consignmentMovements, stockAdjustments, rawMaterials, finishedGoods }) {
+  const customerName = Object.fromEntries((customers || []).map(c => [c.id, c.name]));
+  const adjDay = (d) => {
+    const t = new Date(d);
+    return isNaN(t) ? String(d || '').slice(0, 10) : localDateString(t);
+  };
+
+  const bySize = {};
+  BATCH_SIZES.forEach(size => {
+    const bpc = BOTTLES_PER_CARTON[size] || 1;
+    const events = [];
+
+    (purchases || []).forEach(p => {
+      (p.items || []).forEach(item => {
+        const qty = Number(item.quantity) || 0;
+        if (item.material === `emptyBottles_${size}` && qty > 0) {
+          events.push({ date: p.date, order: 0, seq: p.id, kind: 'purchase', bottles: qty, purchase: p, unitPrice: Number(item.unitPrice) || 0 });
+        }
+      });
+    });
+    (productionLogs || []).forEach(log => {
+      const cartons = Number((log.items || {})[size]) || 0;
+      if (cartons > 0) events.push({ date: log.date, order: 1, seq: log.id, kind: 'produce', bottles: cartons * bpc, logId: log.id, cartons });
+    });
+    (sales || []).forEach(sale => {
+      (sale.items || []).forEach(item => {
+        if (item.size !== size) return;
+        const q = Number(item.quantity) || 0;
+        if (q === 0) return;
+        const ref = sale.invoiceNumber || `Sale #${sale.id}`;
+        const who = customerName[sale.customerId] || '';
+        if (q > 0) {
+          events.push({ date: sale.date, order: 2, seq: sale.id, kind: 'sale', bottles: q * bpc, revenue: q * (Number(item.price) || 0), ref, who, cartons: q });
+        } else {
+          events.push({ date: sale.date, order: 2, seq: sale.id, kind: 'returned', bottles: -q * bpc, ref, who });
+        }
+      });
+    });
+    (stockAdjustments || []).forEach(a => {
+      const delta = (Number(a.new_qty) || 0) - (Number(a.old_qty) || 0);
+      if (!delta) return;
+      if (a.item === `emptyBottles ${size}`) {
+        events.push({ date: adjDay(a.date), order: 3, seq: a.id, kind: 'emptyAdj', bottles: delta, reason: a.reason || '' });
+      } else if (a.item === `Finished Goods ${size}`) {
+        events.push({ date: adjDay(a.date), order: 3, seq: a.id, kind: 'filledAdj', bottles: delta * bpc, reason: a.reason || '' });
+      }
+    });
+
+    // Same-day order: deliveries in, then production, then sales, then counts.
+    events.sort((a, b) =>
+      String(a.date).localeCompare(String(b.date)) || a.order - b.order || (Number(a.seq) || 0) - (Number(b.seq) || 0));
+
+    // Real stock now. Filled = plant finished goods + cartons at consignment shops.
+    const actualEmpty = Number(rawMaterials?.emptyBottles?.[size]) || 0;
+    const shopCartons = (consignmentMovements || [])
+      .filter(m => m.size === size)
+      .reduce((s, m) => s + ((m.type === 'deliver' || m.type === 'reconcile') ? 1 : -1) * (Number(m.quantity) || 0), 0);
+    const plantCartons = Number(finishedGoods?.[size]?.quantity) || 0;
+    const actualFilled = (plantCartons + shopCartons) * bpc;
+
+    // Net recorded flow, for the opening back-solve.
+    let netEmpty = 0;
+    let netFilled = 0;
+    events.forEach(e => {
+      if (e.kind === 'purchase') netEmpty += e.bottles;
+      else if (e.kind === 'emptyAdj') netEmpty += e.bottles;
+      else if (e.kind === 'produce') { netEmpty -= e.bottles; netFilled += e.bottles; }
+      else if (e.kind === 'sale') netFilled -= e.bottles;
+      else if (e.kind === 'returned' || e.kind === 'filledAdj') netFilled += e.bottles;
+    });
+    const openingEmpty = Math.max(0, actualEmpty - netEmpty);
+    const openingFilled = Math.max(0, actualFilled - netFilled);
+
+    const batches = [];
+    const newBatch = (fields) => {
+      const b = {
+        key: `${size}-${batches.length}`, empty: 0, filled: 0, sold: 0, writtenOff: 0,
+        revenue: 0, purchased: 0, runs: [], salesLog: [], ...fields,
+      };
+      batches.push(b);
+      return b;
+    };
+    if (openingEmpty > 0 || openingFilled > 0) {
+      newBatch({ type: 'opening', label: 'Stock before records', date: events[0]?.date || '', purchased: openingEmpty + openingFilled, empty: openingEmpty, filled: openingFilled });
+    }
+    let unaccounted = null;
+    const getUnaccounted = () => {
+      if (!unaccounted) unaccounted = newBatch({ type: 'unaccounted', label: 'Unaccounted', date: '' });
+      return unaccounted;
+    };
+
+    // Take n bottles from the oldest batches holding `field`; returns [[batch, n]].
+    const take = (field, n) => {
+      const parts = [];
+      let left = n;
+      for (const b of batches) {
+        if (left <= 0) break;
+        if (b[field] <= 0) continue;
+        const t = Math.min(b[field], left);
+        b[field] -= t;
+        left -= t;
+        parts.push([b, t]);
+      }
+      if (left > 0) {
+        // The records need bottles no batch holds. Draw them from Unaccounted
+        // so the shortfall is visible instead of silently dropped.
+        const u = getUnaccounted();
+        u.purchased += left;
+        parts.push([u, left]);
+      }
+      return parts;
+    };
+
+    events.forEach(e => {
+      if (e.kind === 'purchase') {
+        const p = e.purchase;
+        newBatch({ type: 'purchase', label: p.supplier || 'Purchase', purchaseId: p.id, date: p.date, purchased: e.bottles, empty: e.bottles, unitPrice: e.unitPrice });
+      } else if (e.kind === 'produce') {
+        take('empty', e.bottles).forEach(([b, n]) => {
+          b.filled += n;
+          b.runs.push({ date: e.date, logId: e.logId, bottles: n });
+        });
+      } else if (e.kind === 'sale') {
+        const perBottle = e.bottles ? e.revenue / e.bottles : 0;
+        take('filled', e.bottles).forEach(([b, n]) => {
+          b.sold += n;
+          b.revenue += n * perBottle;
+          b.salesLog.push({ date: e.date, ref: e.ref, who: e.who, bottles: n, revenue: n * perBottle });
+        });
+      } else if (e.kind === 'returned') {
+        newBatch({ type: 'returned', label: `Returned to stock (${e.ref})`, date: e.date, purchased: e.bottles, filled: e.bottles });
+      } else if (e.kind === 'emptyAdj' || e.kind === 'filledAdj') {
+        const field = e.kind === 'emptyAdj' ? 'empty' : 'filled';
+        if (e.bottles > 0) {
+          newBatch({ type: 'count', label: `Count correction${e.reason ? ` — ${e.reason}` : ''}`, date: e.date, purchased: e.bottles, [field]: e.bottles });
+        } else {
+          take(field, -e.bottles).forEach(([b, n]) => { b.writtenOff += n; });
+        }
+      }
+    });
+
+    const sum = (f) => batches.reduce((s, b) => s + b[f], 0);
+    bySize[size] = {
+      size,
+      bottlesPerCarton: bpc,
+      batches: batches.filter(b => b.purchased > 0),
+      totals: { purchased: sum('purchased'), empty: sum('empty'), filled: sum('filled'), sold: sum('sold'), writtenOff: sum('writtenOff'), revenue: sum('revenue') },
+      actualEmpty,
+      actualFilled,
+      shopBottles: shopCartons * bpc,
+      unaccounted: unaccounted ? unaccounted.purchased : 0,
+      emptyGap: sum('empty') - actualEmpty,
+      filledGap: sum('filled') - actualFilled,
+    };
+  });
+  return bySize;
+}
+
 export default function NorthernWaterSystemApp() {
   const [state, setState] = useState(initialState);
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -493,6 +682,11 @@ export default function NorthernWaterSystemApp() {
   const toggleDay = (key) => setExpandedDays(prev => ({ ...prev, [key]: !prev[key] }));
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [debtorsLocation, setDebtorsLocation] = useState('all'); // 'all' or a location name — filters the Debtors report
+  const [batchSize, setBatchSize] = useState('0.5L'); // Bottle Batches report: size shown
+  const [expandedBatch, setExpandedBatch] = useState(null); // Bottle Batches report: batch whose detail is open
+  // Bumped on every report generation, so a slow Bottle Batches load cannot
+  // overwrite a report the user picked after clicking it.
+  const reportRequestId = useRef(0);
   const [reportCustomerId, setReportCustomerId] = useState(''); // selected customer for the per-customer reports (Revenue Over Time, Product Mix)
   const [customerSearch, setCustomerSearch] = useState('');
   const [customerStatusFilter, setCustomerStatusFilter] = useState('all'); // all | active | inactive
@@ -2451,7 +2645,42 @@ export default function NorthernWaterSystemApp() {
     };
   };
 
+  // Bottle Batches needs the stock-adjustment log (breakage and count
+  // corrections), which is not loaded at login, so it is fetched here. RLS lets
+  // admin and manager read it — the same roles the Reports tab is shown to.
+  const generateBottleBatchesReport = async (requestId) => {
+    const stockAdjustments = await fetchAllRows('stock_adjustments');
+    if (requestId !== reportRequestId.current) return; // user moved on
+    if (!stockAdjustments) {
+      setReportData(null);
+      alert('Could not load the stock adjustment log, so the bottle batches cannot be worked out. Please try again.');
+      return;
+    }
+    setExpandedBatch(null);
+    setReportData({
+      title: 'Bottle Batches',
+      date: new Date().toLocaleDateString(),
+      bySize: computeBottleBatches({
+        purchases: state.purchases,
+        productionLogs: state.productionLogs,
+        sales: state.sales,
+        customers: state.customers,
+        consignmentMovements: state.consignmentMovements,
+        stockAdjustments,
+        rawMaterials: state.rawMaterials,
+        finishedGoods: state.finishedGoods,
+      }),
+    });
+  };
+
   const handleGenerateReport = (type) => {
+    const requestId = ++reportRequestId.current;
+    if (type === 'bottlebatches') {
+      setReportType(type);
+      setReportData({ title: 'Bottle Batches', loading: true, date: new Date().toLocaleDateString() });
+      generateBottleBatchesReport(requestId);
+      return;
+    }
     let data;
     if (type === 'aging') {
       data = generateAgingDebtorsReport();
@@ -2944,6 +3173,30 @@ export default function NorthernWaterSystemApp() {
           </table>
         </div>
       `;
+    } else if (reportType === 'bottlebatches' && reportData.bySize) {
+      // Every size, so the printout is complete regardless of the tab on screen.
+      const kes = (v) => `KES ${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      htmlContent += `<div class="section"><div class="summary">FIFO allocation: the oldest empty bottles are assumed filled first and the oldest filled bottles sold first. Figures are in bottles. Ready stock includes bottles at consignment shops.</div>`;
+      BATCH_SIZES.forEach(size => {
+        const r = reportData.bySize[size];
+        const rows = r.batches.slice().reverse().map(b =>
+          `<tr><td>${escapeHtml(b.label)}<br><small>${b.date || '-'}${b.purchaseId ? ` · Purchase #${b.purchaseId}` : ''}</small></td><td>${b.purchased.toLocaleString()}</td><td>${b.empty.toLocaleString()}</td><td>${b.filled.toLocaleString()}</td><td>${b.sold.toLocaleString()}</td><td>${b.writtenOff.toLocaleString()}</td><td>${kes(b.revenue)}</td></tr>`
+        ).join('');
+        const gaps = [
+          r.emptyGap !== 0 ? `Empty: batches ${r.totals.empty.toLocaleString()} vs stock ${r.actualEmpty.toLocaleString()}` : '',
+          r.filledGap !== 0 ? `Ready: batches ${r.totals.filled.toLocaleString()} vs stock ${r.actualFilled.toLocaleString()}` : '',
+          r.unaccounted > 0 ? `Unaccounted: ${r.unaccounted.toLocaleString()}` : '',
+        ].filter(Boolean).join(' | ');
+        htmlContent += `
+          <h2>${SIZE_LABELS[size] || size}</h2>
+          <table>
+            <thead><tr><th>Batch</th><th>In</th><th>Empty</th><th>Ready</th><th>Sold</th><th>Written off</th><th>Sales value</th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="7">No bottles recorded</td></tr>'}</tbody>
+            <tfoot><tr><th>Total</th><th>${r.totals.purchased.toLocaleString()}</th><th>${r.totals.empty.toLocaleString()}</th><th>${r.totals.filled.toLocaleString()}</th><th>${r.totals.sold.toLocaleString()}</th><th>${r.totals.writtenOff.toLocaleString()}</th><th>${kes(r.totals.revenue)}</th></tr></tfoot>
+          </table>
+          ${gaps ? `<p style="font-size:11px;color:#92400e;">Does not match stock — ${gaps}</p>` : ''}`;
+      });
+      htmlContent += `</div>`;
     }
 
     htmlContent += `
@@ -5665,6 +5918,7 @@ export default function NorthernWaterSystemApp() {
                 { id: 'customerrevenue', label: 'Customer Trend', icon: '📅' },
                 { id: 'productmix', label: 'Product Mix', icon: '🧴' },
                 { id: 'productionreport', label: 'Production', icon: '🏭' },
+                { id: 'bottlebatches', label: 'Bottle Batches', icon: '🍶' },
               ].map(report => (
                 <button
                   key={report.id}
@@ -5783,12 +6037,12 @@ export default function NorthernWaterSystemApp() {
                     <h3 className="text-slate-900 font-semibold text-base md:text-xl">{reportData.title}</h3>
                     <p className="text-slate-500 text-xs md:text-sm">Generated: {reportData.date}{reportData.locationLabel ? ` · ${reportData.locationLabel}` : ''}</p>
                   </div>
-                  <button
+                  {!reportData.loading && <button
                     onClick={downloadReportAsPDF}
                     className="flex items-center gap-2 bg-sky-500 hover:bg-sky-600 text-white font-medium px-3 md:px-4 py-2 rounded-lg transition text-sm w-full md:w-auto justify-center"
                   >
                     <Download className="w-4 h-4" /> Save as PDF
-                  </button>
+                  </button>}
                 </div>
 
                 {/* Aging Debtors Report */}
@@ -6449,6 +6703,173 @@ export default function NorthernWaterSystemApp() {
                     )}
                   </div>
                 )}
+
+                {/* Bottle Batches — FIFO allocation, read-only */}
+                {reportType === 'bottlebatches' && reportData.loading && (
+                  <p className="text-slate-500 text-center py-4 md:py-8 text-sm">Working out bottle batches…</p>
+                )}
+                {reportType === 'bottlebatches' && reportData.bySize && (() => {
+                  const r = reportData.bySize[batchSize];
+                  const bpc = r.bottlesPerCarton;
+                  const kes = (v) => `KES ${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                  const ctn = (n) => (bpc > 1 && n ? ` · ${(n / bpc).toLocaleString('en-US', { maximumFractionDigits: 1 })} ctn` : '');
+                  const bought = r.batches.filter(b => b.type === 'purchase').reduce((s, b) => s + b.purchased, 0);
+                  const rows = r.batches.slice().reverse(); // newest first
+                  return (
+                    <div className="space-y-4 md:space-y-6">
+                      <div className="flex flex-wrap gap-2">
+                        {BATCH_SIZES.map(size => (
+                          <button
+                            key={size}
+                            onClick={() => { setBatchSize(size); setExpandedBatch(null); }}
+                            className={`px-3 py-1.5 rounded-lg border text-sm transition ${batchSize === size ? 'border-sky-400 bg-sky-50 text-sky-700 font-semibold' : 'border-slate-200 bg-white text-slate-600 hover:border-sky-300'}`}
+                          >
+                            {SIZE_LABELS[size] || size}
+                          </button>
+                        ))}
+                      </div>
+
+                      <p className="text-slate-500 text-xs">
+                        Each purchase of empty bottles is a batch. The records do not say which batch a production run or sale used, so this assumes
+                        first-in, first-out: the oldest empties are filled first, and the oldest filled bottles are sold first. Ready stock includes
+                        bottles at consignment shops. 18.9L refill bottles are not tracked here because they come back and get refilled. Figures are in bottles.
+                      </p>
+
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 md:gap-4">
+                        <div className="bg-sky-50 border border-slate-200 rounded-lg p-3 md:p-4">
+                          <p className="text-slate-500 text-xs md:text-sm">Bought (all purchases)</p>
+                          <p className="text-slate-900 text-lg md:text-xl font-bold">{bought.toLocaleString()}</p>
+                        </div>
+                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 md:p-4">
+                          <p className="text-amber-700 text-xs md:text-sm">Empty (unpackaged)</p>
+                          <p className="text-slate-900 text-lg md:text-xl font-bold">{r.totals.empty.toLocaleString()}</p>
+                        </div>
+                        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 md:p-4">
+                          <p className="text-emerald-700 text-xs md:text-sm">Ready (filled, in stock)</p>
+                          <p className="text-slate-900 text-lg md:text-xl font-bold">{r.totals.filled.toLocaleString()}</p>
+                          {r.shopBottles > 0 && <p className="text-slate-500 text-xs mt-1">incl. {r.shopBottles.toLocaleString()} at shops</p>}
+                        </div>
+                        <div className="bg-sky-50 border border-slate-200 rounded-lg p-3 md:p-4">
+                          <p className="text-slate-500 text-xs md:text-sm">Sold</p>
+                          <p className="text-slate-900 text-lg md:text-xl font-bold">{r.totals.sold.toLocaleString()}</p>
+                          <p className="text-slate-500 text-xs mt-1">{kes(r.totals.revenue)}</p>
+                        </div>
+                        <div className="bg-red-50 border border-red-200 rounded-lg p-3 md:p-4">
+                          <p className="text-red-700 text-xs md:text-sm">Written off</p>
+                          <p className="text-slate-900 text-lg md:text-xl font-bold">{r.totals.writtenOff.toLocaleString()}</p>
+                        </div>
+                      </div>
+
+                      {(r.unaccounted > 0 || r.emptyGap !== 0 || r.filledGap !== 0) && (
+                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 space-y-1">
+                          {r.unaccounted > 0 && (
+                            <p>At some point the records used {r.unaccounted.toLocaleString()} more bottles than any batch held, so stock went below zero. These are shown in the <strong>Unaccounted</strong> batch.</p>
+                          )}
+                          {r.emptyGap !== 0 && (
+                            <p>Empty bottles: the batches add up to {r.totals.empty.toLocaleString()}, but stock shows {r.actualEmpty.toLocaleString()}. The records account for {Math.abs(r.emptyGap).toLocaleString()} {r.emptyGap > 0 ? 'more' : 'fewer'} bottles than are in stock.</p>
+                          )}
+                          {r.filledGap !== 0 && (
+                            <p>Ready stock: the batches add up to {r.totals.filled.toLocaleString()}, but plant and shop stock shows {r.actualFilled.toLocaleString()}. The records account for {Math.abs(r.filledGap).toLocaleString()} {r.filledGap > 0 ? 'more' : 'fewer'} bottles than are in stock.</p>
+                          )}
+                          <p>A stock count through Stock Adjustments brings these back in line.</p>
+                        </div>
+                      )}
+
+                      {rows.length === 0 ? (
+                        <p className="text-slate-500 text-center py-4 md:py-8 text-sm">No {SIZE_LABELS[batchSize] || batchSize} bottles recorded</p>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-slate-500 border-b border-slate-200">
+                                <th className="py-2 pr-2">Batch</th>
+                                <th className="py-2 pr-2 text-right">In</th>
+                                <th className="py-2 pr-2 text-right">Empty</th>
+                                <th className="py-2 pr-2 text-right">Ready</th>
+                                <th className="py-2 pr-2 text-right">Sold</th>
+                                <th className="py-2 pr-2 text-right">Written off</th>
+                                <th className="py-2 pr-2 text-right">Sales value</th>
+                                <th className="py-2 w-28">Sold %</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {rows.map(b => {
+                                const pct = b.purchased ? Math.round((b.sold / b.purchased) * 100) : 0;
+                                const open = expandedBatch === b.key;
+                                const done = b.empty === 0 && b.filled === 0;
+                                return [
+                                  <tr
+                                    key={b.key}
+                                    onClick={() => setExpandedBatch(open ? null : b.key)}
+                                    className={`border-b border-slate-100 cursor-pointer hover:bg-slate-50 ${done ? 'opacity-60' : ''}`}
+                                  >
+                                    <td className="py-2 pr-2">
+                                      <div className="flex items-center gap-1">
+                                        {open ? <ChevronDown className="w-3 h-3 text-slate-400" /> : <ChevronRight className="w-3 h-3 text-slate-400" />}
+                                        <div>
+                                          <p className="text-slate-900 font-medium">{b.label}</p>
+                                          <p className="text-slate-500 text-xs">
+                                            {b.date || '—'}{b.purchaseId ? ` · Purchase #${b.purchaseId}` : ''}{b.unitPrice ? ` · ${kes(b.unitPrice)}/btl` : ''}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    </td>
+                                    <td className="py-2 pr-2 text-right text-slate-900">{b.purchased.toLocaleString()}</td>
+                                    <td className="py-2 pr-2 text-right text-amber-700">{b.empty.toLocaleString()}</td>
+                                    <td className="py-2 pr-2 text-right text-emerald-700">{b.filled.toLocaleString()}<span className="text-slate-400 text-xs">{ctn(b.filled)}</span></td>
+                                    <td className="py-2 pr-2 text-right text-slate-900 font-semibold">{b.sold.toLocaleString()}<span className="text-slate-400 text-xs font-normal">{ctn(b.sold)}</span></td>
+                                    <td className="py-2 pr-2 text-right text-red-700">{b.writtenOff ? b.writtenOff.toLocaleString() : '—'}</td>
+                                    <td className="py-2 pr-2 text-right text-slate-900">{kes(b.revenue)}</td>
+                                    <td className="py-2">
+                                      <div className="h-2 bg-slate-100 rounded overflow-hidden">
+                                        <div className="h-2 bg-sky-500" style={{ width: `${Math.min(100, pct)}%` }} />
+                                      </div>
+                                      <p className="text-slate-500 text-xs mt-0.5">{pct}%</p>
+                                    </td>
+                                  </tr>,
+                                  open && (
+                                    <tr key={`${b.key}-detail`} className="bg-slate-50 border-b border-slate-200">
+                                      <td colSpan={8} className="p-3">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                                          <div>
+                                            <p className="text-slate-900 font-semibold mb-1">Filled in production</p>
+                                            {b.runs.length === 0 ? <p className="text-slate-500">Not used in production yet</p> : (
+                                              <div className="space-y-0.5 max-h-60 overflow-y-auto">
+                                                {b.runs.map((run, i) => (
+                                                  <div key={i} className="flex justify-between">
+                                                    <span className="text-slate-600">{run.date} · Run #{run.logId}</span>
+                                                    <span className="text-slate-900">{run.bottles.toLocaleString()} btl{ctn(run.bottles)}</span>
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </div>
+                                          <div>
+                                            <p className="text-slate-900 font-semibold mb-1">Sold</p>
+                                            {b.salesLog.length === 0 ? <p className="text-slate-500">No sales from this batch yet</p> : (
+                                              <div className="space-y-0.5 max-h-60 overflow-y-auto">
+                                                {b.salesLog.map((s, i) => (
+                                                  <div key={i} className="flex justify-between gap-2">
+                                                    <span className="text-slate-600 truncate">{s.date} · {s.ref}{s.who ? ` · ${s.who}` : ''}</span>
+                                                    <span className="text-slate-900 whitespace-nowrap">{s.bottles.toLocaleString()} btl · {kes(s.revenue)}</span>
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ),
+                                ];
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
