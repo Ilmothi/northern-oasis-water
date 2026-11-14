@@ -542,14 +542,7 @@ function computeBottleBatches({ purchases, productionLogs, sales, customers, con
       const cartons = Number((log.items || {})[size]) || 0;
       if (cartons > 0) events.push({ date: log.date, order: 1, seq: log.id, kind: 'produce', bottles: cartons * bpc, logId: log.id, cartons });
     });
-    // An invoice cancelled by a credit note (migration 032) and the credit note
-    // itself are skipped together: the pair took cartons out and put the same
-    // cartons back, so the batches read as if the duplicate never happened.
-    const cancelledPair = new Set((sales || [])
-      .filter(s => s.cancels_sale_id != null)
-      .flatMap(s => [s.id, s.cancels_sale_id]));
     (sales || []).forEach(sale => {
-      if (cancelledPair.has(sale.id)) return;
       (sale.items || []).forEach(item => {
         if (item.size !== size) return;
         const q = Number(item.quantity) || 0;
@@ -1262,42 +1255,7 @@ export default function NorthernWaterSystemApp() {
   // counted then. Both legs are excluded from every cash figure, which cannot
   // change any total precisely BECAUSE they cancel; it only stops one receipt
   // being read as two collections. An on-account row is real money and stays in.
-  //
-  // 'credit_note' (migration 032) is the same idea: the two legs that settle a
-  // cancelled invoice against its credit note. No money moved, so neither leg
-  // is a collection.
-  //
-  // 'sale_reversal' (migration 033) is excluded here too, but NOT because it is
-  // cash-neutral: it takes back money recorded as paid AT THE POINT OF SALE
-  // that never arrived. It belongs to the point-of-sale side, so it is netted
-  // there by pointOfSaleCash rather than counted among debt payments.
-  const isCashMovement = (p) => {
-    const kind = p?.kind || 'invoice';
-    return kind !== 'credit_applied' && kind !== 'credit_note' && kind !== 'sale_reversal';
-  };
-
-  // Money handed over at the till for a sale: its `paid` less what payment
-  // records put there. `gross` is what was recorded at the sale, `reversed`
-  // what a 'sale_reversal' later took back as never received (033), and `net`
-  // the cash that really counts. Every point-of-sale cash figure reads this so
-  // they cannot disagree. For a sale with no reversal, gross === net and both
-  // equal the old `paid - sum(payments)` split exactly.
-  const pointOfSaleCash = (s, payments = state.payments) => {
-    let viaPayments = 0;
-    let reversed = 0;
-    payments.forEach(p => {
-      if (p.saleId !== s.id) return;
-      if (p.kind === 'sale_reversal') reversed -= (p.amount || 0);
-      else viaPayments += (p.amount || 0);
-    });
-    const net = (s.paid || 0) - viaPayments;
-    return { gross: net + reversed, reversed, net };
-  };
-
-  // Credit-note cancellation (migration 032). A credit note is a sale row with
-  // `cancels_sale_id` set; the invoice it cancels is found from that link.
-  const isCreditNote = (s) => s?.cancels_sale_id != null;
-  const creditNoteFor = (saleId) => state.sales.find(s => s.cancels_sale_id === saleId) || null;
+  const isCashMovement = (p) => (p?.kind || 'invoice') !== 'credit_applied';
 
   // KES to the cent. Allocation splits and remainders are compared for equality
   // all over the lump-sum flow, and float residue there would either strand a
@@ -2285,30 +2243,18 @@ export default function NorthernWaterSystemApp() {
         // separately via payment records. A sale created "paid" has status 'paid'.
         // To avoid double-counting, count the sale's paid amount only if there are
         // no separate payment records linked to it.
-        //
-        // A point-of-sale amount later reversed as never received (033) shows as
-        // its original line plus an equal negative line, both on the sale date,
-        // so the correction is visible rather than the figure silently shrinking.
-        const { gross, reversed } = pointOfSaleCash(s);
-        const customer = state.customers.find(c => c.id === s.customerId);
-        if (gross > 0) {
-          cashSalesTotal += gross;
+        const linkedPayments = state.payments.filter(p => p.saleId === s.id);
+        const paidViaPayments = linkedPayments.reduce((sum, p) => sum + p.amount, 0);
+        const paidAtSale = (s.paid || 0) - paidViaPayments;
+        if (paidAtSale > 0) {
+          cashSalesTotal += paidAtSale;
+          const customer = state.customers.find(c => c.id === s.customerId);
           cashSalesList.push({
             date: s.date,
             invoice: s.invoiceNumber,
             customer: customer?.name || 'Unknown',
             method: s.method || '',
-            amount: gross
-          });
-        }
-        if (reversed > 0) {
-          cashSalesTotal -= reversed;
-          cashSalesList.push({
-            date: s.date,
-            invoice: s.invoiceNumber,
-            customer: customer?.name || 'Unknown',
-            method: 'reversed — never received',
-            amount: -reversed
+            amount: paidAtSale
           });
         }
       }
@@ -3316,20 +3262,8 @@ export default function NorthernWaterSystemApp() {
     const paid = sale.paid || 0;
     const balance = sale.total - paid;
     const fmt = (n) => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    // Credit-note cancellation (migration 032). Both halves read "paid" in the
-    // data because the pair settles each other; the document must say what
-    // actually happened instead.
-    const isCN = isCreditNote(sale);
-    const cancelledBy = isCN ? null : creditNoteFor(sale.id);
-    const cancelledInvoice = isCN ? state.sales.find(s => s.id === sale.cancels_sale_id) : null;
-    const docTitle = isCN ? 'CREDIT NOTE' : 'INVOICE';
-    const docNote = isCN
-      ? `Cancels ${escapeHtml(cancelledInvoice?.invoiceNumber || `Sale #${sale.cancels_sale_id}`)}${sale.cancel_reason ? ` — ${escapeHtml(sale.cancel_reason)}` : ''}`
-      : cancelledBy
-        ? `Cancelled by credit note ${escapeHtml(cancelledBy.invoiceNumber)} on ${escapeHtml(cancelledBy.date)}${cancelledBy.cancel_reason ? ` — ${escapeHtml(cancelledBy.cancel_reason)}` : ''}`
-        : '';
-    const statusLabel = isCN ? 'CREDIT NOTE' : cancelledBy ? 'CANCELLED' : balance <= 0 ? 'PAID' : paid > 0 ? 'PARTIALLY PAID' : 'UNPAID';
-    const statusColor = (isCN || cancelledBy) ? '#64748b' : balance <= 0 ? '#10b981' : paid > 0 ? '#d97706' : '#e11d48';
+    const statusLabel = balance <= 0 ? 'PAID' : paid > 0 ? 'PARTIALLY PAID' : 'UNPAID';
+    const statusColor = balance <= 0 ? '#10b981' : paid > 0 ? '#d97706' : '#e11d48';
 
     const rows = sale.items.map(item => {
       const amount = item.subtotal || (item.quantity * item.price);
@@ -3400,9 +3334,8 @@ export default function NorthernWaterSystemApp() {
           </div>
 
           <div class="title">
-            <h2>${docTitle}</h2>
+            <h2>INVOICE</h2>
             <div class="meta"><strong>${escapeHtml(sale.invoiceNumber)}</strong> &nbsp;•&nbsp; ${escapeHtml(sale.date)}</div>
-            ${docNote ? `<div class="meta">${docNote}</div>` : ''}
           </div>
 
           <div class="billto">
@@ -3420,9 +3353,9 @@ export default function NorthernWaterSystemApp() {
           </table>
 
           <div class="totals">
-            <div class="row"><span>${isCN ? 'Credit' : 'Total'}</span><span>KES ${fmt(sale.total)}</span></div>
-            ${(isCN || cancelledBy) ? '' : `<div class="row"><span>Paid</span><span>KES ${fmt(paid)}</span></div>
-            <div class="row grand"><span>Balance Due</span><span class="${balance > 0 ? 'balance' : ''}">KES ${fmt(balance)}</span></div>`}
+            <div class="row"><span>Total</span><span>KES ${fmt(sale.total)}</span></div>
+            <div class="row"><span>Paid</span><span>KES ${fmt(paid)}</span></div>
+            <div class="row grand"><span>Balance Due</span><span class="${balance > 0 ? 'balance' : ''}">KES ${fmt(balance)}</span></div>
           </div>
 
           <div><span class="status">${statusLabel}</span></div>
@@ -3949,13 +3882,6 @@ export default function NorthernWaterSystemApp() {
       return;
     }
 
-    // Credit notes and the invoices they cancel are permanent (migration 032).
-    // The database refuses too; this is only for a clear message.
-    if (isCreditNote(sale) || creditNoteFor(id)) {
-      alert('A cancelled invoice and its credit note are permanent and cannot be deleted.');
-      return;
-    }
-
     const linkedPayments = state.payments.filter(p => p.saleId === id);
     // Credit applied to this invoice is two rows sharing a batch — the leg on the
     // invoice and the leg that drained the customer's credit. Deleting the sale
@@ -4005,116 +3931,6 @@ export default function NorthernWaterSystemApp() {
       ...applyRpcRows(data),
     });
     console.log('✅ Sale deleted and reversed in Supabase');
-  };
-
-  // Can this sale be cancelled with a credit note? Mirrors the refusals in
-  // `cancel_invoice` (migration 032) so the button only shows where it can work.
-  // Returns null when it can, or the reason it cannot.
-  const cancelBlockedReason = (sale) => {
-    if (!sale) return 'Sale not found.';
-    if (isCreditNote(sale) || (sale.total || 0) <= 0) return 'This is a credit note, not an invoice.';
-    const cn = creditNoteFor(sale.id);
-    if (cn) return `Already cancelled by ${cn.invoiceNumber}.`;
-    if (state.consignmentMovements.some(m => m.sale_id === sale.id)) {
-      return 'This sale is linked to consignment stock — handle it from the Consignment view.';
-    }
-    // Separate payment records: delete the duplicate payment first (existing
-    // flow). Paid AT THE POINT OF SALE with no records is allowed — the handler
-    // asks whether that money was really received (migration 033).
-    if (state.payments.some(p => p.saleId === sale.id)) {
-      return 'This invoice has payment records against it. If one of them is a duplicate that was never received, ' +
-        'delete that payment first (Payments tab), then cancel the invoice. If the money was really received, ' +
-        'cancel the duplicate copy that carries no payment instead.';
-    }
-    if ((sale.paid || 0) < 0 || (sale.paid || 0) > (sale.total || 0)) {
-      return 'This invoice has an unusual paid figure and needs looking at by hand.';
-    }
-    return null;
-  };
-
-  // One request key per invoice for as long as the page is open, so a retry
-  // after a dropped connection is recognised instead of refused.
-  const cancelKeys = useRef(new Map());
-
-  // Cancel an invoice with a credit note (migration 032). Admin only, whole
-  // invoice, unpaid only, dated today, stock always returned. One transaction
-  // server-side: credit note, the two settling legs, stock and balance all land
-  // together or not at all.
-  const handleCancelInvoice = async (sale) => {
-    const blocked = cancelBlockedReason(sale);
-    if (blocked) { alert(blocked); return; }
-
-    const customer = state.customers.find(c => c.id === sale.customerId);
-    const cartons = (sale.items || []).map(i => `${i.quantity}× ${SIZE_LABELS[i.size] || i.size}`).join(', ');
-    const reason = prompt(
-      `Cancel ${sale.invoiceNumber} (${customer?.name || 'Unknown'}, KES ${sale.total.toLocaleString()}) with a credit note?\n\n` +
-      'Why is it being cancelled? (e.g. "Duplicate of INV-1301")'
-    );
-    if (reason === null) return;
-    if (!reason.trim()) { alert('A reason is required. Nothing was changed.'); return; }
-
-    // Paid at the point of sale (migration 033). Only "never received" may
-    // proceed: reversing money that really arrived would understate cash.
-    const paidAtSale = sale.paid || 0;
-    if (paidAtSale > 0) {
-      const neverReceived = confirm(
-        `KES ${paidAtSale.toLocaleString()} was recorded as PAID when ${sale.invoiceNumber} was entered on ${sale.date}.\n\n` +
-        `Press OK only if this money was NEVER received (the invoice is a duplicate entry).\n\n` +
-        `Press Cancel if the money was really received.`
-      );
-      if (!neverReceived) {
-        alert(
-          `${sale.invoiceNumber} was not cancelled — nothing was changed.\n\n` +
-          'An invoice whose money was really received cannot be cancelled yet (refunds and holding it as customer credit are not supported). ' +
-          'If this is a duplicate pair, cancel the copy whose money was never received.'
-        );
-        return;
-      }
-    }
-
-    const lines = [
-      `• Create a credit note dated today for KES ${sale.total.toLocaleString()} that cancels ${sale.invoiceNumber}.`,
-      paidAtSale > 0
-        ? `• Reverse the KES ${paidAtSale.toLocaleString()} recorded as paid, as never received. Cash Collected for ${sale.date} goes DOWN by KES ${paidAtSale.toLocaleString()}.`
-        : `• Reduce ${customer?.name || 'the customer'}'s debt by KES ${sale.total.toLocaleString()}.`,
-      paidAtSale > 0 && paidAtSale < sale.total
-        ? `• Reduce ${customer?.name || 'the customer'}'s debt by KES ${(sale.total - paidAtSale).toLocaleString()} (the unpaid part).`
-        : paidAtSale > 0 ? `• ${customer?.name || 'The customer'}'s balance does not change.` : null,
-      `• Reduce this period's sales revenue by KES ${sale.total.toLocaleString()} (past periods' revenue is not changed).`,
-      `• Return ${cartons || 'the cartons'} to finished goods.`,
-    ].filter(Boolean);
-    if (!confirm(
-      `This will:\n\n${lines.join('\n')}\n\n` +
-      `The invoice stays on record marked as cancelled. This cannot be undone. Continue?`
-    )) return;
-
-    if (!cancelKeys.current.has(sale.id)) cancelKeys.current.set(sale.id, newClientKey());
-    const { data, error } = await withTimeout(supabase.rpc('cancel_invoice', {
-      p_sale_id: sale.id,
-      p_reason: reason.trim(),
-      p_date: localDateString(),
-      p_client_key: cancelKeys.current.get(sale.id),
-      p_never_received: paidAtSale > 0,
-    }));
-    if (error || !data?.credit_note) {
-      console.error('❌ Error cancelling invoice:', error);
-      alert(saveFailureMessage(
-        error,
-        'Could not cancel this invoice — nothing was changed. The invoice, the stock and the balance are as they were.',
-        "the customer's sales for a credit note",
-        true
-      ));
-      return;
-    }
-
-    let sales = upsertById(state.sales, data.invoice);
-    sales = upsertById(sales, data.credit_note);
-    let payments = state.payments;
-    (data.payments || []).forEach(p => { payments = upsertById(payments, p); });
-    setState({ ...state, sales, payments, ...applyRpcRows(data) });
-    if (invoiceDetail?.id === sale.id) setInvoiceDetail(data.invoice);
-    cancelKeys.current.delete(sale.id);
-    alert(`${sale.invoiceNumber} cancelled by credit note ${data.credit_note.invoiceNumber}.`);
   };
 
   // Delete Production Log — returns finished goods and restores raw materials.
@@ -7240,8 +7056,12 @@ export default function NorthernWaterSystemApp() {
                 // which overstated the day's cash as old debts were settled.
                 if (salesFilterDate) {
                   const dayTotal = filtered.reduce((sum, s) => sum + s.total, 0);
-                  // Net of any point-of-sale amount reversed as never received (033).
-                  const dayCash = filtered.reduce((sum, s) => sum + Math.max(0, pointOfSaleCash(s).net), 0);
+                  const dayCash = filtered.reduce((sum, s) => {
+                    const paidViaPayments = state.payments
+                      .filter(p => p.saleId === s.id)
+                      .reduce((pSum, p) => pSum + (p.amount || 0), 0);
+                    return sum + Math.max(0, (s.paid || 0) - paidViaPayments);
+                  }, 0);
                   const dayDebt = dayTotal - dayCash;
                   return (
                     <div className="grid grid-cols-3 gap-2 mb-4">
@@ -7288,16 +7108,6 @@ export default function NorthernWaterSystemApp() {
                               <button onClick={() => setInvoiceDetail(sale)} className="text-sky-700 text-xs underline hover:text-sky-800">{sale.invoiceNumber}</button>
                             </div>
                             <p className="text-slate-500 text-xs">{sale.date}</p>
-                            {isCreditNote(sale) && (
-                              <span className="inline-block mt-1 text-xs px-2 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-200">
-                                Credit note · cancels {state.sales.find(s => s.id === sale.cancels_sale_id)?.invoiceNumber || `Sale #${sale.cancels_sale_id}`}
-                              </span>
-                            )}
-                            {creditNoteFor(sale.id) && (
-                              <span className="inline-block mt-1 text-xs px-2 py-0.5 rounded border bg-slate-100 text-slate-600 border-slate-200">
-                                Cancelled · {creditNoteFor(sale.id).invoiceNumber}
-                              </span>
-                            )}
                           </div>
                           <div className="text-right flex-shrink-0">
                             <p className="text-emerald-600 font-semibold text-sm">KES {sale.total.toLocaleString()}</p>
@@ -7332,19 +7142,9 @@ export default function NorthernWaterSystemApp() {
                               <Download className="w-3 h-3" /> Delivery Note
                             </button>
                           )}
-                          {/* Admin only, unpaid invoices only (migration 032). */}
-                          {role === 'admin' && !cancelBlockedReason(sale) && (
-                            <button
-                              onClick={() => handleCancelInvoice(sale)}
-                              className="flex items-center gap-1 text-xs text-amber-700 hover:text-amber-800 hover:bg-amber-50 px-2 py-1 rounded transition"
-                            >
-                              <X className="w-3 h-3" /> Cancel (credit note)
-                            </button>
-                          )}
                           {/* RLS only permits admin to delete sales — showing the
-                              button to managers produced silent failures. Credit
-                              notes and cancelled invoices are permanent (032). */}
-                          {role === 'admin' && !isCreditNote(sale) && !creditNoteFor(sale.id) && (
+                              button to managers produced silent failures. */}
+                          {role === 'admin' && (
                             <button
                               onClick={() => handleDeleteSale(sale.id)}
                               className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded transition"
@@ -8417,44 +8217,6 @@ export default function NorthernWaterSystemApp() {
                   </div>
                 </div>
                 <div className="p-4 md:p-6 space-y-4">
-                  {/* Credit-note cancellation (migration 032). */}
-                  {isCreditNote(invoiceDetail) && (() => {
-                    const original = state.sales.find(s => s.id === invoiceDetail.cancels_sale_id);
-                    return (
-                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
-                        <p className="font-semibold">Credit note</p>
-                        <p className="text-xs mt-1">
-                          Cancels{' '}
-                          {original ? (
-                            <button onClick={() => setInvoiceDetail(original)} className="underline">{original.invoiceNumber}</button>
-                          ) : `Sale #${invoiceDetail.cancels_sale_id}`}
-                          {invoiceDetail.cancel_reason ? ` · ${invoiceDetail.cancel_reason}` : ''}
-                        </p>
-                      </div>
-                    );
-                  })()}
-                  {creditNoteFor(invoiceDetail.id) && (() => {
-                    const cn = creditNoteFor(invoiceDetail.id);
-                    return (
-                      <div className="bg-slate-100 border border-slate-200 rounded-lg p-3 text-sm text-slate-700">
-                        <p className="font-semibold">Cancelled</p>
-                        <p className="text-xs mt-1">
-                          By credit note{' '}
-                          <button onClick={() => setInvoiceDetail(cn)} className="underline">{cn.invoiceNumber}</button>
-                          {' '}on {cn.date}{cn.cancel_reason ? ` · ${cn.cancel_reason}` : ''}
-                        </p>
-                      </div>
-                    );
-                  })()}
-                  {role === 'admin' && !cancelBlockedReason(invoiceDetail) && (
-                    <button
-                      onClick={() => handleCancelInvoice(invoiceDetail)}
-                      className="flex items-center gap-1.5 border border-amber-200 text-amber-700 hover:bg-amber-50 font-medium px-3 py-1.5 rounded-lg transition text-xs"
-                    >
-                      <X className="w-3.5 h-3.5" /> Cancel with credit note
-                    </button>
-                  )}
-
                   <div>
                     <p className="text-slate-500 text-xs">Customer</p>
                     <p className="text-slate-900 font-semibold">{customer?.name || 'Unknown'}</p>
@@ -8492,7 +8254,7 @@ export default function NorthernWaterSystemApp() {
                             {/* A credit application carries no method — no money
                                 moved on this date, it was received earlier. */}
                             <span className="text-slate-400 text-xs">
-                              {p.date}{p.kind === 'credit_applied' ? ' · from credit held' : p.kind === 'credit_note' ? (isCreditNote(invoiceDetail) ? ` · cancels ${p.reference || ''}` : ` · cancelled by credit note ${p.reference || ''}`) : p.kind === 'sale_reversal' ? ' · point-of-sale payment reversed, never received' : p.method ? ` · ${p.method}` : ''}
+                              {p.date}{p.kind === 'credit_applied' ? ' · from credit held' : p.method ? ` · ${p.method}` : ''}
                             </span>
                             <span className="text-emerald-600 font-medium">KES {p.amount.toLocaleString()}</span>
                           </div>
@@ -8546,15 +8308,11 @@ export default function NorthernWaterSystemApp() {
             ledger.push({
               date: s.date, order: 0,
               ref: s.invoiceNumber || `Sale #${s.id}`,
-              desc: isCreditNote(s)
-                ? `Credit note · cancels ${sales.find(x => x.id === s.cancels_sale_id)?.invoiceNumber || `Sale #${s.cancels_sale_id}`}`
-                : (s.total || 0) < 0 ? 'Credit note' : `Invoice${items ? ' · ' + items : ''}`,
+              desc: (s.total || 0) < 0 ? 'Credit note' : `Invoice${items ? ' · ' + items : ''}`,
               debit: s.total || 0, credit: 0,
             });
-            // Gross: what was recorded at the sale. A later reversal as never
-            // received (033) is its own negative line below, so the history
-            // shows both the entry and its correction.
-            const paidAtSale = pointOfSaleCash(s, payments).gross;
+            const paidViaPayments = payments.filter(p => p.saleId === s.id).reduce((sum, p) => sum + (p.amount || 0), 0);
+            const paidAtSale = (s.paid || 0) - paidViaPayments;
             if (paidAtSale > 0) {
               ledger.push({
                 date: s.date, order: 1,
@@ -8569,36 +8327,6 @@ export default function NorthernWaterSystemApp() {
             // shown — rendering both would put a payment and an equal negative
             // payment side by side for something that moved no money.
             if (p.kind === 'credit_applied' && !p.saleId) return;
-
-            // Credit-note settlement legs (migration 032). The credit note's own
-            // sale line above already carries the -total, so these legs move
-            // nothing here: the leg on the credit note is dropped and the leg on
-            // the invoice becomes a zero-value line naming the credit note.
-            if (p.kind === 'credit_note') {
-              const target = sales.find(s => s.id === p.saleId);
-              if (!target || isCreditNote(target)) return;
-              ledger.push({
-                date: p.date, order: 1,
-                ref: target.invoiceNumber || `Sale #${p.saleId}`,
-                desc: `Cancelled by credit note ${p.reference || ''}`,
-                debit: 0, credit: 0,
-              });
-              return;
-            }
-
-            // Point-of-sale payment reversed as never received (033). A
-            // negative credit: it undoes the "Payment at point of sale" line,
-            // and is dated the sale date like that line.
-            if (p.kind === 'sale_reversal') {
-              const target = sales.find(s => s.id === p.saleId);
-              ledger.push({
-                date: p.date, order: 1,
-                ref: target?.invoiceNumber || `Sale #${p.saleId}`,
-                desc: 'Point-of-sale payment reversed · never received',
-                debit: 0, credit: p.amount || 0,
-              });
-              return;
-            }
 
             // The other leg. Credit 0, deliberately: the money was credited to
             // this customer when it arrived as an on-account payment, and
