@@ -438,6 +438,33 @@ const BOTTLES_PER_CARTON = {
   '18.9L_refill': 1
 };
 
+// Production wastage (migration 035): raw materials spoiled during a run,
+// keyed exactly like rawMaterials so each figure comes off the stock line
+// staff see on the Inventory tab. The item lists must match
+// `production_wastage_clean` in the migration, which refuses anything else.
+const WASTAGE_MATERIALS = [
+  { key: 'emptyBottles', label: 'Empty bottles', unit: 'bottles',
+    items: [['0.5L', '0.5L'], ['1.5L', '1.5L'], ['5L', '5L'], ['18.9L_disposable', '18.9L Disposable'], ['18.9L_refill', '18.9L Refill']] },
+  { key: 'seals', label: 'Seals', unit: 'seals',
+    items: [['short_neck', 'Short neck (0.5L + 1.5L)'], ['5L', '5L'], ['18.9L', '18.9L']] },
+  { key: 'labels', label: 'Labels', unit: 'labels',
+    items: [['0.5L', '0.5L'], ['1.5L', '1.5L'], ['5L', '5L'], ['18.9L', '18.9L']] },
+  { key: 'overwraps', label: 'Overwraps', unit: 'overwraps',
+    items: [['0.5L', '0.5L'], ['1.5L', '1.5L'], ['5L', '5L']] },
+];
+
+// A run's wastage as display lines, zeros dropped: [{ key, label, qty, unit }].
+function wastageLines(wastage) {
+  const lines = [];
+  WASTAGE_MATERIALS.forEach(m => {
+    m.items.forEach(([item, itemLabel]) => {
+      const qty = Number(wastage?.[m.key]?.[item]) || 0;
+      if (qty > 0) lines.push({ key: `${m.key}.${item}`, label: `${m.label} ${itemLabel}`, qty, unit: m.unit });
+    });
+  });
+  return lines;
+}
+
 // Apply a purchase's line items to a raw-materials object. Mutates the object in
 // place, so always pass a clone. sign = +1 to add stock (new purchase), -1 to
 // reverse it (deleted or edited purchase). Uses != null throughout so a material
@@ -491,6 +518,7 @@ function applyPurchaseItemsToRawMaterials(rawMaterials, items, sign) {
 //   sale line, quantity < 0 (credit note,
 //     incl. consignment cutover reconcile)  → + filled, in a "Returned to stock" batch
 //   stock adjustment `emptyBottles <size>`  → down: written off oldest empties; up: "Count correction" batch
+//   production wastage (035), bottles       → written off oldest empties, like breakage
 //   stock adjustment `Finished Goods <size>`→ same, on filled bottles
 //   consignment deliver / return            → nothing: shop stock is still "ready", just not at the plant
 //
@@ -541,6 +569,11 @@ function computeBottleBatches({ purchases, productionLogs, sales, customers, con
     (productionLogs || []).forEach(log => {
       const cartons = Number((log.items || {})[size]) || 0;
       if (cartons > 0) events.push({ date: log.date, order: 1, seq: log.id, kind: 'produce', bottles: cartons * bpc, logId: log.id, cartons });
+      // Bottles wasted during the run (migration 035) leave the empties the
+      // same way breakage does: written off the oldest batch. Pushed after the
+      // run's own event; the sort is stable, so it stays after it.
+      const wasted = Number(log.wastage?.emptyBottles?.[size]) || 0;
+      if (wasted > 0) events.push({ date: log.date, order: 1, seq: log.id, kind: 'emptyAdj', bottles: -wasted, reason: `Wastage, run #${log.id}` });
     });
     (sales || []).forEach(sale => {
       (sale.items || []).forEach(item => {
@@ -2620,6 +2653,18 @@ export default function NorthernWaterSystemApp() {
       });
     });
 
+    // Wastage over the period, per stock line (migration 035). Ordered as
+    // WASTAGE_MATERIALS so the report reads the same way as the form.
+    const wastageTotals = {};
+    logs.forEach(log => {
+      wastageLines(log.wastage).forEach(w => {
+        if (!wastageTotals[w.key]) wastageTotals[w.key] = { ...w, qty: 0 };
+        wastageTotals[w.key].qty += w.qty;
+      });
+    });
+    const wastage = WASTAGE_MATERIALS.flatMap(m =>
+      m.items.map(([item]) => wastageTotals[`${m.key}.${item}`]).filter(Boolean));
+
     // Casual labour is paid per carton produced (× the shared rate). This is an
     // estimate for information only — it does NOT post to the P&L; the actual
     // Casual Labour expense is created when a payout is recorded in HR.
@@ -2636,6 +2681,7 @@ export default function NorthernWaterSystemApp() {
           items: log.items || {},
           totalCartons: runCartons,
           casualCount: (log.casuals || []).length,
+          wastage: wastageLines(log.wastage),
           notes: log.notes || ''
         };
       });
@@ -2653,6 +2699,7 @@ export default function NorthernWaterSystemApp() {
       bottlesBySize,
       fgValue,
       casualCost,
+      wastage,
       runs
     };
   };
@@ -3159,8 +3206,11 @@ export default function NorthernWaterSystemApp() {
       let runRows = '';
       reportData.runs.forEach(run => {
         const items = Object.entries(run.items).filter(([, q]) => q).map(([size, q]) => `${q}× ${SIZE_LABELS[size] || size}`).join(', ') || '-';
-        runRows += `<tr><td>#${run.id}</td><td>${run.date}</td><td>${escapeHtml(items)}</td><td>${run.totalCartons.toLocaleString()}</td><td>${run.casualCount}</td></tr>`;
+        const waste = (run.wastage || []).map(w => `${w.qty} ${w.label.toLowerCase()}`).join(', ') || '-';
+        runRows += `<tr><td>#${run.id}</td><td>${run.date}</td><td>${escapeHtml(items)}</td><td>${run.totalCartons.toLocaleString()}</td><td>${escapeHtml(waste)}</td><td>${run.casualCount}</td></tr>`;
       });
+      const wasteRows = (reportData.wastage || [])
+        .map(w => `<tr><td>${escapeHtml(w.label)}</td><td>${w.qty.toLocaleString()} ${w.unit}</td></tr>`).join('');
       htmlContent += `
         <div class="section">
           <div class="summary">
@@ -3171,6 +3221,11 @@ export default function NorthernWaterSystemApp() {
             <thead><tr><th>Bottle Size</th><th>Cartons</th><th>Bottles</th></tr></thead>
             <tbody>${cartonRows || '<tr><td colspan="3">No production in the selected period</td></tr>'}</tbody>
           </table>
+          <h2>Wastage (taken off raw materials)</h2>
+          <table>
+            <thead><tr><th>Material</th><th>Wasted</th></tr></thead>
+            <tbody>${wasteRows || '<tr><td colspan="2">No wastage recorded in the selected period</td></tr>'}</tbody>
+          </table>
           <h2>Estimated Costs (information only — not posted to the P&L)</h2>
           <table>
             <tbody>
@@ -3180,8 +3235,8 @@ export default function NorthernWaterSystemApp() {
           </table>
           <h2>Production Runs</h2>
           <table>
-            <thead><tr><th>Run</th><th>Date</th><th>Items</th><th>Cartons</th><th>Casuals</th></tr></thead>
-            <tbody>${runRows || '<tr><td colspan="5">No production in the selected period</td></tr>'}</tbody>
+            <thead><tr><th>Run</th><th>Date</th><th>Items</th><th>Cartons</th><th>Wastage</th><th>Casuals</th></tr></thead>
+            <tbody>${runRows || '<tr><td colspan="6">No production in the selected period</td></tr>'}</tbody>
           </table>
         </div>
       `;
@@ -5029,7 +5084,7 @@ export default function NorthernWaterSystemApp() {
   // `handleSaveProduction` refuses that.
   const handleAddProduction = () => {
     setModalType('production');
-    setFormData({ items: {}, date: '', notes: '', unit: 'cartons', casuals: [], clientKey: newClientKey() });
+    setFormData({ items: {}, wastage: {}, date: '', notes: '', unit: 'cartons', casuals: [], clientKey: newClientKey() });
     setShowModal(true);
   };
 
@@ -5040,8 +5095,14 @@ export default function NorthernWaterSystemApp() {
       alert('Please pick the date this production run happened.\n\nIt is deliberately not filled in for you — a run entered the next morning belongs to the day it was produced, not today.');
       return;
     }
-    if (Object.keys(formData.items).length === 0) {
-      alert('Please add items');
+    // Wastage is only recorded WITH a run (owner decision 2026-11-14), so a run
+    // must have cartons whether or not wastage was entered. The database
+    // refuses a zero-carton run too; this just says so in plain words.
+    const hasCartons = Object.values(formData.items || {}).some(q => (Number(q) || 0) > 0);
+    if (!hasCartons) {
+      alert(wastageLines(formData.wastage).length > 0
+        ? 'Please enter the cartons produced. Wastage can only be recorded as part of a production run.'
+        : 'Please add items');
       return;
     }
 
@@ -5064,6 +5125,9 @@ export default function NorthernWaterSystemApp() {
         unit: 'cartons', // always cartons
         notes: formData.notes,
         casuals: formData.casuals || [],
+        // Raw materials spoiled during the run (migration 035), deducted with
+        // the run in the same transaction.
+        wastage: formData.wastage || {},
         // See handleSaveSale — makes a retry after a lost connection safe.
         client_key: formData.clientKey || null,
       },
@@ -6680,6 +6744,23 @@ export default function NorthernWaterSystemApp() {
                           </div>
                         </div>
 
+                        {/* Wastage over the period (migration 035) */}
+                        <div>
+                          <h4 className="text-slate-900 font-semibold mb-2 md:mb-3 text-sm">Wastage (taken off raw materials)</h4>
+                          {reportData.wastage.length === 0 ? (
+                            <p className="text-slate-500 text-xs md:text-sm">No wastage recorded in this period.</p>
+                          ) : (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-1 md:gap-2">
+                              {reportData.wastage.map(w => (
+                                <div key={w.key} className="flex justify-between p-2 bg-rose-50 rounded text-xs md:text-sm">
+                                  <p className="text-slate-600">{w.label}</p>
+                                  <p className="text-rose-700 font-semibold">{w.qty.toLocaleString()} {w.unit}</p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
                         {/* Estimated costs — information only, not posted to the P&L */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
                           <div className="bg-white border border-slate-200 rounded-lg p-3 md:p-4">
@@ -6704,6 +6785,7 @@ export default function NorthernWaterSystemApp() {
                                 <th className="py-2 pr-2">Date</th>
                                 <th className="py-2 pr-2">Items</th>
                                 <th className="py-2 pr-2 text-right">Cartons</th>
+                                <th className="py-2 pr-2">Wastage</th>
                                 <th className="py-2 text-right">Casuals</th>
                               </tr>
                             </thead>
@@ -6716,6 +6798,9 @@ export default function NorthernWaterSystemApp() {
                                     {Object.entries(run.items).filter(([, q]) => q).map(([size, q]) => `${q}× ${SIZE_LABELS[size] || size}`).join(', ') || '—'}
                                   </td>
                                   <td className="py-2 pr-2 text-right text-slate-900 font-semibold">{run.totalCartons.toLocaleString()}</td>
+                                  <td className="py-2 pr-2 text-rose-600 text-xs">
+                                    {run.wastage.map(w => `${w.qty} ${w.label.toLowerCase()}`).join(', ') || '—'}
+                                  </td>
                                   <td className="py-2 text-right text-slate-600">{run.casualCount}</td>
                                 </tr>
                               ))}
@@ -6951,6 +7036,11 @@ export default function NorthernWaterSystemApp() {
                           </div>
                         ))}
                       </div>
+                      {wastageLines(log.wastage).length > 0 && (
+                        <p className="text-rose-600 text-xs mb-1">
+                          Wastage: {wastageLines(log.wastage).map(w => `${w.qty} ${w.label.toLowerCase()}`).join(', ')}
+                        </p>
+                      )}
                       {log.notes && <p className="text-slate-500 text-xs italic">{log.notes}</p>}
                       {recordedByLine(log.created_by, 'server')}
                       {/* RLS only permits admin to delete production logs.
@@ -8790,6 +8880,21 @@ export default function NorthernWaterSystemApp() {
                     </p>
                   )}
 
+                  {/* Wastage recorded with this run (migration 035) */}
+                  {wastageLines(log.wastage).length > 0 && (
+                    <div>
+                      <p className="text-slate-500 text-xs mb-2">Wastage (taken off raw materials)</p>
+                      <div className="border border-rose-100 rounded-lg divide-y divide-rose-50">
+                        {wastageLines(log.wastage).map(w => (
+                          <div key={w.key} className="flex justify-between items-center p-2.5 text-sm">
+                            <span className="text-slate-700">{w.label}</span>
+                            <span className="text-rose-600 font-medium">{w.qty.toLocaleString()} {w.unit}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Casual labour on this run */}
                   <div>
                     <p className="text-slate-500 text-xs mb-2">
@@ -9770,6 +9875,50 @@ export default function NorthernWaterSystemApp() {
                       })}
                     </div>
                   </div>
+
+                  {/* Wastage (migration 035) — materials spoiled during THIS run.
+                      Optional; deducted from raw materials with the run. */}
+                  {(() => {
+                    const lines = wastageLines(formData.wastage);
+                    const setWaste = (mat, item, value) => {
+                      const n = Math.max(0, parseInt(value, 10) || 0);
+                      const next = { ...(formData.wastage || {}) };
+                      next[mat] = { ...(next[mat] || {}), [item]: n };
+                      setFormData({ ...formData, wastage: next });
+                    };
+                    return (
+                      <details className="bg-rose-50/50 rounded-lg p-3 md:p-4 border border-rose-100">
+                        <summary className="text-slate-900 font-semibold text-sm cursor-pointer">
+                          Wastage during this run {lines.length > 0 ? `(${lines.length} item${lines.length === 1 ? '' : 's'})` : '(optional)'}
+                        </summary>
+                        <p className="text-slate-500 text-xs mt-2 mb-3">
+                          Bottles, seals, labels and overwraps spoiled during the run, counted in pieces. Each is taken off raw materials on top of what the cartons use.
+                        </p>
+                        <div className="space-y-3">
+                          {WASTAGE_MATERIALS.map(m => (
+                            <div key={m.key}>
+                              <p className="text-slate-700 text-xs font-semibold mb-1">{m.label} <span className="text-slate-400 font-normal">({m.unit})</span></p>
+                              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                                {m.items.map(([item, itemLabel]) => (
+                                  <label key={item} className="flex items-center gap-2 text-xs bg-white border border-slate-200 rounded px-2 py-1">
+                                    <span className="text-slate-500 flex-1 min-w-0 truncate">{itemLabel}</span>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="1"
+                                      value={formData.wastage?.[m.key]?.[item] || 0}
+                                      onChange={(e) => setWaste(m.key, item, e.target.value)}
+                                      className="w-16 bg-slate-50 border border-slate-300 text-slate-900 rounded px-1 py-0.5 text-right"
+                                    />
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    );
+                  })()}
 
                   {/* Casuals on duty (Stage C) */}
                   <div className="bg-slate-50 rounded-lg p-3 md:p-4 border border-slate-100">
